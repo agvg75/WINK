@@ -1,0 +1,13 @@
+{
+  "fps": 20.0,
+  "fps_source": "user_declared",
+  "um_per_px": 2.0,
+  "um_per_px_source": "user_declared",
+  "n_frames": 1140,
+  "n_candidate_tracks": 1981,
+  "min_area_px": 35,
+  "max_area_px": 1800,
+  "frequency_definition": "dominant body-axis oscillation proxy; not segment curvature frequency",
+  "activity_definition": "centroid speed >= 0.08 estimated body lengths/s",
+  "review_required": "Tracks flagged at edges, likely collisions, or shorter than 3 s require review."
+}

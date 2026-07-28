@@ -1,0 +1,65 @@
+{
+  "qc": {
+    "n_rows_in": 7488,
+    "n_rows_kept": 7488,
+    "retention_frac": 1.0,
+    "segment_saturation_frac": {
+      "0": 0.853,
+      "1": 0.75,
+      "2": 0.673,
+      "3": 0.679,
+      "4": 0.535,
+      "5": 0.231,
+      "6": 0.292,
+      "7": 0.369,
+      "8": 0.096,
+      "9": 0.054,
+      "10": 0.122,
+      "11": 0.074,
+      "12": 0.022,
+      "13": 0.109,
+      "14": 0.26,
+      "15": 0.167,
+      "16": 0.128,
+      "17": 0.071,
+      "18": 0.048,
+      "19": 0.077,
+      "20": 0.103,
+      "21": 0.186,
+      "22": 0.205,
+      "23": 0.272
+    },
+    "saturated_segments": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "per_worm_retention": {
+      "w1": 1.0
+    }
+  },
+  "channel": {
+    "background_applied": true,
+    "background_col": null,
+    "background_per_channel": true,
+    "background_cols_used": [
+      "bg_blue",
+      "bg_green",
+      "bg_red"
+    ],
+    "reference_channel": null,
+    "reference_is_static": null,
+    "ratiometric_applied": false,
+    "activity_channels": [
+      "green",
+      "red",
+      "blue"
+    ],
+    "notes": [
+      "background subtracted per channel using columns: ['bg_blue', 'bg_green', 'bg_red']",
+      "no reference channel set: using background-subtracted dF/F0 (validated default); motion uncorrected (information, not error)."
+    ]
+  }
+}

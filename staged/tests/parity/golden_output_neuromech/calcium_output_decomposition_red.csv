@@ -1,0 +1,2 @@
+worm_id,bending_resolved,bending_lag_s,bending_coherence,propulsion_resolved,propulsion_r_zero_lag,propulsion_lag_s,self_approach_frac,eigen_fit_quality_mean
+w1,True,-0.28839454810030907,0.6858974358974359,True,0.4576790717858389,-0.09620004370301824,0.5448717948717948,0.9720000000000002

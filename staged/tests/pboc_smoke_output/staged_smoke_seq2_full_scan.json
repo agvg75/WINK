@@ -1,0 +1,25 @@
+{
+  "recording": "staged_smoke_seq2",
+  "fps": 7.5,
+  "fps_source": "declared",
+  "duration_s": 8.933333333333334,
+  "usable_fraction": 0.8059701492537313,
+  "settings": {
+    "contraction_z": 2.5,
+    "recovery_z": -1.0,
+    "min_period_s": 30.0,
+    "max_period_s": 90.0
+  },
+  "events": [
+    {
+      "peak_frame": 50,
+      "peak_time_s": 6.666666666666667,
+      "peak_z": 3.9686459383675006,
+      "recovery_frame": null,
+      "recovery_time_s": NaN,
+      "has_recovery": false,
+      "period_from_previous_s": NaN,
+      "cadence_status": "uncertain_no_recovery"
+    }
+  ]
+}

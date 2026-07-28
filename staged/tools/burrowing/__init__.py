@@ -1,0 +1,1 @@
+"""Graded-resistance burrowing consumer."""

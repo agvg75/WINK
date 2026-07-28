@@ -1,0 +1,105 @@
+"""Launch the supervised WINK segmentation review without changing an assay."""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "app"))
+sys.path.insert(0, str(ROOT / "tools" / "movie"))
+
+from movie_reader import open_movie  # noqa: E402
+from segmentation_review import (  # noqa: E402
+    GEOMETRY_TOOLS, SegmentationReviewWindow)
+
+
+LABELS = {
+    "track_one_worm": "Track one worm",
+    "neuron_tracker_geometry": "Neuronal tracker worm geometry",
+    "population_swimming": "Population swimming",
+    "population_basal_slowing": "Population basal slowing",
+    "population_orientation": "Population orientation",
+    "defecation_cycle": "pBoc / defecation cycle",
+    "endpoint_egg_counting": "Endpoint egg counting",
+    "dynamic_egg_laying": "Dynamic egg laying",
+}
+
+
+def _arguments(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "source", nargs="?",
+        help="Movie, image stack, numbered image, or sequence folder.")
+    parser.add_argument(
+        "--tool", choices=tuple(LABELS),
+        help="Target geometry tool (otherwise chosen interactively).")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = _arguments(argv)
+    root = tk.Tk()
+    root.withdraw()
+    source = args.source
+    if source is None:
+        source = filedialog.askopenfilename(
+            title="Choose a movie, stack, or one image from a numbered sequence",
+            filetypes=[(
+                "Movies and images",
+                "*.avi *.mp4 *.mov *.mkv *.tif *.tiff *.png *.jpg *.jpeg "
+                "*.bmp *.pgm *.ppm *.pnm *.webp"), ("All files", "*.*")])
+        if not source:
+            folder = filedialog.askdirectory(
+                title="Or choose a folder of sequential images")
+            if not folder:
+                return
+            source = folder
+    tool_name = args.tool
+    if tool_name is None:
+        prompt = "\n".join(
+            f"{i + 1}. {LABELS[key]}" for i, key in enumerate(LABELS))
+        choice = simpledialog.askinteger(
+            "Target tool",
+            "Choose the Python tool whose object extent this map will define:\n\n" + prompt,
+            minvalue=1, maxvalue=len(LABELS), parent=root)
+        if choice is None:
+            return
+        tool_name = list(LABELS)[choice - 1]
+    try:
+        movie = open_movie(source)
+        # movie_reader exposes the canonical uniform API as n_frames/get_frame.
+        # Keep fallbacks for older packaged video readers during migration.
+        count = int(getattr(movie, "n_frames", getattr(movie, "frame_count", 0)))
+        if count < 1:
+            raise ValueError("No readable frames were found.")
+        read_frame = getattr(movie, "get_frame", None)
+        if read_frame is None:
+            read_frame = movie.read_frame
+        import numpy as np
+        first=read_frame(0);bytes_per_frame=max(int(np.asarray(first).nbytes),1)
+        # Keep the sampled preview/reference below 512 MiB even for 4K color.
+        sample_limit=max(3,min(81,(512*1024**2)//bytes_per_frame))
+        indices=sorted(set(int(round(x)) for x in np.linspace(
+            0,count-1,min(count,sample_limit))))
+        frames = [read_frame(i) for i in indices]
+    except Exception as exc:
+        messagebox.showerror("Cannot open source", str(exc), parent=root)
+        return
+    save_dir = Path(source) if Path(source).is_dir() else Path(source).parent
+    window = SegmentationReviewWindow(
+        root, frames, source=source, save_dir=save_dir, tool_name=tool_name,
+        frame_numbers=indices, frame_loader=read_frame,
+        source_frame_count=count)
+    window.protocol("WM_DELETE_WINDOW", window.destroy)
+    root.deiconify()
+    root.withdraw()
+    root.wait_window(window)
+    movie.close()
+    root.destroy()
+
+
+if __name__ == "__main__":
+    main()

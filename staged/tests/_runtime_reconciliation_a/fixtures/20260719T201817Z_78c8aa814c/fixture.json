@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "fixture_id": "20260719T201817Z_78c8aa814c",
+  "tool_name": "tool",
+  "tool_version_at_capture": "1",
+  "category": "missed_event",
+  "expected_state": "expected event",
+  "parameters": {},
+  "frame_index": 4,
+  "roi_coordinates": null,
+  "validation_level": "computational_regression"
+}

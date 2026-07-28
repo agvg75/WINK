@@ -1,0 +1,2 @@
+worm_id,resolved,n_frames,frac_forward,frac_backward,frac_unresolved,n_reversals,crawl_speed_px_s,mean_signed_speed_px_s,angular_vel_deg_s_mean_abs,angular_vel_deg_s_p95_abs,n_omega_turns,n_omega_turns_self_approach,n_omega_turns_turn_angle,self_approach_frac,eigen_fit_quality_mean,wave_coherence,reason
+w1,True,156,0.46153846153846156,0.2564102564102564,0.28205128205128205,2,6.61108634672619,3.684916555059524,10.698395112179487,30.775242708333334,85,85,0,0.5448717948717948,0.9720000000000001,0.717948717948718,

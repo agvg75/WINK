@@ -1,0 +1,31 @@
+{
+  "recording": "reviewer_smoke",
+  "fps": 7.5,
+  "fps_source": "declared",
+  "um_per_px": 2.35,
+  "um_per_px_source": "declared",
+  "exposure_ms": 5.0,
+  "exposure_source": "declared",
+  "duration_s": 8.933333333333334,
+  "usable_fraction": 0.8059701492537313,
+  "settings": {
+    "contraction_z": 2.5,
+    "recovery_z": -1.0,
+    "min_period_s": 30.0,
+    "max_period_s": 90.0
+  },
+  "rhythm_output_gate": "No period, IDI, IDI CV, or rhythm statistic is reported. Cadence limits only order human review until unbroken tracking spans at least ten manually accepted cycles.",
+  "events": [
+    {
+      "peak_frame": 50,
+      "peak_time_s": 6.666666666666667,
+      "peak_z": 3.9686459383675006,
+      "recovery_frame": null,
+      "recovery_time_s": NaN,
+      "has_recovery": false,
+      "review_gap_s": NaN,
+      "rhythm_statistics_eligible": false,
+      "review_note": "inspect_recovery_not_found"
+    }
+  ]
+}

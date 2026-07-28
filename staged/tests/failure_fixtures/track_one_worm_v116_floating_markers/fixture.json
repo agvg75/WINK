@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "tool_name": "Track one worm",
+  "tool_version_at_capture": "NIKE application 11.6",
+  "category": "tracked_wrong_object",
+  "severity": 5,
+  "classification": "tool_failure",
+  "symptom": "Head, tail, and midline selected empty background on a previously working bright frame; 303 of 303 frames were flagged instead of the prior approximately 128 to 138.",
+  "suspected_change": "v11.6 illumination-normalization patch",
+  "reproducible": false,
+  "reproduction_reason": "The written report is retained, but the 303-frame clip and floating-marker frame were not supplied with the revert order and were not present in the local Failure Library.",
+  "required_for_future_fix": "Attach the bright working frame, adjacent dim failing frame, floating-marker regression frame, and source clip. Inspect masks and midlines directly before changing segmentation."
+}

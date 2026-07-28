@@ -1,0 +1,3 @@
+track_id,first_frame,last_frame,raw_x,raw_y,hits,confirmed_persistent,event_candidate,event_time_s
+1,0,79,70.06757354736328,80.00271606445312,80,True,False,0.0
+2,30,79,170.05035400390625,95.0228500366211,50,True,True,3.0

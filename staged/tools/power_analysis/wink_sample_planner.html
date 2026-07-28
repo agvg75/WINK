@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How many more? — WINK sample planner</title>
+<style>
+  :root{
+    --paper:#f7f6f2; --ink:#16202b; --muted:#5f6f7e; --line:#d9dee3; --line2:#e8ebef;
+    --instrument:#1f6feb; --instrument-soft:#e7f0ff;
+    --signal:#e08a17; --signal-soft:#fdf0dc;
+    --good:#1f8a4c; --good-soft:#e4f4ea; --bad:#c0392b; --bad-soft:#fbe9e7;
+    --panel:#ffffff;
+    --mono:"SF Mono",ui-monospace,"Cascadia Mono","Roboto Mono",Menlo,monospace;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1140px;margin:0 auto;padding:26px 20px 90px;}
+  header{border-bottom:2px solid var(--ink);padding-bottom:13px;}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:0 0 6px;}
+  h1{font-size:29px;line-height:1.05;margin:0;font-weight:680;letter-spacing:-.01em;}
+  h1 .q{color:var(--instrument);}
+  .sub{color:var(--muted);font-size:14px;margin:10px 0 0;max-width:74ch;line-height:1.5;}
+  .grid{display:grid;grid-template-columns:346px 1fr;gap:22px;margin-top:22px;}
+  @media(max-width:880px){.grid{grid-template-columns:1fr;}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:17px;}
+  .panel h2{font-size:11.5px;font-family:var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 13px;font-weight:600;}
+  label.field{display:block;margin-bottom:13px;}
+  label.field .lab{font-size:13px;font-weight:600;display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;}
+  label.field .lab small{font-weight:400;color:var(--muted);font-family:var(--mono);font-size:11px;}
+  select,textarea{width:100%;font-family:var(--mono);font-size:13px;border:1px solid var(--line);border-radius:7px;padding:8px 10px;background:#fcfcfb;color:var(--ink);}
+  textarea{resize:vertical;min-height:70px;line-height:1.45;}
+  select:focus,textarea:focus{outline:2px solid var(--instrument);outline-offset:1px;border-color:var(--instrument);}
+  .hint{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.4;}
+  .seg{display:flex;gap:6px;flex-wrap:wrap;}
+  .seg button{flex:1;min-width:0;font-family:var(--sans);font-size:12.5px;font-weight:600;padding:8px 6px;border:1px solid var(--line);background:#fcfcfb;border-radius:7px;cursor:pointer;color:var(--muted);}
+  .seg button[aria-pressed=true]{background:var(--instrument-soft);border-color:var(--instrument);color:var(--instrument);}
+  .slider-row{display:flex;align-items:center;gap:10px;}
+  input[type=range]{flex:1;accent-color:var(--instrument);}
+  .slider-val{font-family:var(--mono);font-size:13px;min-width:44px;text-align:right;font-weight:600;}
+
+  /* expertise toggle */
+  .lvl{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);margin-top:4px;}
+  .lvl .seg{flex:1;}
+  .lvl .seg button{padding:6px 4px;font-size:11.5px;}
+
+  /* verdict */
+  .verdict{border-radius:10px;padding:15px 17px;margin-bottom:16px;border:1px solid var(--line);display:flex;gap:14px;align-items:flex-start;background:var(--panel);}
+  .verdict .badge{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;padding:4px 8px;border-radius:5px;white-space:nowrap;font-weight:600;margin-top:2px;}
+  .verdict.enough{border-color:var(--good);} .verdict.enough .badge{background:var(--good-soft);color:var(--good);}
+  .verdict.close{border-color:var(--signal);} .verdict.close .badge{background:var(--signal-soft);color:var(--signal);}
+  .verdict.far{border-color:var(--bad);} .verdict.far .badge{background:var(--bad-soft);color:var(--bad);}
+  .verdict.nofx,.verdict.wait{border-color:var(--muted);} .verdict.nofx .badge,.verdict.wait .badge{background:#eceff1;color:var(--muted);}
+  .verdict .line1{font-size:18px;font-weight:680;line-height:1.15;margin:0 0 4px;letter-spacing:-.01em;}
+  .verdict .line2{font-size:13.5px;color:var(--muted);line-height:1.5;margin:0;}
+  .verdict b{color:var(--ink);}
+
+  /* pipeline checks */
+  .checks{display:flex;flex-direction:column;gap:7px;margin-bottom:16px;}
+  .chk{border:1px solid var(--line2);border-radius:9px;background:var(--panel);overflow:hidden;}
+  .chk .head{display:flex;align-items:center;gap:10px;padding:10px 13px;cursor:pointer;user-select:none;}
+  .chk .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+  .chk .dot.ok{background:var(--good);} .chk .dot.warn{background:var(--signal);} .chk .dot.stop{background:var(--bad);} .chk .dot.info{background:var(--muted);}
+  .chk .title{font-size:13px;font-weight:600;flex:1;}
+  .chk .verd{font-size:12.5px;color:var(--muted);font-family:var(--mono);}
+  .chk .why{font-size:11px;color:var(--instrument);border:1px solid #cfe0fb;background:var(--instrument-soft);border-radius:5px;padding:2px 7px;margin-left:4px;}
+  .chk .body{padding:0 13px 12px 32px;font-size:12.5px;color:#33424f;line-height:1.55;display:none;}
+  .chk.open .body{display:block;}
+  .chk .body .num{font-family:var(--mono);font-size:12px;background:#eef1f4;border-radius:5px;padding:6px 9px;margin:7px 0;display:inline-block;color:#243b53;}
+  .chk .body b{color:var(--ink);}
+
+  /* readouts */
+  .reads{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-bottom:16px;}
+  @media(max-width:640px){.reads{grid-template-columns:repeat(2,1fr);}}
+  .read{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:11px 12px;}
+  .read .k{font-size:10.5px;font-family:var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);}
+  .read .v{font-size:24px;font-weight:700;margin-top:3px;letter-spacing:-.02em;font-variant-numeric:tabular-nums;}
+  .read .v small{font-size:12px;font-weight:500;color:var(--muted);}
+  .read .u{font-size:10.5px;color:var(--muted);margin-top:1px;}
+  .read.hi .v{color:var(--instrument);} .read.sig .v{color:var(--signal);}
+
+  .plotcard{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:15px 15px 5px;}
+  .plotcard h2{font-size:11.5px;font-family:var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 2px;font-weight:600;}
+  .plotcard .cap{font-size:12.5px;color:var(--muted);margin:0 0 6px;line-height:1.45;}
+  svg{width:100%;height:auto;display:block;}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin:2px 2px 8px;}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .swatch{width:11px;height:11px;border-radius:3px;display:inline-block;}
+
+  .explain{margin-top:16px;background:var(--instrument-soft);border:1px solid #cfe0fb;border-radius:10px;padding:14px 16px;}
+  .explain h3{margin:0 0 6px;font-size:12.5px;font-weight:700;color:var(--instrument);}
+  .explain p{margin:0;font-size:13px;line-height:1.55;color:#20344d;} .explain p+p{margin-top:7px;}
+  .errbox{margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:11px;}
+  @media(max-width:640px){.errbox{grid-template-columns:1fr;}}
+  .errbox .e{border:1px solid var(--line);border-radius:9px;padding:12px 13px;background:var(--panel);}
+  .errbox .e h4{margin:0 0 4px;font-size:12.5px;}
+  .errbox .e.t1 h4{color:var(--bad);} .errbox .e.t2 h4{color:var(--signal);}
+  .errbox .e p{margin:0;font-size:12px;color:var(--muted);line-height:1.5;}
+  .errbox .e .lever{font-size:11.5px;margin-top:6px;color:var(--ink);}
+
+  .footnote{font-size:11.5px;color:var(--muted);margin-top:20px;line-height:1.5;border-top:1px solid var(--line);padding-top:11px;}
+  code{font-family:var(--mono);background:#eef1f4;padding:1px 5px;border-radius:4px;font-size:.92em;}
+  .whenlab{font-size:11px;color:var(--muted);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">WINK · sample planner</p>
+    <h1>How many more do I <span class="q">still</span> have to do?</h1>
+  </header>
+  <p class="sub">Paste the data you already have. This checks whether your data is clean and normal, picks the honest test, then shows where you stand and how many more you need. The checks run every time; open any one to see the reasoning, or leave them closed if you already know.</p>
+
+  <div class="grid">
+    <!-- LEFT -->
+    <div class="panel">
+      <h2>Your data so far</h2>
+
+      <label class="field">
+        <span class="lab">Load a module CSV <small>optional — gives it bite</small></span>
+        <input type="file" id="csvFile" accept=".csv,.tsv,.txt" style="width:100%;font-family:var(--mono);font-size:12px;border:1px solid var(--line);border-radius:7px;padding:6px;background:#fcfcfb;">
+        <div id="csvCols" style="display:none;margin-top:9px;">
+          <div class="hint" style="margin-top:0;">Group column <small>(what splits the conditions)</small></div>
+          <select id="csvGroupCol" style="margin-top:3px;"></select>
+          <div class="hint" style="margin-top:6px;">Value column <small>(the plate-level metric)</small></div>
+          <select id="csvValCol" style="margin-top:3px;"></select>
+          <button id="csvFill" class="seg" style="margin-top:9px;width:100%;background:var(--instrument-soft);border:1px solid var(--instrument);color:var(--instrument);font-weight:600;padding:8px;border-radius:7px;cursor:pointer;">Fill groups from this CSV</button>
+        </div>
+        <div class="hint" id="csvHint">Point at a plate-level export from any module — e.g. <code>plate_trial_series.csv</code>, <code>population_tap_summary</code>, an orientation index, or a paralysis fraction — then pick the group and value columns. One value per replicate unit.</div>
+      </label>
+
+      <label class="field">
+        <span class="lab">Replicate unit <small>what counts as n</small></span>
+        <div class="seg" id="segUnit">
+          <button data-unit="plate" aria-pressed="true">Plate</button>
+          <button data-unit="well" aria-pressed="false">Well</button>
+          <button data-unit="worm" aria-pressed="false">Worm</button>
+        </div>
+        <div class="hint" id="unitHint">Population assays: the plate is the independent replicate. Many worms on one plate are one number, not many.</div>
+      </label>
+
+      <label class="field">
+        <span class="lab">Comparison</span>
+        <div class="seg" id="segMode">
+          <button data-mode="two" aria-pressed="true">Two groups</button>
+          <button data-mode="multi" aria-pressed="false">3+ groups</button>
+        </div>
+      </label>
+
+      <div id="twoInputs">
+        <label class="field">
+          <span class="lab">Group A <small id="uA">plate values</small></span>
+          <textarea id="groupA">0.22, 0.19, 0.25, 0.21</textarea>
+          <div class="hint">Comma or space separated. One value per replicate unit.</div>
+        </label>
+        <label class="field">
+          <span class="lab">Group B <small id="uB">plate values</small></span>
+          <textarea id="groupB">0.16, 0.14, 0.18, 0.15</textarea>
+        </label>
+      </div>
+
+      <div id="multiInputs" style="display:none;">
+        <label class="field">
+          <span class="lab">Groups <small>name: values, one per line</small></span>
+          <textarea id="groupsMulti" style="min-height:118px;">N2: 0.22, 0.19, 0.25, 0.21
+VG02 null: 0.15, 0.14, 0.17, 0.16
+BZ33: 0.11, 0.13, 0.10, 0.12</textarea>
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="lab">Confidence target <small>power</small></span>
+        <div class="slider-row"><input type="range" id="power" min="70" max="95" step="5" value="80"><span class="slider-val" id="powerVal">80%</span></div>
+        <div class="hint">Chance of catching a real effect. 80% is the field norm.</div>
+      </label>
+      <label class="field">
+        <span class="lab">Strictness <small>alpha</small></span>
+        <div class="slider-row"><input type="range" id="alpha" min="1" max="10" step="1" value="5"><span class="slider-val" id="alphaVal">.05</span></div>
+        <div class="hint">False alarm rate you will accept. .05 is standard.</div>
+      </label>
+
+      <div class="lvl">
+        <span>Detail:</span>
+        <div class="seg" id="segLevel">
+          <button data-lvl="novice" aria-pressed="true">Guide me</button>
+          <button data-lvl="expert" aria-pressed="false">Just the numbers</button>
+        </div>
+      </div>
+      <div class="hint" style="margin-top:6px;">Guide me opens the reasoning by default. Just the numbers keeps checks collapsed.</div>
+    </div>
+
+    <!-- RIGHT -->
+    <div>
+      <div class="verdict wait" id="verdict">
+        <span class="badge" id="vBadge">…</span>
+        <div><p class="line1" id="vLine1">Enter your data to begin.</p><p class="line2" id="vLine2"></p></div>
+      </div>
+
+      <div class="checks" id="checks"></div>
+
+      <div class="reads">
+        <div class="read"><div class="k">Units now</div><div class="v" id="rNow">—</div><div class="u" id="rNowU">per group</div></div>
+        <div class="read hi"><div class="k">Power now</div><div class="v" id="rPow">—</div><div class="u">catch a real effect</div></div>
+        <div class="read sig"><div class="k">Aim for</div><div class="v" id="rTarget">—</div><div class="u" id="rTargetU">per group</div></div>
+        <div class="read"><div class="k">Still to run</div><div class="v" id="rMore">—</div><div class="u" id="rMoreU">more</div></div>
+      </div>
+
+      <div class="plotcard">
+        <h2>The tradeoff curve</h2>
+        <p class="cap">Confidence climbs fast, then flattens. The point of the curve is to show when one more stops being worth it.</p>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--instrument);"></i>power as n grows</span>
+          <span><i class="swatch" style="background:var(--signal);"></i>you are here</span>
+          <span><i class="swatch" style="background:var(--good);"></i>target</span>
+        </div>
+        <svg id="plot" viewBox="0 0 720 340" role="img" aria-label="Power versus sample size"></svg>
+      </div>
+
+      <div class="explain">
+        <h3 id="exH">What this is telling you</h3>
+        <p id="exP1"></p><p id="exP2"></p>
+      </div>
+
+      <div class="errbox">
+        <div class="e t1"><h4>Type I — crying wolf</h4><p>Calling an effect real when it is not. You set this directly: it is your alpha.</p><div class="lever" id="t1lever"></div></div>
+        <div class="e t2"><h4>Type II — missing it</h4><p>Failing to see a real effect. This is 1 minus power, and it is exactly what more replicates buys down.</p><div class="lever" id="t2lever"></div></div>
+      </div>
+
+      <p class="footnote" id="foot"></p>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let MODE="two", UNIT="plate", LEVEL="novice";
+
+/* ---------- stats core (validated against scipy) ---------- */
+function mean(a){return a.reduce((x,y)=>x+y,0)/a.length;}
+function varS(a){if(a.length<2)return NaN;const m=mean(a);return a.reduce((s,v)=>s+(v-m)**2,0)/(a.length-1);}
+function median(a){const s=[...a].sort((x,y)=>x-y),n=s.length;return n%2?s[(n-1)/2]:(s[n/2-1]+s[n/2])/2;}
+function quantile(s,q){const pos=(s.length-1)*q,b=Math.floor(pos),r=pos-b;return s[b+1]!==undefined?s[b]+r*(s[b+1]-s[b]):s[b];}
+function iqrFence(x){const s=[...x].sort((a,b)=>a-b);const q1=quantile(s,.25),q3=quantile(s,.75),iqr=q3-q1;const lo=q1-1.5*iqr,hi=q3+1.5*iqr;return{q1,q3,iqr,lo,hi,out:x.filter(v=>v<lo||v>hi)};}
+function erf(x){const t=1/(1+.3275911*Math.abs(x));const y=1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-.284496736)*t+.254829592)*t*Math.exp(-x*x);return x>=0?y:-y;}
+function normCDF(x){return .5*(1+erf(x/Math.SQRT2));}
+function normPPF(p){const a=[-3.969683028665376e+01,2.209460984245205e+02,-2.759285104469687e+02,1.383577518672690e+02,-3.066479806614716e+01,2.506628277459239e+00],b=[-5.447609879822406e+01,1.615858368580409e+02,-1.556989798598866e+02,6.680131188771972e+01,-1.328068155288572e+01],c=[-7.784894002430293e-03,-3.223964580411365e-01,-2.400758277161838e+00,-2.549732539343734e+00,4.374664141464968e+00,2.938163982698783e+00],d=[7.784695709041462e-03,3.224671290700398e-01,2.445134137142996e+00,3.754408661907416e+00],pl=.02425,ph=1-pl;let q,r;if(p<pl){q=Math.sqrt(-2*Math.log(p));return(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5])/((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1);}if(p<=ph){q=p-.5;r=q*q;return(((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q/(((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);}q=Math.sqrt(-2*Math.log(1-p));return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5])/((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1);}
+function gammaln(x){const g=[76.18009172947146,-86.50532032941677,24.01409824083091,-1.231739572450155,.1208650973866179e-2,-.5395239384953e-5];let xx=x,y=x,tmp=x+5.5;tmp-=(x+.5)*Math.log(tmp);let ser=1.000000000190015;for(let j=0;j<6;j++){y++;ser+=g[j]/y;}return -tmp+Math.log(2.5066282746310005*ser/xx);}
+function betacf(a,b,x){const FPMIN=1e-300;let qab=a+b,qap=a+1,qam=a-1,c=1,d=1-qab*x/qap;if(Math.abs(d)<FPMIN)d=FPMIN;d=1/d;let h=d;for(let m=1;m<=200;m++){let m2=2*m,aa=m*(b-m)*x/((qam+m2)*(a+m2));d=1+aa*d;if(Math.abs(d)<FPMIN)d=FPMIN;c=1+aa/c;if(Math.abs(c)<FPMIN)c=FPMIN;d=1/d;h*=d*c;aa=-(a+m)*(qab+m)*x/((a+m2)*(qap+m2));d=1+aa*d;if(Math.abs(d)<FPMIN)d=FPMIN;c=1+aa/c;if(Math.abs(c)<FPMIN)c=FPMIN;d=1/d;let del=d*c;h*=del;if(Math.abs(del-1)<3e-12)break;}return h;}
+function betai(a,b,x){if(x<=0)return 0;if(x>=1)return 1;const bt=Math.exp(gammaln(a+b)-gammaln(a)-gammaln(b)+a*Math.log(x)+b*Math.log(1-x));return x<(a+1)/(a+b+2)?bt*betacf(a,b,x)/a:1-bt*betacf(b,a,1-x)/b;}
+function tCDF(t,df){const x=df/(df+t*t),ib=betai(df/2,.5,x);return t>0?1-.5*ib:.5*ib;}
+function fCDF(f,d1,d2){if(f<=0)return 0;return betai(d1/2,d2/2,d1*f/(d1*f+d2));}
+function lowerGamma(s,x){if(x<0)return 0;let sum=1/s,term=1/s;for(let n=1;n<200;n++){term*=x/(s+n);sum+=term;if(term<1e-12)break;}return sum*Math.exp(-x+s*Math.log(x)-gammaln(s));}
+function chi2CDF(x,k){if(x<=0)return 0;return lowerGamma(k/2,x/2);}
+
+function shapiro(x){const n=x.length;if(n<3)return{W:NaN,p:NaN};const s=[...x].sort((a,b)=>a-b);const m=[];for(let i=1;i<=n;i++)m.push(normPPF((i-.375)/(n+.25)));const mSum=m.reduce((a,b)=>a+b*b,0),rsn=1/Math.sqrt(n),a=new Array(n).fill(0);const an=-2.706056*rsn**5+4.434685*rsn**4-2.071190*rsn**3-.147981*rsn**2+.221157*rsn+m[n-1]/Math.sqrt(mSum);const an1=-3.582633*rsn**5+5.682633*rsn**4-1.752461*rsn**3-.293762*rsn**2+.042981*rsn+m[n-2]/Math.sqrt(mSum);let phi;if(n>5){phi=(mSum-2*m[n-1]**2-2*m[n-2]**2)/(1-2*an**2-2*an1**2);a[n-1]=an;a[0]=-an;a[n-2]=an1;a[1]=-an1;for(let i=2;i<n-2;i++)a[i]=m[i]/Math.sqrt(phi);}else{phi=(mSum-2*m[n-1]**2)/(1-2*an**2);a[n-1]=an;a[0]=-an;for(let i=1;i<n-1;i++)a[i]=m[i]/Math.sqrt(phi);}const xm=mean(s);let num=0,den=0;for(let i=0;i<n;i++){num+=a[i]*s[i];den+=(s[i]-xm)**2;}const W=num*num/den;let p;if(n===3){const pi6=6/Math.PI,stqr=Math.asin(Math.sqrt(3/4));p=1-pi6*(Math.asin(Math.sqrt(W))-stqr);}else{const lnn=Math.log(n);let mu,sig,w1;if(n<=11){const g=-2.273+.459*n;mu=.5440-.39978*n+.025054*n*n-.0006714*n*n*n;sig=Math.exp(1.3822-.77857*n+.062767*n*n-.0020322*n*n*n);w1=-Math.log(g-Math.log(1-W));}else{mu=-1.5861-.31082*lnn-.083751*lnn*lnn+.0038915*lnn*lnn*lnn;sig=Math.exp(-.4803-.082676*lnn+.0030302*lnn*lnn);w1=Math.log(1-W);}const z=(w1-mu)/sig;p=1-normCDF(z);}return{W,p:Math.max(0,Math.min(1,p))};}
+function levene(groups){const z=groups.map(g=>{const md=median(g);return g.map(v=>Math.abs(v-md));});const N=z.reduce((s,g)=>s+g.length,0),k=z.length;const zbar=z.map(mean),zg=mean([].concat(...z));let num=0;z.forEach((g,i)=>num+=g.length*(zbar[i]-zg)**2);num*=(N-k);let den=0;z.forEach((g,i)=>g.forEach(v=>den+=(v-zbar[i])**2));den*=(k-1);const F=num/den;return{F,df1:k-1,df2:N-k,p:1-fCDF(F,k-1,N-k)};}
+function welchT(a,b){const ma=mean(a),mb=mean(b),va=varS(a),vb=varS(b),na=a.length,nb=b.length,se=Math.sqrt(va/na+vb/nb),t=(ma-mb)/se,df=(va/na+vb/nb)**2/((va/na)**2/(na-1)+(vb/nb)**2/(nb-1));return{t,df,p:2*(1-tCDF(Math.abs(t),df))};}
+function mannWhitney(a,b){const all=a.map(v=>({v,g:0})).concat(b.map(v=>({v,g:1}))).sort((x,y)=>x.v-y.v);let i=0;const ranks=new Array(all.length);while(i<all.length){let j=i;while(j<all.length-1&&all[j+1].v===all[i].v)j++;const r=(i+j)/2+1;for(let k=i;k<=j;k++)ranks[k]=r;i=j+1;}let Ra=0;all.forEach((o,idx)=>{if(o.g===0)Ra+=ranks[idx];});const na=a.length,nb=b.length,Ua=Ra-na*(na+1)/2,U=Math.min(Ua,na*nb-Ua),mu=na*nb/2,sig=Math.sqrt(na*nb*(na+nb+1)/12),z=(U-mu)/sig;return{U,p:Math.max(0,Math.min(1,2*normCDF(-Math.abs(z))))};}
+function kruskal(groups){const all=[];groups.forEach((g,gi)=>g.forEach(v=>all.push({v,gi})));all.sort((a,b)=>a.v-b.v);let i=0;const ranks=new Array(all.length);while(i<all.length){let j=i;while(j<all.length-1&&all[j+1].v===all[i].v)j++;const r=(i+j)/2+1;for(let k=i;k<=j;k++)ranks[k]=r;i=j+1;}const N=all.length,Rg=groups.map(()=>0),ng=groups.map(g=>g.length);all.forEach((o,idx)=>Rg[o.gi]+=ranks[idx]);let H=0;Rg.forEach((R,gi)=>H+=R*R/ng[gi]);H=12/(N*(N+1))*H-3*(N+1);return{H,df:groups.length-1,p:1-chi2CDF(H,groups.length-1)};}
+
+function nPerGroup(d,alpha,power){if(!(d>0))return Infinity;const z=normPPF(1-alpha/2)+normPPF(power);return 2*z*z/(d*d);}
+function powerAt(n,d,alpha){if(!(d>0)||n<2)return 0;const ncp=d*Math.sqrt(n/2),zc=normPPF(1-alpha/2);return normCDF(ncp-zc)+normCDF(-ncp-zc);}
+
+function parse(s){return(s.match(/-?\d*\.?\d+(e-?\d+)?/gi)||[]).map(Number).filter(v=>!isNaN(v));}
+function fmt(x,dp=3){return isFinite(x)?(+x).toFixed(dp):"—";}
+function pfmt(p){return isFinite(p)?(p<.001?"<0.001":p.toFixed(3)):"—";}
+
+/* ---------- pipeline ---------- */
+function analyze(){
+  const alpha=(+$("alpha").value)/100, power=(+$("power").value)/100;
+  let groups=[], names=[];
+  if(MODE==="two"){
+    const A=parse($("groupA").value),B=parse($("groupB").value);
+    if(A.length<2||B.length<2)return{ok:false,msg:"Enter at least two values in each group."};
+    groups=[A,B]; names=["A","B"];
+  }else{
+    const lines=$("groupsMulti").value.split(/\n/).map(l=>l.trim()).filter(Boolean);
+    lines.forEach(l=>{const idx=l.indexOf(":");names.push(idx>=0?l.slice(0,idx).trim():"group");groups.push(parse(idx>=0?l.slice(idx+1):l));});
+    groups=groups.filter((g,i)=>{if(g.length>=2)return true;return false;});
+    if(groups.length<2)return{ok:false,msg:"Enter at least two groups, each with two or more values."};
+  }
+  const nNow=Math.min(...groups.map(g=>g.length));
+
+  // 1. outliers
+  const fences=groups.map(iqrFence);
+  const anyOut=fences.some(f=>f.out.length>0);
+
+  // 2. normality (per group, min p)
+  const norms=groups.map(g=>g.length>=3?shapiro(g):{W:NaN,p:NaN});
+  const minNormP=Math.min(...norms.map(n=>isFinite(n.p)?n.p:1));
+  const tinyN=nNow<4;
+  const normalOK=tinyN?true:minNormP>0.05; // at tiny n, defer to biology
+
+  // 3. equal variance
+  const lev=levene(groups);
+  const varOK=isFinite(lev.p)?lev.p>0.05:true;
+
+  // 4. choose test + compute effect
+  let testName,testP,d,effectAbs,pooledSD,gapNote="",approxNote=false;
+  if(!normalOK){
+    if(MODE==="two"){const mw=mannWhitney(groups[0],groups[1]);testName="Mann–Whitney U";testP=mw.p;approxNote=true;}
+    else{const kw=kruskal(groups);testName="Kruskal–Wallis";testP=kw.p;approxNote=true;}
+  }else{
+    if(MODE==="two"){const w=welchT(groups[0],groups[1]);testName="Welch's t";testP=w.p;}
+    else{testName="Welch ANOVA (planning via closest pair)";testP=NaN;}
+  }
+  // effect size (Cohen's d style on pooled SD) — always on means, drives power
+  if(MODE==="two"){
+    const va=varS(groups[0]),vb=varS(groups[1]);
+    pooledSD=Math.sqrt(((groups[0].length-1)*va+(groups[1].length-1)*vb)/(groups[0].length+groups[1].length-2));
+    effectAbs=Math.abs(mean(groups[0])-mean(groups[1]));
+  }else{
+    let ss=0,df=0;groups.forEach(g=>{ss+=(g.length-1)*varS(g);df+=g.length-1;});pooledSD=Math.sqrt(ss/df);
+    let minGap=Infinity,pair="";for(let i=0;i<groups.length;i++)for(let j=i+1;j<groups.length;j++){const g=Math.abs(mean(groups[i])-mean(groups[j]));if(g<minGap){minGap=g;pair=`${names[i]} vs ${names[j]}`;}}
+    effectAbs=minGap;gapNote=pair;
+  }
+  d=pooledSD>0?effectAbs/pooledSD:Infinity;
+
+  const powNow=powerAt(nNow,d,alpha);
+  let nReq=Math.max(2,Math.ceil(nPerGroup(d,alpha,power)));
+  const more=Math.max(0,nReq-nNow);
+
+  return{ok:true,alpha,power,groups,names,nNow,fences,anyOut,norms,minNormP,normalOK,tinyN,lev,varOK,
+    testName,testP,approxNote,d,effectAbs,pooledSD,gapNote,powNow,nReq,more};
+}
+
+/* ---------- render ---------- */
+function chk(id,state,title,verd,bodyHTML){
+  const openByDefault = LEVEL==="novice" && state!=="ok";
+  return `<div class="chk ${openByDefault?'open':''}" data-chk="${id}">
+    <div class="head"><span class="dot ${state}"></span><span class="title">${title}</span><span class="verd">${verd}</span><span class="why">why?</span></div>
+    <div class="body">${bodyHTML}</div></div>`;
+}
+
+function render(){
+  const r=analyze();
+  const V=$("verdict"),badge=$("vBadge"),l1=$("vLine1"),l2=$("vLine2");
+  const uWord=UNIT==="plate"?"plates":UNIT==="well"?"wells":"worms";
+  $("uA").textContent=uWord+" values"; $("uB").textContent=uWord+" values";
+  $("rNowU").textContent="per group"; $("rTargetU").textContent="per group"; $("rMoreU").textContent="more "+uWord;
+
+  if(!r.ok){
+    V.className="verdict wait";badge.textContent="waiting";l1.textContent=r.msg;l2.textContent="";
+    $("checks").innerHTML="";["rNow","rPow","rTarget","rMore"].forEach(id=>$(id).textContent="—");
+    drawPlot(null);$("exP1").textContent="";$("exP2").textContent="";$("t1lever").textContent="";$("t2lever").textContent="";$("foot").innerHTML="";return;
+  }
+
+  // ---- checks ----
+  let checks="";
+  // unit check (info/teaching, or stop if worm on population)
+  const worm=UNIT==="worm";
+  checks+=chk("unit", worm?"warn":"info",
+    "Replicate unit",
+    UNIT.toUpperCase(),
+    worm
+      ? `You chose <b>worm</b> as the unit. That is correct only when each worm is truly independent (single worm imaging, individual calcium traces). For anything scored per plate or per well (chemotaxis, paralysis, tap response), worms on the same plate share their environment, so counting them as independent is <b>pseudoreplication</b> and inflates confidence. If in doubt, the plate is the safe unit.`
+      : `Your n is counted in <b>${uWord}</b>. This is the independent replicate: the level at which you could repeat the experiment from scratch. Effect and scatter below are read at this level, which keeps the statistics honest.`);
+
+  // outliers
+  const outList=r.fences.flatMap((f,i)=>f.out.map(v=>`${r.names[i]}: ${v}`));
+  checks+=chk("out", r.anyOut?"warn":"ok",
+    "Outliers",
+    r.anyOut?`${outList.length} flagged`:"none flagged",
+    r.anyOut
+      ? `The IQR fence flags points below Q1−1.5×IQR or above Q3+1.5×IQR. Flagged: <b>${outList.join("; ")}</b>.
+         <div class="num">effect with the point: ${fmt(r.effectAbs)} &nbsp;·&nbsp; a flag is not a delete</div>
+         Check the notebook for that ${uWord.slice(0,-1)}: contamination, mis-staging, wrong temperature. Remove it only with a documented reason, then re-run. Never drop a point just because it hurts the result.`
+      : `No point falls outside the IQR fence (Q1−1.5×IQR to Q3+1.5×IQR). Nothing single-handedly drives the effect.`);
+
+  // normality
+  checks+=chk("norm", r.tinyN?"info":(r.normalOK?"ok":"warn"),
+    "Normal distribution",
+    r.tinyN?"n too small to test":(r.normalOK?`Shapiro p=${pfmt(r.minNormP)}`:`Shapiro p=${pfmt(r.minNormP)}`),
+    r.tinyN
+      ? `With ${r.nNow} ${uWord} the Shapiro–Wilk test has almost no power, so its result would be meaningless. At this size you lean on the biology and the plot, not a normality p-value. The tool assumes normal and uses a t-based plan; confirm with a few more ${uWord}.`
+      : (r.normalOK
+        ? `Shapiro–Wilk finds no departure from normal (smallest group p=${pfmt(r.minNormP)}, above 0.05). A parametric test is appropriate.`
+        : `Shapiro–Wilk flags non-normal data (smallest group p=${pfmt(r.minNormP)}, below 0.05). The tool switched to a rank-based test that does not assume normality.`));
+
+  // variance
+  checks+=chk("var", r.varOK?"ok":"warn",
+    "Equal spread",
+    `Levene p=${pfmt(r.lev.p)}`,
+    r.varOK
+      ? `Levene's test finds comparable variance across groups (p=${pfmt(r.lev.p)}). Good.`
+      : `Levene flags unequal variance (p=${pfmt(r.lev.p)}). Welch's t already corrects for this, so the chosen test handles it; just be aware one group is noisier.`);
+
+  // chosen test
+  checks+=chk("test","info",
+    "Chosen test",
+    r.testName.split(" (")[0],
+    `Based on the checks above, the honest test here is <b>${r.testName}</b>.
+     ${isFinite(r.testP)?`<div class="num">p = ${pfmt(r.testP)} on your current data</div>`:""}
+     ${r.approxNote?`Rank-based p at small n uses a normal approximation; treat it as indicative, not exact.`:``}
+     ${MODE==="multi"?`For 3+ groups the sample-size plan targets the hardest pair to separate, since resolving those resolves the rest.`:``}`);
+
+  $("checks").innerHTML=checks;
+  bindChecks();
+
+  // ---- readouts ----
+  $("rNow").textContent=r.nNow;
+  $("rPow").innerHTML=Math.round(r.powNow*100)+"<small>%</small>";
+  $("rTarget").textContent=isFinite(r.nReq)?r.nReq:"—";
+  $("rMore").textContent=isFinite(r.more)?r.more:"—";
+
+  // ---- verdict ----
+  const pct=Math.round(r.powNow*100),tgt=Math.round(r.power*100);
+  if(r.d<0.15){
+    V.className="verdict nofx";badge.textContent="no effect yet";
+    l1.innerHTML=`Your groups barely differ (gap ≈ <b>${fmt(r.effectAbs)}</b>, scatter ≈ <b>${fmt(r.pooledSD)}</b>).`;
+    l2.innerHTML=`More ${uWord} will not manufacture a difference that is not there. Either the effect is genuinely small, or a confound is washing it out. Worth pausing before running more.`;
+  }else if(r.more<=0){
+    V.className="verdict enough";badge.textContent="you are there";
+    l1.innerHTML=`Stop. You have <b>${r.nNow}</b> ${uWord} per group at <b>${pct}%</b> power.`;
+    l2.innerHTML=`More will not change the conclusion; it only costs time. Lock the dataset and analyze.`;
+  }else if(r.more<=Math.max(2,Math.ceil(r.nNow*0.5))){
+    V.className="verdict close";badge.textContent="almost";
+    l1.innerHTML=`Close. About <b>${r.more}</b> more ${uWord.slice(0,-1)}${r.more===1?"":"s"} per group reaches ${tgt}%.`;
+    l2.innerHTML=`You are at ${pct}% now. The effect looks real; you need a little more to prove it cleanly.`;
+  }else{
+    V.className="verdict far";badge.textContent="keep going";
+    l1.innerHTML=`Aim for <b>${r.nReq}</b> ${uWord} per group. About <b>${r.more}</b> more to go.`;
+    l2.innerHTML=`At ${pct}% now, a real effect would slip past you more often than not.${r.d<0.4?" The effect is on the smaller side, which is why it takes more.":""}`;
+  }
+
+  // ---- explanation ----
+  $("exP1").innerHTML=`Your data set the two numbers sample size hinges on: an effect of <b>${fmt(r.effectAbs)}</b>${r.gapNote?` (<code>${r.gapNote}</code>)`:""} against a ${uWord.slice(0,-1)} to ${uWord.slice(0,-1)} scatter of <b>${fmt(r.pooledSD)}</b>. Their ratio, the standardized effect <b>${fmt(r.d,2)}</b>, is the lever: bigger gap or tighter scatter needs fewer ${uWord}; the reverse needs more.`;
+  $("exP2").innerHTML=`Each new ${uWord.slice(0,-1)} shrinks uncertainty by about the square root of n, not linearly, which is why the curve flattens. That diminishing return is when "one more" stops being the right instinct.`;
+
+  // ---- error levers ----
+  $("t1lever").innerHTML=`Your lever: <b>alpha = ${(r.alpha).toFixed(2)}</b>. Lower it (stricter) to cry wolf less, at the cost of needing more ${uWord}.`;
+  $("t2lever").innerHTML=`Your lever: <b>power = ${Math.round(r.power*100)}%</b>, so Type II = <b>${Math.round((1-r.power)*100)}%</b> at target. You are at <b>${100-pct}%</b> right now. More ${uWord} lowers it.`;
+
+  // ---- footnote ----
+  $("foot").innerHTML=`The independent replicate here is the <b>${uWord.slice(0,-1)}</b>. Effect and scatter are read at that level, mirroring the WINK engine, which refuses worm-level power for population assays because it is pseudoreplication. Distribution checks are Shapiro–Wilk (normality) and Levene (equal variance); the test forks to Welch's t or Mann–Whitney (two groups), or Welch ANOVA or Kruskal–Wallis (3+). Under six ${uWord} the variance itself is noisy, so the number is a target to move toward, then re-check as data arrives. All checks and values are written to the export.`;
+
+  drawPlot(r);
+}
+
+function bindChecks(){
+  document.querySelectorAll(".chk .head").forEach(h=>{
+    h.addEventListener("click",()=>h.parentElement.classList.toggle("open"));
+  });
+}
+
+function drawPlot(r){
+  const svg=$("plot"),W=720,H=340,P={l:52,r:18,t:16,b:40},x0=P.l,x1=W-P.r,y0=H-P.b,y1=P.t;
+  const nMax=r?Math.max(12,Math.min(40,Math.max(r.nNow+4,(isFinite(r.nReq)?r.nReq+3:12)))):20;
+  const sx=n=>x0+(n-2)/(nMax-2)*(x1-x0), sy=p=>y0-p*(y0-y1);
+  let g="";
+  [0,.25,.5,.75,1].forEach(p=>{const y=sy(p);g+=`<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="#eceef1"/>`;g+=`<text x="${x0-9}" y="${y+4}" text-anchor="end" font-family="var(--mono)" font-size="11" fill="#7a8a98">${Math.round(p*100)}%</text>`;});
+  for(let n=2;n<=nMax;n+=(nMax>24?4:2)){const x=sx(n);g+=`<line x1="${x}" y1="${y0}" x2="${x}" y2="${y0+5}" stroke="#b7c0c9"/>`;g+=`<text x="${x}" y="${y0+20}" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="#7a8a98">${n}</text>`;}
+  g+=`<text x="${(x0+x1)/2}" y="${H-6}" text-anchor="middle" font-size="12" fill="#5f6f7e">${r?(UNIT==="plate"?"plates":UNIT==="well"?"wells":"worms"):"n"} per group</text>`;
+  g+=`<text x="15" y="${(y0+y1)/2}" text-anchor="middle" font-size="12" fill="#5f6f7e" transform="rotate(-90 15 ${(y0+y1)/2})">power</text>`;
+  if(r&&isFinite(r.d)&&r.d>0){
+    const yt=sy(r.power);
+    g+=`<line x1="${x0}" y1="${yt}" x2="${x1}" y2="${yt}" stroke="#1f8a4c" stroke-width="1.4" stroke-dasharray="5,4"/>`;
+    g+=`<text x="${x1}" y="${yt-6}" text-anchor="end" font-size="11" fill="#1f8a4c" font-family="var(--mono)">target ${Math.round(r.power*100)}%</text>`;
+    let d="";for(let n=2;n<=nMax;n+=0.5){const p=powerAt(n,r.d,r.alpha);d+=(d===""?"M":"L")+sx(n).toFixed(1)+" "+sy(p).toFixed(1)+" ";}
+    g+=`<path d="${d}" fill="none" stroke="#1f6feb" stroke-width="2.6"/>`;
+    if(isFinite(r.nReq)&&r.nReq<=nMax){const xr=sx(r.nReq),yr=sy(powerAt(r.nReq,r.d,r.alpha));g+=`<line x1="${xr}" y1="${y0}" x2="${xr}" y2="${yr}" stroke="#1f8a4c" stroke-dasharray="3,3"/><circle cx="${xr}" cy="${yr}" r="5" fill="#1f8a4c"/>`;}
+    if(r.nNow<=nMax){const xn=sx(r.nNow),yn=sy(r.powNow);g+=`<line x1="${xn}" y1="${y0}" x2="${xn}" y2="${yn}" stroke="#e08a17" stroke-dasharray="3,3"/><circle cx="${xn}" cy="${yn}" r="6.5" fill="#e08a17" stroke="#fff" stroke-width="2"/><text x="${xn}" y="${yn-12}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#c2740f" font-family="var(--mono)">now</text>`;}
+  }
+  svg.innerHTML=g;
+}
+
+/* ---------- wiring ---------- */
+$("segUnit").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;UNIT=b.dataset.unit;[...$("segUnit").children].forEach(x=>x.setAttribute("aria-pressed",x===b));
+  $("unitHint").textContent=UNIT==="plate"?"Population assays: the plate is the independent replicate. Many worms on one plate are one number.":UNIT==="well"?"Wells are independent if each is a separate environment (e.g. multiwell liquid assays). Worms within a well are not.":"Worm is the unit only for truly independent single-animal measures (single-worm imaging, individual calcium traces).";render();});
+$("segMode").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;MODE=b.dataset.mode;[...$("segMode").children].forEach(x=>x.setAttribute("aria-pressed",x===b));$("twoInputs").style.display=MODE==="two"?"":"none";$("multiInputs").style.display=MODE==="multi"?"":"none";render();});
+$("segLevel").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;LEVEL=b.dataset.lvl;[...$("segLevel").children].forEach(x=>x.setAttribute("aria-pressed",x===b));render();});
+$("power").addEventListener("input",e=>{$("powerVal").textContent=e.target.value+"%";render();});
+$("alpha").addEventListener("input",e=>{$("alphaVal").textContent="."+String(e.target.value).padStart(2,"0");render();});
+["groupA","groupB","groupsMulti"].forEach(id=>$(id).addEventListener("input",render));
+
+/* ---------- CSV loader: pull a module export directly (bite) ---------- */
+let CSVROWS=null, CSVHEAD=null;
+function splitCSVLine(line,delim){
+  /* quote-aware: a field may contain the delimiter inside "double quotes",
+     and "" is an escaped quote. Ingested from the earlier deployment. */
+  const out=[];let cur="",q=false;
+  for(let i=0;i<line.length;i++){const c=line[i];
+    if(q){if(c==='"'){if(line[i+1]==='"'){cur+='"';i++;}else q=false;}else cur+=c;}
+    else{if(c===delim){out.push(cur);cur="";}else if(c==='"')q=true;else cur+=c;}}
+  out.push(cur);return out.map(s=>s.trim());
+}
+function parseCSV(text){
+  const lines=text.replace(/\r/g,"").split("\n").filter(l=>l.trim().length);
+  if(!lines.length)return{head:[],rows:[]};
+  const delim=(lines[0].indexOf("\t")>=0&&lines[0].indexOf(",")<0)?"\t":",";
+  return{head:splitCSVLine(lines[0],delim),
+         rows:lines.slice(1).map(l=>splitCSVLine(l,delim))};
+}
+function syncModeButtons(){
+  [...$("segMode").children].forEach(x=>x.setAttribute("aria-pressed",x.dataset.mode===MODE));
+  $("twoInputs").style.display=MODE==="two"?"":"none";
+  $("multiInputs").style.display=MODE==="multi"?"":"none";
+}
+$("csvFile").addEventListener("change",e=>{
+  const f=e.target.files&&e.target.files[0]; if(!f)return;
+  const rd=new FileReader();
+  rd.onload=()=>{
+    const {head,rows}=parseCSV(String(rd.result));
+    if(!head.length){$("csvHint").textContent="Could not read that file.";return;}
+    CSVHEAD=head;CSVROWS=rows;
+    const opts=head.map((h,i)=>`<option value="${i}">${h||("col "+i)}</option>`).join("");
+    const numeric=head.map((h,i)=>rows.slice(0,25).every(r=>r[i]===undefined||r[i]===""||!isNaN(+r[i])));
+    let gGuess=numeric.findIndex(v=>!v); if(gGuess<0)gGuess=0;
+    let vGuess=numeric.lastIndexOf(true); if(vGuess<0)vGuess=head.length-1;
+    $("csvGroupCol").innerHTML=opts; $("csvValCol").innerHTML=opts;
+    $("csvGroupCol").value=gGuess; $("csvValCol").value=vGuess;
+    $("csvCols").style.display="block";
+    $("csvHint").textContent=`${rows.length} rows, ${head.length} columns. Pick the group and value columns, then Fill.`;
+  };
+  rd.readAsText(f);
+});
+$("csvFill").addEventListener("click",()=>{
+  if(!CSVROWS)return;
+  const gi=+$("csvGroupCol").value, vi=+$("csvValCol").value;
+  const byGroup={};
+  CSVROWS.forEach(r=>{const g=((r[gi]??"").toString().trim())||"group";const v=+r[vi];if(!isNaN(v))(byGroup[g]=byGroup[g]||[]).push(v);});
+  const names=Object.keys(byGroup).filter(g=>byGroup[g].length);
+  if(names.length===0){$("csvHint").textContent="No numeric values found in the value column.";return;}
+  if(names.length===1){MODE="two";syncModeButtons();$("groupA").value=byGroup[names[0]].join(", ");$("csvHint").textContent="One group found; filled Group A. Add a comparison.";render();return;}
+  if(names.length===2){MODE="two";syncModeButtons();$("groupA").value=byGroup[names[0]].join(", ");$("groupB").value=byGroup[names[1]].join(", ");}
+  else{MODE="multi";syncModeButtons();$("groupsMulti").value=names.map(n=>`${n}: ${byGroup[n].join(", ")}`).join("\n");}
+  $("csvHint").textContent=`Filled ${names.length} group(s) from the CSV. Effect and power below now read your data.`;
+  render();
+});
+render();
+</script>
+</body>
+</html>

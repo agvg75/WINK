@@ -1,0 +1,5 @@
+{
+  "mode": "none",
+  "rule": "component centroid inside union of supplied ROIs",
+  "rois": []
+}

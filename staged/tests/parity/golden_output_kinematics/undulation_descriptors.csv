@@ -1,0 +1,2 @@
+worm_id,resolved,dominant_freq_hz,coherence,wavelength_segments,wave_speed_seg_per_s,direction,bend_amplitude_deg,n_frames,reason
+w1,True,0.15625,0.717948717948718,14.941207818089671,2.334563721576511,anterior->posterior,3.281866060994078,156,

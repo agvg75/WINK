@@ -1,0 +1,5 @@
+region,detection_status,segmented_area_um2,skeleton_length_um,vector_count,summed_capacity_weight,review_note
+anterior_um1,network_detected,469.5,122.5,3,1352.0,"Detection status is observational, not a biological absence call."
+anterior_um2,network_detected,427.5,111.0,4,2432.0,"Detection status is observational, not a biological absence call."
+posterior_um1,network_detected,408.0,113.0,3,1458.4807968139648,"Detection status is observational, not a biological absence call."
+posterior_um2,weak_or_fragmented,264.75,63.0,1,978.3567962646484,"Detection status is observational, not a biological absence call."

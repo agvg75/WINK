@@ -1,0 +1,26 @@
+{
+  "source_csv": "WT_day1_L4440_a01.csv",
+  "golden_input_dir": "golden_input_neuromech",
+  "source_sha256": "c8197aba2fd7b4d624d004c816e37724150bbd077c12ab068233886d2e4363bf",
+  "tables": [
+    "calcium_output_decomposition_blue",
+    "calcium_output_decomposition_green",
+    "calcium_output_decomposition_red",
+    "curvature_to_translation",
+    "propulsion_efficiency"
+  ],
+  "mode": "run_one",
+  "python": "3.13.14",
+  "numpy": "2.5.1",
+  "pandas": "3.0.3",
+  "scipy": "1.18.0",
+  "rtol": 1e-06,
+  "atol": 1e-09,
+  "table_keys": [
+    "calcium_output_decomposition_blue",
+    "calcium_output_decomposition_green",
+    "calcium_output_decomposition_red",
+    "curvature_to_translation",
+    "propulsion_efficiency"
+  ]
+}

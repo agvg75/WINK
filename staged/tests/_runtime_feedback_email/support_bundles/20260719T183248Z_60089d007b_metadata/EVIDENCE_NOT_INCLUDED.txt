@@ -1,0 +1,3 @@
+Visual evidence remained local because the support bundle would exceed the configured size limit.
+
+large.bin

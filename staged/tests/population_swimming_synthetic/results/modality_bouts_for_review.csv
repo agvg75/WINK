@@ -1,0 +1,3 @@
+bout_id,track_id,start_frame,end_frame,start_time_s,end_time_s,duration_s,proposed_modality,confidence,bend_frequency_hz,median_speed_um_s,c_score,s_score,w_score,review_status,reviewed_modality,reviewer_note
+1,1,0,119,0.0,5.95,6.0,uncertain,0.0,1.5000000000000033,145.7407959630462,0.0,9.357622968840175e-14,8.957736717696698e-10,pending,,
+2,2,0,119,0.0,5.95,6.0,uncertain,0.0,1.5000000000000033,127.34479399055161,0.0,4.6788114847641185e-14,4.4788683680799845e-10,pending,,

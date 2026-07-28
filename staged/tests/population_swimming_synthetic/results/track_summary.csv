@@ -1,0 +1,3 @@
+track_id,frames,duration_s,coverage_fraction,activity_fraction,mean_speed_um_s,spine_bend_frequency_hz,centroid_oscillation_frequency_hz,curvature_frequency_hz,spine_valid_fraction,edge_fraction,collision_fraction,crossing_ambiguity_fraction,eligible_for_frequency,needs_review,review_reason
+1,120,5.95,1.0,0.9916666666666667,126.36492051093802,1.500000000000002,1.500000000000002,0.3333333333333333,0.1,0.0,0.0,0.0,True,False,standard_review
+2,120,5.95,1.0,0.9916666666666667,126.18844244053064,1.500000000000002,1.500000000000002,0.4545454545454547,0.1,0.0,0.0,0.0,True,False,standard_review

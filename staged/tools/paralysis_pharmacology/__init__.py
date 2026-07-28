@@ -1,0 +1,1 @@
+"""Neuromuscular paralysis pharmacology tool."""

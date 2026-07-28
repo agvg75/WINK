@@ -1,0 +1,15 @@
+{
+  "source_csv": "WormRGBCaMP_extracted_w1.csv",
+  "source_sha256": "de6c1fc39f2b04a98784c9a19c73bcf6da92f2fe17dd1334036b4ef6e5c3fe40",
+  "tables": [
+    "contraction_state",
+    "region_split",
+    "release_reuptake"
+  ],
+  "python": "3.13.14",
+  "numpy": "2.5.1",
+  "pandas": "3.0.3",
+  "scipy": "1.18.0",
+  "rtol": 1e-06,
+  "atol": 1e-09
+}

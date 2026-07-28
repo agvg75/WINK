@@ -1,0 +1,3 @@
+pair,lead_channel,lag_channel,method,lag_s,lag_uncertainty_s,resolved,direction_agreement,n_seg,coherence,biology,reason
+green_vs_blue,green,blue,phase,0.035850526246661144,0.023541471455907192,True,0.23929081991604048,32,0.75,"Cytosolic (green, GCaMP) vs ER (blue, BlueCaMP-X): store release/refill, not a simple delay. ER calcium can move OPPOSITE to cytosolic -- see direction_agreement (negative = moved opposite).",
+green_vs_red,green,red,phase,,0.01821250675761805,False,0.6039527684895136,32,0.75,"Cytosolic (green, GCaMP) vs mitochondrial (red): uptake. Mitochondrial calcium is expected to FOLLOW the cytosolic rise (positive lag_s is the default physiological expectation).",lag not distinguishable from zero given estimate noise

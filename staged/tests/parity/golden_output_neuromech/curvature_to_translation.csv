@@ -1,0 +1,2 @@
+worm_id,resolved,n,r_zero_lag,lag_s,xcorr_peak,self_approach_frac,eigen_fit_quality_mean,reason
+w1,True,156,0.15254051704012483,-0.1587707429115323,0.25362374486073186,0.5448717948717948,0.9720000000000001,

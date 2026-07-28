@@ -1,0 +1,30 @@
+# WINK repo = the app (staged/) + build/release tooling only.
+# Ignore everything at the repo root by default, then re-include the keepers.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/WINK_README.md
+!/BUILD_APP_UPDATE.ps1
+!/build_ultimate_manual.py
+!/staged/
+!/installer/
+!/.github/
+
+# Within the kept folders, still drop caches and build junk (matches anywhere).
+__pycache__/
+*.pyc
+*.pyo
+*.zip
+.venv/
+venv/
+*.bak
+*.tmp
+~$*
+.DS_Store
+Thumbs.db
+
+# Large non-runtime source assets and locally generated docs.
+staged/resources/*.tif
+staged/resources/*_print_source.*
+staged/docs/*_Definitive_Manual_v*.docx

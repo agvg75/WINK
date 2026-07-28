@@ -1,0 +1,45 @@
+name: Release WINK update
+
+# Push a tag like v11.111 (matching staged/app/release_info.json's app_version)
+# and this builds the update package and publishes a GitHub Release with the
+# package zip + update_manifest.json attached. WINK's in-app updater reads that
+# release to auto-update clients that aren't on the lab L: drive.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read app version and check it matches the tag
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Get-Content -Raw 'staged/app/release_info.json' | ConvertFrom-Json).app_version
+          $tag = "${{ github.ref_name }}" -replace '^v',''
+          if ($v -ne $tag) {
+            Write-Error "release_info.json app_version ($v) does not match the tag ($tag). Bump release_info.json and re-tag."
+            exit 1
+          }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Build the update package
+        shell: pwsh
+        run: ./BUILD_APP_UPDATE.ps1
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: WINK ${{ github.ref_name }}
+          body: "WINK ${{ github.ref_name }}. Auto-update package; changelog is inside update_manifest.json."
+          fail_on_unmatched_files: true
+          files: |
+            distribution/updates/WINK_App_Update_v${{ steps.ver.outputs.version }}.zip
+            distribution/updates/update_manifest.json
