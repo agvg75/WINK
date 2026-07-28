@@ -6,6 +6,7 @@
 !/README.md
 !/WINK_README.md
 !/BUILD_APP_UPDATE.ps1
+!/BUILD_INSTALLER.ps1
 !/build_ultimate_manual.py
 !/staged/
 !/installer/

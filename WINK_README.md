@@ -30,23 +30,32 @@ Three principles run through it:
 A few tools run inside Fiji/ImageJ (labeled "(Fiji)"); the hub tells you which
 and helps launch them.
 
-## Getting started (from the zip in this folder)
+## Installing WINK
 
-1. **Download** the newest `WINK_Lab_Tools_...` zip.
-2. **Extract** it to a folder on your computer (for example, your Desktop). Keep
-   the folder structure intact, and do not move individual files out of it.
-3. Open the extracted folder and **double click `Launch_Lab_Hub.bat`**. The Lab
-   Hub window opens (no console window appears).
-4. In the hub, **drag a movie, image stack, or image folder onto the window**
-   (or use **Load**), then click a tool. Ready tools launch; greyed out entries
-   are tools that are not built yet, so the map of what exists stays honest.
+The first time on a computer, use the installer. You do not install Python, the
+scientific libraries, or Fiji yourself; the installer sets up a private copy of
+everything and adds a Desktop shortcut.
+
+1. **Download** a WINK installer. Two options:
+   * **WINK_Installer_Online** (about 7 MB): small download, but needs internet
+     during setup while it fetches Python, the libraries, and Fiji.
+   * **WINK_Installer_Offline** (about 900 MB): needs no internet; everything is
+     bundled.
+2. **Extract the entire zip** to a folder (for example, your Desktop). Do not run
+   the installer from inside the zip.
+3. Double click **`Install_Lab_Tools.bat`** and wait while setup completes.
+   Administrator rights are normally not needed.
+4. Start WINK from the new **AGVG Lab Tools** Desktop shortcut.
+
+Using WINK: drag a movie, image stack, or image folder onto the hub window (or
+use **Load**), then click a tool. Ready tools launch; greyed out entries are
+tools that are not built yet, so the map of what exists stays honest. If a tool
+asks for scale (micrometres per pixel), use **Acquisition and utilities, Scale
+and magnification calculator**.
 
 Notes:
 
-* Windows is the supported platform.
-* Fiji based tools require Fiji/ImageJ installed; the hub points you to it.
-* If a tool asks for scale (micrometres per pixel), use **Acquisition and
-  utilities, Scale and magnification calculator** to compute or measure it.
+* Windows 10 or 11, 64-bit, with about 4 GB free.
 * Your results, CSV files, and review sessions are saved in your own data
   folders, not inside the app, so updating never touches your data.
 
@@ -64,13 +73,9 @@ v11.111); higher means newer.
 
 ## Acknowledgements and references
 
-WINK builds on methods and tools from the wider *C. elegans* and computer vision
-communities. The list below names the work each part draws on. Where a citation
-is marked TODO, please complete it (authors, year, journal, DOI) before any
-formal release.
+WINK builds on methods and tools from the wider C. elegans and computer vision communities. Tierpsy Tracker informs several behavioral feature definitions and the WCON conventions WINK reads and compares against (Javer et al., 2018). wrMTrck inspired the fast first pass and the body axis oscillation proxy used in population locomotion (Brooks et al., 2016; wrMTrck by Jesper S. Pedersen). PumpKin inspired the local motion pharyngeal pumping detector (PumpKin, 2026). Eigenworm posture decomposition underlies part of the kinematics (Stephens et al., 2008). Anatomical references follow WormAtlas (Altun et al., WormAtlas).
 
-* **Tierpsy Tracker** informs several behavioral feature definitions and the
-  WCON conventions WINK reads and compares against.
+* **Tierpsy Tracker** Tierpsy Tracker / WCON: Javer, A., Currie, M. A., Lee, C. W., et al. “An open source platform for analyzing and sharing worm behaviour data.” Nature Methods (2018). The Tierpsy materials explicitly describe the platform and cite this paper. This informs several behavioral feature definitions and the WCON conventions WINK reads and compares against.
   Javer et al., "An open source platform for analyzing and sharing worm
   behaviour data," Nature Methods, 2018.
 * **wrMTrck** inspired the fast first pass and the body axis oscillation proxy
