@@ -34,12 +34,25 @@ jobs:
         shell: pwsh
         run: ./BUILD_APP_UPDATE.ps1
 
+      - name: Build the online installer
+        # Source-only (no bundled Python/Fiji), so CI can build it from the
+        # checkout. New users download this to install WINK from scratch; it
+        # fetches the runtime and Fiji during setup. The ~900 MB offline
+        # installer is built locally and hosted on Google Drive instead.
+        shell: pwsh
+        run: ./BUILD_INSTALLER.ps1 -Mode online
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: WINK ${{ github.ref_name }}
-          body: "WINK ${{ github.ref_name }}. Auto-update package; changelog is inside update_manifest.json."
+          body: |
+            WINK ${{ github.ref_name }}.
+
+            - **New here?** Download **WINK_Installer_Online** below, extract it, and run `Install_Lab_Tools.bat`.
+            - **Already have WINK?** It updates itself; the auto-update package and changelog are attached (`WINK_App_Update...` / `update_manifest.json`).
           fail_on_unmatched_files: true
           files: |
             distribution/updates/WINK_App_Update_v${{ steps.ver.outputs.version }}.zip
             distribution/updates/update_manifest.json
+            distribution/installers/WINK_Installer_Online_v${{ steps.ver.outputs.version }}.zip
