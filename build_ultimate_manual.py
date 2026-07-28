@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from datetime import date
 
@@ -9,7 +10,10 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
-OUT = Path(__file__).parent / "staged" / "docs" / "WINK_Lab_Tools_Definitive_Manual_v11.90.docx"
+VERSION = json.loads(
+    (Path(__file__).parent / "staged" / "app" / "release_info.json").read_text()
+)["app_version"]
+OUT = Path(__file__).parent / "staged" / "docs" / f"WINK_Lab_Tools_Definitive_Manual_v{VERSION}.docx"
 NAVY = RGBColor(31, 77, 120)
 BLUE = RGBColor(46, 116, 181)
 MAROON = RGBColor(153, 0, 0)
@@ -202,7 +206,7 @@ def title_page(doc):
     items = [
         ("Audience", "Worm scientists, students, and collaborators using the Lab Hub"),
         ("Manual version", "1.1 (WINK rename)"),
-        ("Software snapshot", "WINK Lab Hub application v11.90; supervised segmentation, human-in-the-loop review, prototype learning, camera compensation, and temporal identity continuity"),
+        ("Software snapshot", f"WINK Lab Hub application v{VERSION}; supervised segmentation, human-in-the-loop review, prototype learning, camera compensation, and temporal identity continuity"),
         ("Prepared", date.today().strftime("%B %d, %Y")),
     ]
     for row, (label, value) in zip(table.rows, items):
@@ -1082,7 +1086,7 @@ def closing(doc):
     ], [2200, 7160])
     doc.add_heading("Source-of-truth note", level=2)
     doc.add_paragraph(
-        "This manual describes the staged WINK Lab Hub v11.90 registry and implementation snapshot. "
+        f"This manual describes the staged WINK Lab Hub v{VERSION} registry and implementation snapshot. "
         "Where a user interface, exported metadata file, or current source code differs from this manual, "
         "pause the analysis and reconcile the software/manual versions before interpreting results.")
 
@@ -1105,7 +1109,7 @@ def build():
     core.subject = "Ultimate manual for the Vidal-Gadea Lab C. elegans analysis ecosystem"
     core.author = "Vidal-Gadea Lab"
     core.keywords = "C. elegans, behavior, kinematics, calcium, morphology, Lab Hub"
-    core.comments = "Living manual; software snapshot v11.90"
+    core.comments = f"Living manual; software snapshot v{VERSION}"
     doc.save(OUT)
     print(OUT)
 

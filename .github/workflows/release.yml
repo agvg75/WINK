@@ -56,3 +56,4 @@ jobs:
             distribution/updates/WINK_App_Update_v${{ steps.ver.outputs.version }}.zip
             distribution/updates/update_manifest.json
             distribution/installers/WINK_Installer_Online_v${{ steps.ver.outputs.version }}.zip
+            staged/docs/WINK_Lab_Tools_Manual.pdf
