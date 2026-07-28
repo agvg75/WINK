@@ -64,13 +64,9 @@ v11.111); higher means newer.
 
 ## Acknowledgements and references
 
-WINK builds on methods and tools from the wider *C. elegans* and computer vision
-communities. The list below names the work each part draws on. Where a citation
-is marked TODO, please complete it (authors, year, journal, DOI) before any
-formal release.
+WINK builds on methods and tools from the wider C. elegans and computer vision communities. Tierpsy Tracker informs several behavioral feature definitions and the WCON conventions WINK reads and compares against (Javer et al., 2018). wrMTrck inspired the fast first pass and the body axis oscillation proxy used in population locomotion (Brooks et al., 2016; wrMTrck by Jesper S. Pedersen). PumpKin inspired the local motion pharyngeal pumping detector (PumpKin, 2026). Eigenworm posture decomposition underlies part of the kinematics (Stephens et al., 2008). Anatomical references follow WormAtlas (Altun et al., WormAtlas).
 
-* **Tierpsy Tracker** informs several behavioral feature definitions and the
-  WCON conventions WINK reads and compares against.
+* **Tierpsy Tracker** Tierpsy Tracker / WCON: Javer, A., Currie, M. A., Lee, C. W., et al. “An open source platform for analyzing and sharing worm behaviour data.” Nature Methods (2018). The Tierpsy materials explicitly describe the platform and cite this paper. This informs several behavioral feature definitions and the WCON conventions WINK reads and compares against.
   Javer et al., "An open source platform for analyzing and sharing worm
   behaviour data," Nature Methods, 2018.
 * **wrMTrck** inspired the fast first pass and the body axis oscillation proxy
