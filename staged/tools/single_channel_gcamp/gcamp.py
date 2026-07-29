@@ -61,6 +61,205 @@ def feasibility_pass(frames, centers_xy, neuron_radius_px, fps,
         "thresholds_provisional": True}
 
 
+def _otsu_threshold(values):
+    """Otsu split of a 1-D/2-D array (numpy only, no skimage dependency)."""
+    v = np.asarray(values, dtype=float).ravel()
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return 0.0
+    lo, hi = float(v.min()), float(v.max())
+    if hi <= lo:
+        return lo
+    hist, edges = np.histogram(v, bins=256, range=(lo, hi))
+    p = hist.astype(float)
+    total = p.sum()
+    if total <= 0:
+        return lo
+    p /= total
+    omega = np.cumsum(p)
+    mids = (edges[:-1] + edges[1:]) / 2.0
+    mu = np.cumsum(p * mids)
+    mu_t = mu[-1]
+    denom = omega * (1.0 - omega)
+    denom[denom == 0] = 1e-12
+    sigma_b = (mu_t * omega - mu) ** 2 / denom
+    return float(mids[int(np.nanargmax(sigma_b))])
+
+
+def body_visibility_pass(frames, *, min_area_frac=0.004, max_area_frac=0.5,
+                         contrast_floor=2.0) -> dict:
+    """Job 1: can the WORM BODY be told apart from the background well enough to
+    infer its outline / spine / kinematics, even on dim (relaxed-muscle) frames?
+
+    This makes no calcium claim. For each sampled frame it Otsu-splits the image,
+    tries both polarities (body brighter OR dimmer than background), keeps the
+    largest worm-plausible component, and scores |body-background| against the
+    background noise. Reports the fraction of frames where the body is separable
+    and the worst (dimmest) frame, so a myo-3::GCaMP recording can be judged for
+    trackability before the single-worm tracker is run.
+    """
+    data = np.asarray(frames, dtype=float)
+    if data.ndim != 3:
+        raise ValueError("frames must be T,H,W.")
+    H, W = data.shape[1:]
+    area = float(H * W)
+    per_frame = []
+    for frame in data:
+        thr = _otsu_threshold(frame)
+        best = None
+        for polarity, mask in (("bright", frame > thr), ("dark", frame < thr)):
+            labels, count = ndi.label(mask)
+            if count == 0:
+                continue
+            counts = np.bincount(labels.ravel())
+            counts[0] = 0
+            k = int(np.argmax(counts))
+            comp_area = float(counts[k])
+            if comp_area < min_area_frac * area or comp_area > max_area_frac * area:
+                continue
+            comp = labels == k
+            fg = float(np.mean(frame[comp]))
+            rest = frame[~comp]
+            bg = float(np.median(rest))
+            bgn = float(np.std(rest))
+            contrast = abs(fg - bg) / max(bgn, 1e-9)
+            cand = {"polarity": polarity, "area_frac": comp_area / area,
+                    "contrast": contrast, "separable": contrast >= contrast_floor}
+            if best is None or contrast > best["contrast"]:
+                best = cand
+        per_frame.append(best or {"polarity": "none", "area_frac": 0.0,
+                                  "contrast": 0.0, "separable": False})
+    contrasts = np.asarray([f["contrast"] for f in per_frame], dtype=float)
+    separable = np.asarray([f["separable"] for f in per_frame], dtype=bool)
+    frac_sep = float(np.mean(separable)) if separable.size else 0.0
+    median_contrast = float(np.median(contrasts)) if contrasts.size else 0.0
+    worst_contrast = float(np.min(contrasts)) if contrasts.size else 0.0
+    if frac_sep >= 0.9 and worst_contrast >= contrast_floor:
+        tier = "outline reliably inferable"
+    elif frac_sep >= 0.7:
+        tier = "inferable in most frames"
+    elif frac_sep >= 0.4:
+        tier = "marginal - expect tracking gaps"
+    else:
+        tier = "not separable from background"
+    return {
+        "fraction_frames_body_separable": frac_sep,
+        "median_body_background_contrast": median_contrast,
+        "worst_frame_contrast": worst_contrast,
+        "kinematics_inferable": bool(frac_sep >= 0.7),
+        "difficulty_tier": tier,
+        "contrast_floor": contrast_floor,
+        "per_frame": per_frame,
+        "thresholds_provisional": True}
+
+
+def extract_oriented_cell(frames, soma_xy, tip_xy, neuron_radius_px, fps,
+                          um_per_px, *, detection_snr=3, search_radius_px=20):
+    """Job 2: track an elongated cell and its LONG AXIS over time.
+
+    The user seeds the soma and the process tip (toward the nose); that vector
+    defines orientation (soma -> process), NOT the direction of travel. Each
+    frame the bright cell pixels near the predicted position are found, its
+    intensity-weighted centroid and principal (long) axis are computed by
+    weighted PCA, and the axis sign is kept continuous with the previous frame so
+    the reported angle stays soma->tip. Outputs per-frame position, brightness,
+    elongation, translational speed (px/s and um/s), and angular velocity
+    (deg/s = rotation of the long axis). Low-signal frames hold the prediction.
+    """
+    data = np.asarray(frames, dtype=float)
+    yy, xx = np.indices(data.shape[1:])
+    center = np.asarray(soma_xy, dtype=float)
+    tip = np.asarray(tip_xy, dtype=float)
+    prev_dir = tip - center
+    norm = np.linalg.norm(prev_dir)
+    prev_dir = prev_dir / norm if norm > 1e-9 else np.asarray([1.0, 0.0])
+    velocity = np.zeros(2)
+    rows = []
+    for index, frame in enumerate(data):
+        predicted = center + velocity
+        local = (xx - predicted[0]) ** 2 + (yy - predicted[1]) ** 2 <= search_radius_px ** 2
+        background = float(np.median(frame[local])) if np.any(local) else 0.0
+        noise = float(np.std(frame[local])) if np.any(local) else 1e-9
+        smooth = ndi.gaussian_filter(frame, max(1, neuron_radius_px / 3))
+        score = np.where(local, smooth, -np.inf)
+        peak = np.unravel_index(np.argmax(score), score.shape)
+        peak_snr = (float(score[peak]) - background) / max(noise, 1e-9)
+        low_signal = peak_snr < detection_snr
+        thr = background + max(float(detection_snr), 1.0) * max(noise, 1e-9)
+        cell_mask = local & (frame >= thr)
+        if low_signal or int(cell_mask.sum()) < 3:
+            new_center = predicted
+            orientation = prev_dir
+            elongation = float("nan")
+            roi = (xx - new_center[0]) ** 2 + (yy - new_center[1]) ** 2 <= neuron_radius_px ** 2
+            brightness = float(np.mean(frame[roi])) if np.any(roi) else background
+            provenance = "predicted_low_signal"
+        else:
+            wy, wx = np.where(cell_mask)
+            weight = np.clip(frame[cell_mask].astype(float) - background, 0, None)
+            wsum = float(weight.sum()) or 1.0
+            cx = float((wx * weight).sum() / wsum)
+            cy = float((wy * weight).sum() / wsum)
+            new_center = np.asarray([cx, cy])
+            dx = wx - cx
+            dy = wy - cy
+            cxx = float((weight * dx * dx).sum() / wsum)
+            cyy = float((weight * dy * dy).sum() / wsum)
+            cxy = float((weight * dx * dy).sum() / wsum)
+            evals, evecs = np.linalg.eigh(np.asarray([[cxx, cxy], [cxy, cyy]]))
+            major = evecs[:, int(np.argmax(evals))]
+            vdir = np.asarray([float(major[0]), float(major[1])])
+            if np.dot(vdir, prev_dir) < 0:
+                vdir = -vdir
+            vnorm = np.linalg.norm(vdir)
+            orientation = vdir / vnorm if vnorm > 1e-9 else prev_dir
+            lam = np.sort(evals)[::-1]
+            elongation = float(np.sqrt(max(lam[0], 0.0) / max(lam[1], 1e-9)))
+            brightness = float(weight.mean() + background)
+            velocity = 0.7 * velocity + 0.3 * (new_center - center)
+            provenance = "local_detection"
+        angle = float(np.degrees(np.arctan2(orientation[1], orientation[0])))
+        rows.append({
+            "frame": index, "x": float(new_center[0]), "y": float(new_center[1]),
+            "orientation_deg": angle,
+            "orientation_dx": float(orientation[0]),
+            "orientation_dy": float(orientation[1]),
+            "brightness_f": brightness, "elongation": elongation,
+            "detection_snr": peak_snr, "low_signal": bool(low_signal),
+            "position_provenance": provenance})
+        center = new_center
+        prev_dir = orientation
+    dt = 1.0 / float(fps) if fps else 1.0
+    xs = np.asarray([r["x"] for r in rows], dtype=float)
+    ys = np.asarray([r["y"] for r in rows], dtype=float)
+    ang = np.radians(np.asarray([r["orientation_deg"] for r in rows], dtype=float))
+    ang_unwrapped = np.unwrap(ang) if len(ang) else ang
+    if len(rows) >= 2:
+        trans = np.hypot(np.gradient(xs), np.gradient(ys)) / dt
+        angv = np.gradient(ang_unwrapped) / dt
+    else:
+        trans = np.zeros(len(rows))
+        angv = np.zeros(len(rows))
+    for i, row in enumerate(rows):
+        row["translational_speed_px_s"] = float(trans[i])
+        row["translational_speed_um_s"] = float(trans[i] * um_per_px)
+        row["angular_velocity_deg_s"] = float(np.degrees(angv[i]))
+        row["orientation_unwrapped_deg"] = float(np.degrees(ang_unwrapped[i]))
+    brights = [r["brightness_f"] for r in rows]
+    baseline = float(np.percentile(brights, 20)) if brights else 0.0
+    for row in rows:
+        row["relative_dff"] = (
+            None if baseline <= 0 else (row["brightness_f"] - baseline) / baseline)
+    return {
+        "rows": rows,
+        "brightness_baseline": baseline,
+        "seed_soma_xy": [float(soma_xy[0]), float(soma_xy[1])],
+        "seed_tip_xy": [float(tip_xy[0]), float(tip_xy[1])],
+        "orientation_convention": (
+            "long axis soma->process(nose); angle in image degrees (x right, "
+            "y down); angular velocity is rotation of that axis, not heading")}
+
+
 def extract_trace(frames, seed_xy, neuron_radius_px, *,
                   detection_snr=3, search_radius_px=15):
     """Track by local continuity; hold/predict on low signal, never jump globally."""

@@ -1,8 +1,10 @@
 """Student-facing T13 feasibility-first single-channel GCaMP workflow."""
 from __future__ import annotations
 
+import csv
 import json
 import os
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
@@ -22,7 +24,8 @@ from acquisition import AcquisitionMetadata
 from movie_reader import open_movie
 from image_sequence import discover_images
 from run_feedback import prompt_post_run_feedback
-from gcamp import extract_trace, feasibility_pass
+from gcamp import (
+    extract_trace, feasibility_pass, body_visibility_pass, extract_oriented_cell)
 from process_ui import CockpitApp
 
 TOOL_NAME = "Single-channel GCaMP feasibility and extractor"
@@ -49,11 +52,21 @@ class App(CockpitApp):
         }
         self.v = {key: tk.StringVar(value=value)
                   for key, value in defaults.items()}
+        self.JOBS = {
+            "Job 1: body visibility (body-wall GCaMP)": "body",
+            "Job 2: track a cell (orientation)": "cell",
+            "Job 3: cell + body": "cell_body",
+        }
+        self.job = tk.StringVar(value="Job 2: track a cell (orientation)")
         self.status = tk.StringVar(
-            value="Choose a blue-only movie, stack, or frame folder.")
+            value="Pick the analysis job, choose a recording, then follow the "
+                  "numbered buttons.")
         self.frames = None
         self.seed = None
         self.feasibility = None
+        self.cell_soma = None
+        self.cell_tip = None
+        self.body_result = None
         self._build_controls()
         self._build_center()
         self.status.trace_add("write", lambda *_: self.set_status(self.status.get()))
@@ -67,21 +80,67 @@ class App(CockpitApp):
             ttk.Label(row, text=label, width=24, wraplength=175, justify="left").pack(side="left")
             ttk.Entry(row, textvariable=self.v[key]).pack(side="right", fill="x", expand=True)
 
+        jrow = ttk.Frame(c); jrow.pack(fill="x", pady=(0, 2))
+        ttk.Label(jrow, text="Analysis job", width=24).pack(side="left")
+        job_box = ttk.Combobox(jrow, textvariable=self.job, state="readonly",
+                               values=list(self.JOBS), width=30)
+        job_box.pack(side="right", fill="x", expand=True)
+        job_box.bind("<<ComboboxSelected>>", lambda _e: self._rebuild_actions())
+
         srow = ttk.Frame(c); srow.pack(fill="x", pady=2)
         ttk.Label(srow, text="Recording", width=24).pack(side="left")
         ttk.Entry(srow, textvariable=self.v["source"]).pack(side="right", fill="x", expand=True)
         ttk.Button(c, text="Choose file / folder...", command=self._choose_and_show).pack(fill="x", pady=(0, 4))
+        self._cell_fields = []
         for label, key in [
                 ("Declared FPS", "fps"), ("Scale (um/pixel)", "scale"),
                 ("Exposure (ms)", "exposure"), ("Bit depth", "bit_depth"),
-                ("Channel identity", "channel"), ("Feasibility sample frames", "sample_frames"),
-                ("Neuron radius (pixels)", "neuron_radius"),
+                ("Channel identity", "channel"), ("Sample frames", "sample_frames"),
+                ("Cell radius (pixels)", "neuron_radius"),
                 ("Local search radius (pixels)", "search_radius")]:
             field(label, key)
+
         ttk.Separator(c, orient="horizontal").pack(fill="x", pady=6)
-        ttk.Button(c, text="1. Run feasibility pass", command=self.run_feasibility).pack(fill="x", pady=2)
-        ttk.Button(c, text="2. Extract, relink flagged frames, and review",
-                   command=self.run_extractor).pack(fill="x", pady=2)
+        self._actions = ttk.Frame(c); self._actions.pack(fill="x")
+        self._rebuild_actions()
+
+    def _current_job(self):
+        return self.JOBS.get(self.job.get(), "cell")
+
+    def _rebuild_actions(self):
+        for child in self._actions.winfo_children():
+            child.destroy()
+        job = self._current_job()
+        a = self._actions
+        if job == "body":
+            ttk.Label(a, wraplength=205, justify="left", foreground="#555555",
+                      text="Body-wall GCaMP: is the worm separable from the "
+                           "background well enough to infer its outline / spine "
+                           "even when muscles relax?").pack(fill="x", pady=(0, 4))
+            ttk.Button(a, text="1. Assess body visibility",
+                       command=self.run_body_visibility).pack(fill="x", pady=2)
+            ttk.Button(a, text="2. Track kinematics in the worm tracker",
+                       command=self._handoff_to_tracker).pack(fill="x", pady=2)
+        elif job == "cell":
+            ttk.Label(a, wraplength=205, justify="left", foreground="#555555",
+                      text="Track one elongated cell. Mark the soma, then the "
+                           "process tip toward the nose - that long axis is the "
+                           "orientation (not the direction of travel).").pack(fill="x", pady=(0, 4))
+            ttk.Button(a, text="1. Mark cell (soma, then tip)",
+                       command=self.mark_cell_axis).pack(fill="x", pady=2)
+            ttk.Button(a, text="2. Track cell + orientation, review, export",
+                       command=self.run_cell_tracking).pack(fill="x", pady=2)
+        else:  # cell_body
+            ttk.Label(a, wraplength=205, justify="left", foreground="#555555",
+                      text="Track the cell (soma->tip orientation) AND assess "
+                           "whether the body is separable enough to also read "
+                           "posture / kinematics.").pack(fill="x", pady=(0, 4))
+            ttk.Button(a, text="1. Mark cell (soma, then tip)",
+                       command=self.mark_cell_axis).pack(fill="x", pady=2)
+            ttk.Button(a, text="2. Assess body + track cell, review, export",
+                       command=self.run_cell_and_body).pack(fill="x", pady=2)
+            ttk.Button(a, text="Track body kinematics in the worm tracker",
+                       command=self._handoff_to_tracker).pack(fill="x", pady=(2, 2))
 
     def _choose_and_show(self):
         self.choose()
@@ -89,7 +148,7 @@ class App(CockpitApp):
             self._show_first_frame()
 
     def _build_center(self):
-        ttk.Label(self.center, text="Single-channel GCaMP feasibility and extractor",
+        ttk.Label(self.center, text="Single-channel GCaMP: body, cell, and orientation",
                   font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=6, pady=(6, 2))
         self.center_fig = Figure(figsize=(5.6, 4.0), dpi=100)
         self.center_ax = self.center_fig.add_subplot(111); self.center_ax.set_axis_off()
@@ -100,9 +159,13 @@ class App(CockpitApp):
         self.center_canvas.draw()
         ttk.Label(self.center, textvariable=self.status, wraplength=560,
                   justify="left").pack(anchor="w", padx=6, pady=(0, 2))
-        ttk.Label(self.center, text="The tracker searches only near the predicted neuron. It "
-                                    "does not jump to the brightest object elsewhere in the worm.",
-                  foreground="#8a3b00", wraplength=560).pack(anchor="w", padx=6, pady=(0, 6))
+        ttk.Label(self.center, wraplength=560, justify="left", foreground="#8a3b00",
+                  text=("Pick a job: (1) body-wall GCaMP - is the worm separable from "
+                        "background enough to read its outline/kinematics; (2) a single "
+                        "cell - track it and its soma->tip long axis (position, brightness, "
+                        "translational and angular velocity); (3) both. Cell tracking "
+                        "searches only near the predicted position - it never jumps to the "
+                        "brightest object elsewhere.")).pack(anchor="w", padx=6, pady=(0, 6))
 
     def _show_first_frame(self):
         try:
@@ -397,6 +460,202 @@ class App(CockpitApp):
                 parent=self, evidence_paths=[result_path])
         except Exception as exc:
             messagebox.showerror("Single-channel GCaMP", str(exc), parent=self)
+
+    # -- 3-job workflows ----------------------------------------------------
+    def _pick_points(self, image, n, title):
+        fig, axis = plt.subplots()
+        axis.imshow(image, cmap="gray")
+        axis.set_title(title)
+        pts = plt.ginput(n, timeout=0)
+        plt.close(fig)
+        return pts if len(pts) >= n else None
+
+    def _first_frame_image(self):
+        m = open_movie(self.v["source"].get())
+        try:
+            return gray(m.get_frame(0))
+        finally:
+            m.close()
+
+    def mark_cell_axis(self):
+        if not self.v["source"].get():
+            messagebox.showerror("Mark cell", "Choose a recording first.", parent=self)
+            return
+        try:
+            image = self._first_frame_image()
+        except Exception as exc:
+            messagebox.showerror("Mark cell", f"Could not load a frame: {exc}", parent=self)
+            return
+        pts = self._pick_points(
+            image, 2,
+            "Click the SOMA (cell body), then the PROCESS TIP toward the nose.")
+        if not pts:
+            self.status.set("Cell marking canceled.")
+            return
+        self.cell_soma = (float(pts[0][0]), float(pts[0][1]))
+        self.cell_tip = (float(pts[1][0]), float(pts[1][1]))
+        self.center_ax.clear()
+        self.center_ax.imshow(image, cmap="gray")
+        self.center_ax.set_axis_off()
+        self.center_ax.plot([self.cell_soma[0], self.cell_tip[0]],
+                            [self.cell_soma[1], self.cell_tip[1]], "-", color="#00e0ff", lw=2)
+        self.center_ax.plot(self.cell_soma[0], self.cell_soma[1], "o", color="#00e0ff", ms=7)
+        self.center_ax.plot(self.cell_tip[0], self.cell_tip[1], "x", color="#ff4fd8", ms=9, mew=2)
+        self.center_ax.set_title("Cell axis: soma (o) -> process tip (x)", fontsize=9)
+        self.center_canvas.draw()
+        self.status.set("Cell axis set (soma -> tip). Run step 2 to track it.")
+
+    def _track_cell(self):
+        """Shared cell tracking: returns (frames, result) in crop coordinates."""
+        if self.cell_soma is None or self.cell_tip is None:
+            raise ValueError("Mark the cell first (soma, then tip).")
+        self.seed = self.cell_soma
+        self.feasibility_centers = [self.cell_soma]
+        frames = self.load_frames()
+        x0, y0, _, _ = self.analysis_crop
+        soma = (self.cell_soma[0] - x0, self.cell_soma[1] - y0)
+        tip = (self.cell_tip[0] - x0, self.cell_tip[1] - y0)
+        result = extract_oriented_cell(
+            frames, soma, tip,
+            float(self.v["neuron_radius"].get()),
+            float(self.v["fps"].get()), float(self.v["scale"].get()),
+            search_radius_px=float(self.v["search_radius"].get()))
+        return frames, result
+
+    def _review_oriented(self, frames, result):
+        rows = result["rows"]
+        step = max(1, len(frames) // 12)
+        fig, axes = plt.subplots(3, 4, figsize=(12, 8))
+        axes = axes.ravel()
+        for axis, i in zip(axes, range(0, len(frames), step)):
+            row = rows[i]
+            axis.imshow(frames[i], cmap="gray")
+            color = "orange" if row["low_signal"] else "lime"
+            axis.plot(row["x"], row["y"], "o", color=color, ms=5)
+            length = 12.0
+            axis.plot([row["x"], row["x"] + length * row["orientation_dx"]],
+                      [row["y"], row["y"] + length * row["orientation_dy"]],
+                      "-", color=color, lw=1.6)
+            axis.set_title(f"f{i}: {row['orientation_deg']:.0f} deg", fontsize=7)
+            axis.axis("off")
+        for axis in axes:
+            if not axis.has_data():
+                axis.axis("off")
+        fig.suptitle("Cell position (dot) and long axis soma->tip (line). "
+                     "Orange = low signal (predicted).")
+        plt.tight_layout()
+        plt.show()
+        return messagebox.askyesno(
+            "Accept oriented track?",
+            "Does the line stay on the cell's long axis (soma toward the nose)? "
+            "Choose No to refuse export and revise.", parent=self)
+
+    def _export_cell(self, result, acquisition, body=None):
+        source = Path(self.v["source"].get())
+        output = source.parent / (source.stem + "_cell_orientation")
+        output.mkdir(parents=True, exist_ok=True)
+        payload = {
+            **acquisition.stamped(TOOL_NAME, TOOL_VERSION),
+            "job": self._current_job(),
+            "analysis_crop_xyxy": list(self.analysis_crop),
+            "body_visibility": body,
+            **result}
+        (output / "cell_orientation.json").write_text(
+            json.dumps(payload, indent=2), encoding="utf-8")
+        columns = ["frame", "x", "y", "orientation_deg", "orientation_unwrapped_deg",
+                   "angular_velocity_deg_s", "translational_speed_px_s",
+                   "translational_speed_um_s", "brightness_f", "relative_dff",
+                   "elongation", "detection_snr", "low_signal", "position_provenance"]
+        with (output / "cell_orientation.csv").open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns)
+            writer.writeheader()
+            for row in result["rows"]:
+                writer.writerow({key: row.get(key) for key in columns})
+        self.status.set(f"Saved cell orientation trace: {output}")
+        messagebox.showinfo(
+            "Export complete",
+            f"Cell orientation trace (position, brightness, translational and "
+            f"angular velocity) saved:\n{output}", parent=self)
+
+    def run_cell_tracking(self):
+        try:
+            acquisition = self.acquisition()
+            frames, result = self._track_cell()
+            if not self._review_oriented(frames, result):
+                self.status.set("Track rejected. Nothing exported.")
+                return
+            x0, y0, _, _ = self.analysis_crop
+            for row in result["rows"]:
+                row["x"] += x0; row["y"] += y0
+            self._export_cell(result, acquisition, body=None)
+        except Exception as exc:
+            messagebox.showerror("Track cell", str(exc), parent=self)
+
+    def run_body_visibility(self):
+        try:
+            _count, indices, sample = self.load_feasibility_sample()
+            body = body_visibility_pass(sample)
+            self.body_result = body
+            text = "\n".join([
+                f"Body visibility: {body['difficulty_tier']}",
+                f"Separable in {body['fraction_frames_body_separable']*100:.0f}% of sampled frames",
+                f"Median contrast {body['median_body_background_contrast']:.2f}, "
+                f"worst frame {body['worst_frame_contrast']:.2f}",
+                ("Outline / spine / kinematics look inferable - hand off to the worm tracker."
+                 if body["kinematics_inferable"] else
+                 "Body is marginal; relaxed-muscle frames may not be trackable.")])
+            self.status.set(text)
+            if messagebox.askyesno("Body visibility", text + "\n\nSave this assessment?", parent=self):
+                source = Path(self.v["source"].get())
+                output = source.parent / (source.stem + "_body_visibility")
+                output.mkdir(parents=True, exist_ok=True)
+                acquisition = self.acquisition()
+                (output / "body_visibility.json").write_text(json.dumps({
+                    **acquisition.stamped(TOOL_NAME, TOOL_VERSION), "job": "body",
+                    "sampled_frame_indices": indices.tolist(), **body}, indent=2),
+                    encoding="utf-8")
+                messagebox.showinfo("Saved", f"Body visibility assessment saved:\n{output}", parent=self)
+        except Exception as exc:
+            messagebox.showerror("Body visibility", str(exc), parent=self)
+
+    def run_cell_and_body(self):
+        try:
+            _count, indices, sample = self.load_feasibility_sample()
+            body = body_visibility_pass(sample)
+            self.body_result = body
+            acquisition = self.acquisition()
+            frames, result = self._track_cell()
+            if not self._review_oriented(frames, result):
+                self.status.set("Track rejected. Nothing exported.")
+                return
+            x0, y0, _, _ = self.analysis_crop
+            for row in result["rows"]:
+                row["x"] += x0; row["y"] += y0
+            self._export_cell(result, acquisition, body=body)
+            messagebox.showinfo(
+                "Cell + body",
+                f"Body: {body['difficulty_tier']} (separable in "
+                f"{body['fraction_frames_body_separable']*100:.0f}% of frames).\n\n"
+                + ("Body kinematics look inferable - use 'Track body kinematics in "
+                   "the worm tracker' to read posture alongside the cell brightness."
+                   if body["kinematics_inferable"] else
+                   "Body may be too dim on some frames for reliable posture."),
+                parent=self)
+        except Exception as exc:
+            messagebox.showerror("Cell + body", str(exc), parent=self)
+
+    def _handoff_to_tracker(self):
+        source = self.v["source"].get()
+        if not source:
+            messagebox.showerror("Worm tracker", "Choose a recording first.", parent=self)
+            return
+        tracker = ROOT / "tools" / "worm_kinematics" / "dic_tracker" / "run_dic_kinematics.py"
+        try:
+            subprocess.Popen([sys.executable, str(tracker), source])
+            self.status.set("Opened the single-worm tracker on this recording "
+                            "(seed the head, review, finalize to get the kinematics CSV).")
+        except Exception as exc:
+            messagebox.showerror("Worm tracker", f"Could not start the tracker:\n{exc}", parent=self)
 
 
 if __name__ == "__main__":
