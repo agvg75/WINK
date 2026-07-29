@@ -23,7 +23,11 @@ function Build-Package([string]$Name,[bool]$IncludeThirdParty){
   $Payload=Join-Path $Stage 'LabTools'
   $rc=@($Source,$Payload,'/E','/NFL','/NDL','/NJH','/NP','/R:1','/W:1','/XD')+$Exclude
   & robocopy @rc | Out-Null
-  if($LASTEXITCODE -ge 8){throw "robocopy failed copying the app payload (exit $LASTEXITCODE)"}
+  $rcExit=$LASTEXITCODE
+  if($rcExit -ge 8){throw "robocopy failed copying the app payload (exit $rcExit)"}
+  # robocopy returns non-zero even on success (1 = files copied). Left as-is it
+  # becomes the script's exit code and GitHub Actions' pwsh marks the step failed.
+  $global:LASTEXITCODE=0
   if($IncludeThirdParty){
     Copy-Item -LiteralPath (Join-Path $Installer 'third_party') -Destination (Join-Path $Stage 'third_party') -Recurse
   }
@@ -40,3 +44,5 @@ function Build-Package([string]$Name,[bool]$IncludeThirdParty){
 
 if($Mode -eq 'online' -or $Mode -eq 'both'){ Build-Package "WINK_Installer_Online_v$Version" $false }
 if($Mode -eq 'offline' -or $Mode -eq 'both'){ Build-Package "WINK_Installer_Offline_v$Version" $true }
+# Ensure a clean exit code so CI (pwsh) does not inherit robocopy's non-zero success.
+exit 0
