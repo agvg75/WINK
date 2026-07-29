@@ -394,8 +394,16 @@ class SegmentationReviewWindow(tk.Toplevel):
         self._build()
         self._refresh_range_tree()
         self._draw()
+        # Frame scrolling for the bad-frame preview. Left/Right = 1 frame,
+        # PgUp/PgDn = 10, Home/End = first/last source frame. The threshold and
+        # scrub Scales use takefocus=0 (below) so they do not swallow these keys.
         self.bind("<Left>", lambda _event: self._step_source(-1))
         self.bind("<Right>", lambda _event: self._step_source(1))
+        self.bind("<Prior>", lambda _event: self._step_source(-10))
+        self.bind("<Next>", lambda _event: self._step_source(10))
+        self.bind("<Home>", lambda _event: self._load_exact_into_bad_preview(0))
+        self.bind("<End>", lambda _event: self._load_exact_into_bad_preview(
+            self.source_frame_count - 1))
 
     def _build(self):
         top = ttk.Frame(self); top.pack(fill="x", padx=8, pady=8)
@@ -407,13 +415,13 @@ class SegmentationReviewWindow(tk.Toplevel):
         ttk.Label(top, text="Low (bright/band)").pack(side="left", padx=(8, 0))
         self.low_scale = tk.Scale(
             top, from_=0, to=255, orient="horizontal",
-            variable=self.threshold_low,
+            variable=self.threshold_low, takefocus=0,
             command=lambda _=None: self.after_idle(self._draw), length=110)
         self.low_scale.pack(side="left")
         ttk.Label(top, text="High (dark/band)").pack(side="left")
         self.high_scale = tk.Scale(
             top, from_=0, to=255, orient="horizontal",
-            variable=self.threshold_high,
+            variable=self.threshold_high, takefocus=0,
             command=lambda _=None: self.after_idle(self._draw), length=110)
         self.high_scale.pack(side="left")
         polarity_box = ttk.Combobox(
@@ -460,7 +468,7 @@ class SegmentationReviewWindow(tk.Toplevel):
         for label, variable in (("Good frame", self.good), ("Bad frame", self.bad)):
             ttk.Label(scrub, text=label).pack(side="left")
             tk.Scale(scrub, from_=0, to=max(0, len(self.frames)-1),
-                     orient="horizontal", variable=variable,
+                     orient="horizontal", variable=variable, takefocus=0,
                      command=lambda _=None: self.after_idle(self._draw),
                      length=220).pack(side="left")
         ttk.Button(scrub, text="Play / pause", command=self._toggle_play).pack(

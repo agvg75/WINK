@@ -178,6 +178,11 @@ class App(CockpitApp):
                         "cadence. Every proposed event requires human review; the period "
                         "bounds only order review, never accept or reject events.")).pack(
             anchor="w", padx=6, pady=(0, 4))
+        ttk.Label(self.center, wraplength=560, justify="left", foreground="#8a3b00",
+                  text=("Scope: this scores the pBoc (posterior body-wall contraction), the "
+                        "intestinal step of the defecation motor program. It does not score "
+                        "the aBoc or the expulsion (Exp) step driven by the anal depressor "
+                        "and sphincter muscles.")).pack(anchor="w", padx=6, pady=(0, 6))
         self.center_fig = Figure(figsize=(5.4, 3.4), dpi=100)
         self.center_ax = self.center_fig.add_subplot(111); self.center_ax.set_axis_off()
         self.center_canvas = FigureCanvasTkAgg(self.center_fig, master=self.center)
