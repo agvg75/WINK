@@ -20,6 +20,7 @@ sys.path[:0] = [str(HERE), str(ROOT / "app"), str(ROOT / "tools" / "movie")]
 
 from acquisition import AcquisitionMetadata
 from movie_reader import open_movie
+from image_sequence import discover_images
 from run_feedback import prompt_post_run_feedback
 from gcamp import extract_trace, feasibility_pass
 from process_ui import CockpitApp
@@ -114,15 +115,62 @@ class App(CockpitApp):
 
     def choose(self):
         path = filedialog.askopenfilename(
-            filetypes=[("Movies and stacks",
-                        "*.tif *.tiff *.avi *.mp4 *.mov *.mkv *.webm"),
+            parent=self,
+            title="Choose a movie, TIFF stack, or one frame of an image sequence",
+            filetypes=[("Movies, stacks, and image frames",
+                        "*.tif *.tiff *.png *.jpg *.jpeg *.bmp *.pgm "
+                        "*.avi *.mp4 *.mov *.mkv *.webm"),
                        ("All files", "*.*")])
         if not path:
-            path = filedialog.askdirectory(title="Choose a frame folder")
+            path = filedialog.askdirectory(
+                parent=self, title="Or choose a folder of numbered frames")
+        if not path:
+            return
+        path = self._resolve_sequence(path)
         if path:
             self.v["source"].set(path)
             self.frames = None
             self.feasibility = None
+
+    def _resolve_sequence(self, path):
+        """Accept a folder, a real multi-frame movie/stack, or a single still
+        image that belongs to a numbered sequence (offer to load its folder).
+
+        Picking one .tif out of a numbered sequence used to load a single frame
+        and fail the multi-frame check; here we detect that and load the folder.
+        """
+        p = Path(path)
+        if p.is_dir():
+            return str(p)
+        frame_count = None
+        movie = None
+        try:
+            movie = open_movie(str(p))
+            frame_count = int(movie.n_frames)
+        except Exception:
+            frame_count = None
+        finally:
+            try:
+                if movie is not None:
+                    movie.close()
+            except Exception:
+                pass
+        if frame_count is not None and frame_count >= 2:
+            return str(p)  # genuine movie or multi-page stack
+        try:
+            sequence = discover_images(p.parent)
+        except Exception:
+            sequence = []
+        if len(sequence) >= 2:
+            use_folder = messagebox.askyesno(
+                "Load image sequence?",
+                f"'{p.name}' is a single frame, but its folder holds "
+                f"{len(sequence)} numbered frames.\n\n"
+                "Load the whole folder as one recording?",
+                parent=self)
+            if use_folder:
+                return str(p.parent)
+        return str(p)
 
     def load_frames(self):
         if self.frames is not None:

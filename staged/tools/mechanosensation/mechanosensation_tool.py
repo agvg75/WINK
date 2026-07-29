@@ -434,7 +434,7 @@ class ReviewDialog(tk.Toplevel):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Evoked mechanosensation with habituation")
+        self.title("Mechanosensation (evoked responses and habituation)")
         self.geometry("940x650")
         defaults = {
             "tracks": "", "baseline": "", "fps": "30", "scale": "4",
@@ -472,7 +472,28 @@ class App(tk.Tk):
             ("Recording duration (s)", "duration"),
             ("Expected worm length (µm)", "worm_length"),
         ]
-        for row, (label, key) in enumerate(fields):
+        explainer = ttk.LabelFrame(self, text="What this module does")
+        explainer.grid(row=0, column=0, columnspan=3, padx=10, pady=(10, 4),
+                       sticky="ew")
+        ttk.Label(
+            explainer, justify="left", wraplength=880,
+            text=(
+                "Scores how a worm responds to a mechanical stimulus (tap, nose "
+                "touch, gentle or harsh body touch) and how that response "
+                "habituates over repeated trials.\n"
+                "Workflow:  1. Track a movie — the worm's kinematics CSV "
+                "auto-loads here.   2. Mark when/where each stimulus happened.   "
+                "3. Propose, review, and analyze the reversal responses.\n"
+                "Instead of step 1 you can load your own tracking CSV. It must "
+                "contain these columns:  plate_id, worm_id, stimulus_id, time_s, "
+                "velocity_bl_s, stimulus_time_s, prior_state, trial_number, "
+                "front_end.  Click “Save example CSV template” to see "
+                "the exact format.")).pack(fill="x", padx=8, pady=(6, 2))
+        ttk.Button(explainer, text="Save example CSV template...",
+                   command=self.save_template_csv).pack(anchor="w", padx=8,
+                                                        pady=(0, 6))
+
+        for row, (label, key) in enumerate(fields, start=1):
             ttk.Label(self, text=label).grid(
                 row=row, column=0, padx=10, pady=7, sticky="w")
             if key in self._choices:
@@ -486,11 +507,9 @@ class App(tk.Tk):
             if key in {"tracks", "baseline"}:
                 ttk.Button(
                     self, text="Choose",
-                    command=lambda k=key: self.v[k].set(
-                        filedialog.askopenfilename(
-                            filetypes=[("CSV", "*.csv")]))).grid(
+                    command=lambda k=key: self._choose_csv(k)).grid(
                                 row=row, column=2, padx=8)
-        action_row = len(fields)
+        action_row = len(fields) + 1
         ttk.Button(self, text="1. Track a movie (auto-loads result)",
                    command=self.launch_tracker).grid(
             row=action_row, column=0, padx=12, pady=(12, 4), sticky="ew")
@@ -508,6 +527,50 @@ class App(tk.Tk):
                 row=action_row + 2, column=0, columnspan=3, padx=12, pady=12,
                 sticky="w")
 
+    def _choose_csv(self, key):
+        path = filedialog.askopenfilename(
+            parent=self, title="Choose a tracking CSV",
+            filetypes=[("CSV", "*.csv"), ("All files", "*.*")])
+        if path:
+            self.v[key].set(path)
+
+    def save_template_csv(self):
+        """Write a small, valid example tracking CSV so the required format is
+        obvious. It loads cleanly through :func:`load_track_table`."""
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Save example mechanosensation tracking CSV",
+            defaultextension=".csv",
+            initialfile="mechanosensation_template.csv",
+            filetypes=[("CSV", "*.csv")])
+        if not path:
+            return
+        columns = ["plate_id", "worm_id", "stimulus_id", "time_s",
+                   "velocity_bl_s", "stimulus_time_s", "prior_state",
+                   "trial_number", "front_end"]
+        rows = []
+        # One plate, two worms, a single tap at t = 10 s, sampled at 5 Hz for a
+        # short window. worm_1 reverses (velocity goes negative just after the
+        # tap); worm_2 does not. velocity_bl_s is body lengths per second.
+        for worm, responder in (("worm_1", True), ("worm_2", False)):
+            for k in range(30):
+                t = round(9.0 + k * 0.2, 2)
+                vel = -0.25 if (responder and 10.0 <= t <= 11.0) else 0.18
+                rows.append({
+                    "plate_id": "plate_1", "worm_id": worm,
+                    "stimulus_id": "tap_1", "time_s": t,
+                    "velocity_bl_s": vel, "stimulus_time_s": 10.0,
+                    "prior_state": "forward", "trial_number": 1,
+                    "front_end": "nose_touch"})
+        pd.DataFrame(rows, columns=columns).to_csv(path, index=False)
+        self.status.set(f"Example template saved: {path}")
+        messagebox.showinfo(
+            "Template saved",
+            "An example tracking CSV was saved. Replace the example rows with "
+            "your tracked data — one row per worm per time point — "
+            "keeping the same column names. Required columns: plate_id, "
+            "worm_id, stimulus_id, time_s, velocity_bl_s, stimulus_time_s, "
+            "prior_state, trial_number, front_end.", parent=self)
+
     def launch_tracker(self):
         """Track a movie, then auto-load the kinematics result (no manual CSV).
 
@@ -516,6 +579,7 @@ class App(tk.Tk):
         next to the movie.  Manual CSV selection remains as a fallback below.
         """
         movie = filedialog.askopenfilename(
+            parent=self,
             title="Choose the recording to track (movie, TIFF stack, or one "
                   "image of a numbered sequence)",
             filetypes=[("Movies, stacks and images",
@@ -576,6 +640,7 @@ class App(tk.Tk):
     def mark_stimuli(self):
         """Scrub the movie and mark each stimulus frame; fills 'Stimulus times'."""
         movie = getattr(self, "_movie_path", "") or filedialog.askopenfilename(
+            parent=self,
             title="Choose the recording to mark stimuli on",
             filetypes=[("Movies, stacks and images",
                         "*.avi *.mp4 *.mov *.mkv *.tif *.tiff *.jpg *.jpeg "
@@ -607,7 +672,25 @@ class App(tk.Tk):
             except Exception:
                 pass
         m = movie_reader.open_movie(movie)
+        # If the user picked one frame of a numbered sequence, open_movie sees a
+        # single image; reopen the whole numbered series so the movie scrolls.
+        if getattr(m, "source_kind", "") == "single_image":
+            try:
+                m.close()
+            except Exception:
+                pass
+            try:
+                m = movie_reader.open_numbered_image_sequence(Path(movie))
+            except Exception:
+                m = movie_reader.open_movie(movie)
         nfr = int(m.n_frames)
+        if nfr < 2:
+            messagebox.showwarning(
+                "Single frame only",
+                "This looks like a single still image, so there is nothing to "
+                "scroll. Pick one frame of the numbered image sequence (the rest "
+                "of the folder loads automatically), or a movie/stack.",
+                parent=self)
 
         def gray(fr):
             fr = np.asarray(fr)

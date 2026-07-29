@@ -843,7 +843,7 @@ class PumpingTool(tk.Tk):
                        "interpolated between the dropped positions.").pack(
                       fill="x", pady=(0, 2))
         ttk.Button(top, text="3. Analyze interval", command=self.run_analysis).pack(fill="x", pady=(10, 2))
-        ttk.Button(top, text="3b. Guided review (drop anchors)",
+        ttk.Button(top, text="3b. Review: move ROI along pharynx",
                    command=self.guided_review).pack(fill="x", pady=2)
         ttk.Button(top, text="AUTO: full recording",
                    command=self.run_automatic).pack(fill="x", pady=2)
@@ -943,6 +943,7 @@ class PumpingTool(tk.Tk):
 
     def choose(self):
         name = filedialog.askopenfilename(
+            parent=self,
             title="Choose one frame from the pumping recording",
             filetypes=[("Image sequences", "*.tif *.tiff *.pgm *.png *.jpg *.jpeg"),
                        ("All files", "*.*")])
@@ -981,7 +982,7 @@ class PumpingTool(tk.Tk):
         self.show()
 
     def choose_folder(self):
-        folder = filedialog.askdirectory(title="Choose a folder containing one pumping recording")
+        folder = filedialog.askdirectory(parent=self, title="Choose a folder containing one pumping recording")
         if not folder:
             return
         self.status.config(
@@ -1554,7 +1555,7 @@ class PumpingTool(tk.Tk):
         r = self.auto_result
         m = self._auto_metrics()
         parent = filedialog.askdirectory(
-            title="Choose output folder", initialdir=str(self.paths[0].parent))
+            parent=self, title="Choose output folder", initialdir=str(self.paths[0].parent))
         if not parent:
             return
         stem = self.paths[0].stem.rsplit("-", 1)[0]
@@ -1806,9 +1807,26 @@ class PumpingTool(tk.Tk):
         def refresh_all():
             draw_image(); draw_trace(); wb.refresh()
 
-        def goto(idx):
+        def _set_slider(idx):
+            sl = state.get("_slider")
+            if sl is not None:
+                try:
+                    sl.set(idx + 1)
+                except Exception:
+                    pass
+
+        def goto(idx, from_slider=False):
             state["frame"] = max(0, min(n - 1, int(idx)))
+            # Don't push the value back into the Scale while it is being dragged
+            # (that freezes the thumb on Windows); only sync it for button/key nav.
+            if not from_slider:
+                _set_slider(state["frame"])
             refresh_all()
+
+        def on_slider(value):
+            if state["roi_by_frame"] is None:
+                return
+            goto(int(round(float(value))) - 1, from_slider=True)
 
         def step(delta):
             goto(state["frame"] + delta)
@@ -1830,6 +1848,16 @@ class PumpingTool(tk.Tk):
                 "Anchor dropped",
                 f"frame {state['frame']+1}: x={event.xdata:.0f}, "
                 f"y={event.ydata:.0f} (Reanalyze to apply)", status="edit")
+            refresh_all()
+
+        def add_anchor_here():
+            idx = int(state["frame"])
+            bx0, by0, bx1, by1 = state["roi_by_frame"][idx]
+            state["anchors"][idx] = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0)
+            state["roi_by_frame"] = _trajectory()
+            proc.add("Anchor added",
+                     f"frame {idx+1} at the ROI centre; left-click the pharynx "
+                     "to fine-tune its position, then Reanalyze.", status="edit")
             refresh_all()
 
         def remove_anchor():
@@ -1871,13 +1899,22 @@ class PumpingTool(tk.Tk):
         wb.clear_controls()
         wb.add_control_label(
             "The ROI follows your anchors. Green box = a counted pump on this "
-            "frame. Drop anchors where the pharynx moves, then Reanalyze.")
+            "frame. Scroll to where the pharynx has moved, click it (or Add "
+            "anchor here), then Reanalyze.")
+        slider_row = ttk.Frame(wb.controls_frame)
+        slider_row.pack(fill="x", padx=6, pady=(2, 6))
+        ttk.Label(slider_row, text="Frame").pack(side="left")
+        state["_slider"] = ttk.Scale(
+            slider_row, from_=1, to=max(1, n), orient="horizontal",
+            command=on_slider)
+        state["_slider"].pack(side="left", fill="x", expand=True, padx=4)
         wb.add_control_button("< prev frame", lambda: step(-1))
         wb.add_control_button("next frame >", lambda: step(1))
         wb.add_control_button("- 10 frames", lambda: step(-10))
         wb.add_control_button("+ 10 frames", lambda: step(10))
         wb.add_control_button("Jump to next pump (n)", next_pump)
         wb.add_control_separator()
+        wb.add_control_button("Add anchor here", add_anchor_here)
         wb.add_control_button("Remove anchor here", remove_anchor)
         wb.add_control_button("Reanalyze along anchors (Enter)", reanalyze)
         wb.add_control_button("Switch method (template / motion)", toggle_method)

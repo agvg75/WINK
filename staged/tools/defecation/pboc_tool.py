@@ -17,6 +17,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
 import numpy as np
 from PIL import Image, ImageTk
 
@@ -112,6 +113,9 @@ class App(CockpitApp):
         self.distractor_path = None
         self._frames = None
         self._frame = 0
+        self._slide_job = None
+        self._pending_slide = None
+        self._hold_job = None
         self._cal_on = False
         self._cal_stage = None
         self._cal_anchors = []
@@ -119,6 +123,12 @@ class App(CockpitApp):
         self._cal_tail = None
         self._cal_outline = []
         self._cal_cid = None
+        # Optional moving worm-focus ROI: absolute frame -> (cx, cy) box centre in
+        # full-resolution source pixels; self.focus_box is (w, h) held constant.
+        self.focus_anchors = {}
+        self.focus_box = None
+        self._focus_on = False
+        self._focus_cid = None
         self._build()
 
     def _build(self):
@@ -154,6 +164,8 @@ class App(CockpitApp):
 
         ttk.Separator(c, orient="horizontal").pack(fill="x", pady=6)
         ttk.Button(c, text="1. Calibrate one pBoc (3 outlines)", command=self._seed).pack(fill="x", pady=2)
+        ttk.Button(c, text="Focus on worm (moving ROI, optional)", command=self._focus_begin).pack(fill="x", pady=2)
+        ttk.Button(c, text="Clear worm-focus ROI", command=self._focus_clear).pack(fill="x", pady=(0, 2))
         ttk.Button(c, text="2. Review moving distractors", command=self._distractors).pack(fill="x", pady=2)
         self.run_button = ttk.Button(c, text="3. Analyze recording", command=self._start)
         self.run_button.pack(fill="x", pady=2)
@@ -174,8 +186,13 @@ class App(CockpitApp):
                             ha="center", va="center", fontsize=10, color="#888888")
         self.center_canvas.draw()
         nav = ttk.Frame(self.center); nav.pack(fill="x", padx=6, pady=(0, 4))
-        ttk.Button(nav, text="< frame", command=lambda: self._step_frame(-1)).pack(side="left")
-        ttk.Button(nav, text="frame >", command=lambda: self._step_frame(1)).pack(side="left", padx=4)
+        back = ttk.Button(nav, text="< frame"); back.pack(side="left")
+        fwd = ttk.Button(nav, text="frame >"); fwd.pack(side="left", padx=4)
+        # Press-and-hold either button to scroll continuously (also the Left/Right
+        # arrow keys). No `command=`: the press handler already does the single
+        # click, so a quick tap steps exactly once.
+        self._bind_hold_repeat(back, -1)
+        self._bind_hold_repeat(fwd, 1)
         self._frame_slider = ttk.Scale(nav, from_=0, to=1, orient="horizontal", command=self._slide_frame)
         self._frame_slider.pack(side="left", fill="x", expand=True, padx=6)
         self._frame_label = ttk.Label(nav, text=""); self._frame_label.pack(side="left")
@@ -186,6 +203,58 @@ class App(CockpitApp):
             "accept, reject, count, or establish a biological period. Adjust the "
             "review window for unusually fast or slow mutants.\n"
         )
+
+        # Keyboard navigation for the preview / calibration frames. Left/Right
+        # step one frame, PgUp/PgDn step ten; guarded so typing in an entry is
+        # unaffected. Backspace undoes the last outline point during calibration.
+        self.bind("<Left>", lambda e: self._arrow_step(e, -1))
+        self.bind("<Right>", lambda e: self._arrow_step(e, 1))
+        self.bind("<Prior>", lambda e: self._arrow_step(e, -10))
+        self.bind("<Next>", lambda e: self._arrow_step(e, 10))
+        self.bind("<BackSpace>", self._cal_undo_key)
+
+    # -- frame navigation helpers -------------------------------------------
+    def _typing_in_entry(self):
+        widget = self.focus_get()
+        return isinstance(widget, (ttk.Entry, tk.Entry, ttk.Combobox, tk.Text))
+
+    def _arrow_step(self, _event, delta):
+        if self._typing_in_entry():
+            return
+        self._step_frame(delta)
+
+    def _bind_hold_repeat(self, button, delta):
+        """Step once on click; scroll continuously while the button is held."""
+        def start(_e):
+            self._step_frame(delta)
+            self._hold_job = self.after(350, repeat)
+
+        def repeat():
+            self._step_frame(delta)
+            self._hold_job = self.after(70, repeat)
+
+        def stop(_e):
+            if self._hold_job is not None:
+                try:
+                    self.after_cancel(self._hold_job)
+                except Exception:
+                    pass
+                self._hold_job = None
+        button.bind("<ButtonPress-1>", start)
+        button.bind("<ButtonRelease-1>", stop)
+        button.bind("<Leave>", stop)
+
+    def _cal_undo_key(self, _event=None):
+        if self._typing_in_entry():
+            return
+        self._cal_undo()
+
+    def _cal_undo(self):
+        """Remove the last point placed while tracing the calibration outline."""
+        if self._cal_on and self._cal_stage == "outline" and self._cal_outline:
+            self._cal_outline.pop()
+            self._display_frame(self._frame)
+            self._cal_prompt()
 
     def _scale_value(self):
         try:
@@ -214,8 +283,11 @@ class App(CockpitApp):
         except Exception:
             pass
         self._display_frame(0)
+        self.log("Loaded source",
+                 f"{len(self._frames)} frame(s) from {Path(self.folder.get()).name}",
+                 status="done")
 
-    def _display_frame(self, index):
+    def _display_frame(self, index, from_slider=False):
         if not self._frames:
             return
         self._frame = max(0, min(len(self._frames) - 1, int(index)))
@@ -236,24 +308,59 @@ class App(CockpitApp):
             if self._cal_outline:
                 xs = [p[0] for p in self._cal_outline]; ys = [p[1] for p in self._cal_outline]
                 self.center_ax.plot(xs, ys, "-o", color="#ffcc00", ms=3, lw=1)
+        if self.focus_anchors and self.focus_box:
+            fw, fh = self.focus_box
+            fs = sorted(self.focus_anchors)
+            if len(fs) >= 2:
+                px = [self.focus_anchors[f][0] for f in fs]
+                py = [self.focus_anchors[f][1] for f in fs]
+                self.center_ax.plot(px, py, "-", color="#00ccff", lw=1)
+            for f in fs:
+                fx, fy = self.focus_anchors[f]
+                self.center_ax.plot(fx, fy, "x", color="#00ccff", ms=7, mew=2)
+            center = self._focus_center_at(self._frame)
+            if center is not None:
+                cx, cy = center
+                edge = "#00ff66" if int(self._frame) in self.focus_anchors else "#00ccff"
+                self.center_ax.add_patch(Rectangle(
+                    (cx - fw / 2.0, cy - fh / 2.0), fw, fh, fill=False,
+                    edgecolor=edge, lw=1.5))
+            title += f"   |   focus ROI ({len(fs)} pos)"
         self.center_ax.set_title(title, fontsize=9)
-        try:
-            self._frame_slider.set(self._frame)
-        except Exception:
-            pass
+        # Do NOT push the value back into the slider while the user is dragging
+        # it: calling Scale.set() from inside the Scale's own -command handler
+        # freezes the thumb mid-drag on Windows. Only sync it for button/keyboard
+        # driven changes.
+        if not from_slider:
+            try:
+                self._frame_slider.set(self._frame)
+            except Exception:
+                pass
         self._frame_label.configure(text=f"{self._frame + 1}/{len(self._frames)}")
-        self.center_canvas.draw()
+        self.center_canvas.draw_idle()
 
     def _step_frame(self, delta):
         if self._frames:
             self._display_frame(self._frame + delta)
 
     def _slide_frame(self, value):
+        # Coalesce rapid drag events: a fresh disk read + full redraw on every
+        # pixel of travel floods the event loop and makes the slider feel stuck.
+        # Remember the latest target and redraw at most every ~30 ms.
         if not self._frames:
             return
-        f = max(0, min(len(self._frames) - 1, int(round(float(value)))))
-        if f != self._frame:
-            self._display_frame(f)
+        try:
+            self._pending_slide = max(0, min(len(self._frames) - 1, int(round(float(value)))))
+        except (TypeError, ValueError):
+            return
+        if self._slide_job is None:
+            self._slide_job = self.after(30, self._apply_slide)
+
+    def _apply_slide(self):
+        self._slide_job = None
+        target = self._pending_slide
+        if target is not None and target != self._frame:
+            self._display_frame(target, from_slider=True)
 
     def _source_row(self, parent, row):
         ttk.Label(parent, text="Source").grid(row=row, column=0, sticky="w", pady=5)
@@ -276,6 +383,7 @@ class App(CockpitApp):
 
     def _choose_source_file(self):
         value = filedialog.askopenfilename(
+            parent=self,
             title="Choose TIFF stack, movie, or still image",
             filetypes=[
                 ("Supported image/video", "*.tif *.tiff *.png *.jpg *.jpeg *.bmp *.pgm *.mp4 *.avi *.mov *.mkv *.webm *.m4v"),
@@ -285,17 +393,35 @@ class App(CockpitApp):
             ])
         if not value:
             return
+        src = Path(value)
+        # If the picked file is one frame of a numbered image sequence, load the
+        # whole folder (like the Folder button) instead of caching a single
+        # frame. A movie or multi-page stack falls through to materialization.
+        try:
+            sequence = discover_images(src.parent)
+        except Exception:
+            sequence = []
+        resolved = src.resolve()
+        in_sequence = any(Path(p).resolve() == resolved for p in sequence)
+        if in_sequence and len(sequence) >= 2:
+            self.folder.set(str(src.parent))
+            self.source_path = str(src.parent)
+            self.source_cache_meta = None
+            self._prepare_output_default()
+            self._after_source_selected()
+            return
         try:
             self._prepare_output_default()
-            frame_folder = self._materialize_source_file(Path(value))
+            frame_folder = self._materialize_source_file(src)
             self.folder.set(str(frame_folder))
-            self.source_path = str(Path(value))
+            self.source_path = str(src)
             self._after_source_selected()
         except Exception as exc:
             messagebox.showerror("Open source", str(exc), parent=self)
 
     def _choose_folder(self):
         value = filedialog.askdirectory(
+            parent=self,
             title="Choose a numbered image sequence (TIFF, PNG, JPEG, BMP, PGM)")
         if value:
             self.folder.set(value)
@@ -411,7 +537,7 @@ class App(CockpitApp):
                     messagebox.showerror("Resume calibration",str(exc),parent=self)
 
     def _choose_output(self):
-        value = filedialog.askdirectory(title="Choose output folder")
+        value = filedialog.askdirectory(parent=self, title="Choose output folder")
         if value:
             self.output.set(value)
 
@@ -445,6 +571,8 @@ class App(CockpitApp):
         if not self._frames:
             messagebox.showerror("Calibration", "Choose a source recording first.")
             return
+        if self._focus_on:
+            self._focus_finish()
         self._cal_on = True
         self._cal_anchors = []
         self._cal_begin_anchor()
@@ -460,8 +588,11 @@ class App(CockpitApp):
         key, desc = PBOCCalibrationNavigator.LABELS[len(self._cal_anchors)]
         stage = {"head": "click the HEAD",
                  "tail": "click the TAIL tip",
-                 "outline": "trace the OUTLINE (left-click around the worm, right-click to finish)"}[self._cal_stage]
-        self.set_status(f"Landmark {len(self._cal_anchors)+1}/3 - {desc}. Scroll to the frame, then {stage}. "
+                 "outline": ("trace the OUTLINE (left-click around the worm; "
+                             "Backspace or middle-click undoes the last point; "
+                             "right-click finishes)")}[self._cal_stage]
+        self.set_status(f"Landmark {len(self._cal_anchors)+1}/3 - {desc}. Scroll to the frame "
+                        f"(arrow keys / hold the frame buttons), then {stage}. "
                         "Right-click cancels while marking head/tail.")
 
     def _cal_click(self, event):
@@ -472,6 +603,9 @@ class App(CockpitApp):
                 self._cal_finish_outline()
             else:
                 self._cal_cancel()
+            return
+        if event.button == 2:
+            self._cal_undo()
             return
         if event.inaxes != self.center_ax or event.xdata is None:
             return
@@ -494,6 +628,9 @@ class App(CockpitApp):
         self._cal_anchors.append({"frame": int(self._frame), "head_xy": list(self._cal_head),
                                   "tail_xy": list(self._cal_tail),
                                   "outline_xy": [list(p) for p in self._cal_outline], "state": key})
+        self.log("Calibration landmark",
+                 f"{len(self._cal_anchors)}/3 ({key}) at frame {self._frame + 1}",
+                 status="edit")
         if len(self._cal_anchors) >= 3:
             self._cal_complete()
             return
@@ -519,6 +656,9 @@ class App(CockpitApp):
                       f"contraction {(fi[1]-fi[0])/fps:.3f}s; recovery {(fi[2]-fi[1])/fps:.3f}s.\n")
         except Exception:
             self._log(f"Calibrated pBoc on frames {fi[0]+1}, {fi[1]+1}, {fi[2]+1}.\n")
+        self.log("Calibration complete",
+                 f"3 landmarks on frames {fi[0] + 1}, {fi[1] + 1}, {fi[2] + 1}",
+                 status="done")
         self.set_status("pBoc calibration complete. Review distractors, then Analyze.")
 
     def _cal_cancel(self):
@@ -535,6 +675,83 @@ class App(CockpitApp):
             except Exception:
                 pass
         self._cal_cid = None
+
+    # -- optional moving worm-focus ROI -------------------------------------
+    def _frame_shape(self):
+        try:
+            return read_image(self._frames[self._frame], grayscale=True).shape[:2]
+        except Exception:
+            return (512, 512)
+
+    def _focus_begin(self):
+        if not self._frames:
+            messagebox.showerror("Worm-focus ROI", "Choose a source recording first.", parent=self)
+            return
+        if self._cal_on:
+            self._cal_cancel()
+        # Box size from the calibration outline (with margin) when available,
+        # otherwise a third of the frame. Only the centre moves per frame.
+        if self.outline:
+            xs = [p[0] for p in self.outline]; ys = [p[1] for p in self.outline]
+            w = (max(xs) - min(xs)) * 1.6; h = (max(ys) - min(ys)) * 1.6
+        else:
+            fh, fw = self._frame_shape()
+            w, h = fw / 3.0, fh / 3.0
+        self.focus_box = (max(12.0, float(w)), max(12.0, float(h)))
+        self._focus_on = True
+        if self._focus_cid is None:
+            self._focus_cid = self.center_canvas.mpl_connect("button_press_event", self._focus_click)
+        self.set_status(
+            "Worm-focus ROI: scroll to where the worm is (arrow keys / hold the "
+            "frame buttons) and left-click to drop or move the box centre. Add a "
+            "few positions across the movie; right-click or 'Clear' when done. "
+            "Tracking then ignores everything outside this moving box.")
+        self._display_frame(self._frame)
+
+    def _focus_click(self, event):
+        if not self._focus_on:
+            return
+        if event.button == 3:
+            self._focus_finish()
+            return
+        if event.inaxes != self.center_ax or event.xdata is None:
+            return
+        self.focus_anchors[int(self._frame)] = (float(event.xdata), float(event.ydata))
+        self.log("Worm-focus anchor",
+                 f"frame {self._frame + 1}: {len(self.focus_anchors)} position(s)",
+                 status="edit")
+        self._display_frame(self._frame)
+
+    def _focus_finish(self):
+        self._focus_on = False
+        if self._focus_cid is not None:
+            try:
+                self.center_canvas.mpl_disconnect(self._focus_cid)
+            except Exception:
+                pass
+            self._focus_cid = None
+        if self.focus_anchors:
+            self.set_status(
+                f"Worm-focus ROI set with {len(self.focus_anchors)} position(s). "
+                "Tracking will ignore everything outside the moving box.")
+        self._display_frame(self._frame)
+
+    def _focus_clear(self):
+        self._focus_finish()
+        self.focus_anchors = {}
+        self.focus_box = None
+        self.set_status("Worm-focus ROI cleared. Tracking uses the whole frame.")
+        self._display_frame(self._frame)
+
+    def _focus_center_at(self, frame):
+        if not self.focus_anchors:
+            return None
+        fs = sorted(self.focus_anchors)
+        if len(fs) == 1:
+            return self.focus_anchors[fs[0]]
+        xs = [self.focus_anchors[f][0] for f in fs]
+        ys = [self.focus_anchors[f][1] for f in fs]
+        return (float(np.interp(frame, fs, xs)), float(np.interp(frame, fs, ys)))
 
     def _start(self):
         if (self.head is None or self.tail is None or not self.outline
@@ -579,6 +796,15 @@ class App(CockpitApp):
                 "coordinate_space": "source_pixels",
                 "pboc_anchors": self.pboc_anchors,
             }, indent=2), encoding="utf-8")
+            focus_path = None
+            if self.focus_anchors and self.focus_box:
+                focus_path = output / f"{folder.name.replace(' ', '_')}_focus_roi.json"
+                focus_path.write_text(json.dumps({
+                    "box_wh": [float(self.focus_box[0]), float(self.focus_box[1])],
+                    "anchors": [[int(f), float(c[0]), float(c[1])]
+                                for f, c in sorted(self.focus_anchors.items())],
+                    "coordinate_space": "source_pixels",
+                }, indent=2), encoding="utf-8")
         except Exception as exc:
             messagebox.showerror("Settings", str(exc))
             return
@@ -604,8 +830,16 @@ class App(CockpitApp):
             "--max-period", str(maximum),
             "--output-dir", str(output),
         ]
+        if focus_path is not None:
+            command += ["--focus-roi-json", str(focus_path)]
+            self.log("Worm-focus ROI",
+                     f"{len(self.focus_anchors)} anchor(s); tracking restricted to the moving box",
+                     status="edit")
         self.run_button.state(["disabled"])
         self._log("Analysis started. Large recordings may take several minutes.\n")
+        self.log("Analysis started",
+                 f"{len(self._frames or [])} frame(s); measuring pBoc cadence",
+                 status="running")
         threading.Thread(
             target=self._run, args=(command, output, folder, name), daemon=True
         ).start()
@@ -618,11 +852,13 @@ class App(CockpitApp):
             self.after(0, self._log, result.stdout[-6000:])
             if result.returncode:
                 self.after(0, self._log, "\nERROR\n" + result.stderr[-4000:])
+                self.after(0, self.log, "Analysis failed", "engine returned an error", "failed")
             else:
                 self.after(
                     0, self._log,
                     f"\nFinished. Review tables were saved in:\n{output}\n"
                 )
+                self.after(0, self.log, "Analysis finished", f"tables saved in {output.name}", "done")
                 summary = output / f"{name}_full_scan.json"
                 self.after(0, self._open_reviewer, summary, folder)
         except Exception as exc:

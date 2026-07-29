@@ -458,6 +458,98 @@ def _parse_frame_range(text, n_frames):
     return (s - 1, e - 1)
 
 
+def _choose_analysis_interval(G, plt):
+    """Visually pick the frames to KEEP by scrolling the loaded movie.
+
+    Replaces the old text ``askstring`` frame-range prompt, which asked for a
+    range before the user could see or scroll the recording.  Shows the frames
+    with a slider and Set start / Set end buttons; returns ``(start, end)``
+    0-based inclusive, or ``None`` to keep the whole recording.
+    """
+    from matplotlib.widgets import Slider, Button
+    n = int(G.shape[0])
+    state = {"start": 0, "end": n - 1, "i": 0, "trimmed": False}
+    fig, ax = plt.subplots(figsize=(11, 7))
+    fig.subplots_adjust(bottom=0.22)
+    im = ax.imshow(np.asarray(G[0]), cmap="gray"); ax.axis("off")
+
+    def redraw():
+        frame = np.asarray(G[state["i"]])
+        im.set_data(frame)
+        try:
+            fmin, fmax = float(np.min(frame)), float(np.max(frame))
+            if fmax > fmin:
+                im.set_clim(fmin, fmax)
+        except Exception:
+            pass
+        span = ("whole recording" if not state["trimmed"]
+                else f"KEEP frames {state['start'] + 1}-{state['end'] + 1}")
+        ax.set_title(
+            f"Optional: choose the interval to KEEP.   Frame {state['i'] + 1}/{n}\n"
+            f"Current selection: {span}\n"
+            "Scroll with the slider or arrow keys (PgUp/PgDn = +/-10). "
+            "Set start / Set end mark this frame.\n"
+            "Keep all frames, or Use this interval, to continue.")
+        fig.canvas.draw_idle()
+
+    slider = Slider(fig.add_axes([0.15, 0.12, 0.6, 0.035]),
+                    "Frame", 1, max(1, n), valinit=1, valstep=1)
+
+    def on_slide(value):
+        state["i"] = max(0, min(n - 1, int(round(value)) - 1)); redraw()
+    slider.on_changed(on_slide)
+
+    def set_start(_e=None):
+        state["start"] = state["i"]
+        if state["end"] < state["start"]:
+            state["end"] = state["start"]
+        state["trimmed"] = True; redraw()
+
+    def set_end(_e=None):
+        state["end"] = state["i"]
+        if state["start"] > state["end"]:
+            state["start"] = state["end"]
+        state["trimmed"] = True; redraw()
+
+    def keep_all(_e=None):
+        state["start"], state["end"], state["trimmed"] = 0, n - 1, False
+        plt.close(fig)
+
+    def use_interval(_e=None):
+        plt.close(fig)
+
+    b_start = Button(fig.add_axes([0.15, 0.04, 0.14, 0.055]), "Set start")
+    b_end = Button(fig.add_axes([0.31, 0.04, 0.14, 0.055]), "Set end")
+    b_all = Button(fig.add_axes([0.55, 0.04, 0.17, 0.055]), "Keep all frames")
+    b_use = Button(fig.add_axes([0.74, 0.04, 0.20, 0.055]), "Use this interval")
+    b_start.on_clicked(set_start); b_end.on_clicked(set_end)
+    b_all.on_clicked(keep_all); b_use.on_clicked(use_interval)
+    # Keep references alive so the buttons keep working (matplotlib weakrefs).
+    fig._interval_widgets = (slider, b_start, b_end, b_all, b_use)
+
+    def on_key(e):
+        cur = int(round(slider.val))
+        if e.key == "right":
+            slider.set_val(min(n, cur + 1))
+        elif e.key == "left":
+            slider.set_val(max(1, cur - 1))
+        elif e.key == "pagedown":
+            slider.set_val(min(n, cur + 10))
+        elif e.key == "pageup":
+            slider.set_val(max(1, cur - 10))
+        elif e.key == "home":
+            slider.set_val(1)
+        elif e.key == "end":
+            slider.set_val(n)
+    fig.canvas.mpl_connect("key_press_event", on_key)
+
+    redraw()
+    plt.show()
+    if not state["trimmed"] or (state["start"] == 0 and state["end"] == n - 1):
+        return None
+    return (state["start"], state["end"])
+
+
 class _TimeRangedExclusion:
     """Per-frame exclusion mask assembled from time-ranged focus/exclude regions.
 
@@ -812,7 +904,15 @@ def main(argv=None):
     from segmentation_review import find_accepted_config
 
     root = tk.Tk(); root.withdraw()
+    # A withdrawn root does not claim the Windows foreground, so its file dialog
+    # and message boxes can open BEHIND the launching hub. Marking the root
+    # topmost makes the dialogs it parents come to the front.
+    try:
+        root.attributes("-topmost", True)
+    except Exception:
+        pass
     path = args.source or filedialog.askopenfilename(
+        parent=root,
         title="Choose a movie or TIFF stack, or any one image of a numbered sequence",
         filetypes=[("Movies, stacks and images", "*.avi *.mp4 *.mov *.mkv *.tif *.tiff *.jpg *.jpeg *.png"),
                    ("All files", "*.*")])
@@ -877,13 +977,11 @@ def main(argv=None):
     # tracking, review) then operates on this window; the note records which
     # original frames were analysed.
     total_loaded = int(G.shape[0])
-    interval_text = simpledialog.askstring(
-        "Analysis interval (optional)",
-        f"Analyse only part of the recording? Enter the frame range to KEEP "
-        f"(1-{total_loaded}) -- e.g. '1-{total_loaded}', '60-{total_loaded}', "
-        "or leave blank to analyse everything.\n\n"
-        "Use this to skip a noisy lead-in or tail.")
-    a_start, a_end = _parse_frame_range(interval_text, total_loaded)
+    interval = _choose_analysis_interval(G, plt)
+    if interval is None:
+        a_start, a_end = 0, total_loaded - 1
+    else:
+        a_start, a_end = interval
     if a_start > 0 or a_end < total_loaded - 1:
         if getattr(G, "is_virtual_stack", False):
             G = _FrameWindow(G, a_start, a_end)

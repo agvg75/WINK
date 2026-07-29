@@ -241,6 +241,61 @@ def apply_distractor_identity_gate(target_states, target_masks,
                 "distractor_identity_not_observable")
 
 
+def build_focus_exclusion(focus_document, n_frames, image_shape_hw, scale):
+    """Per-frame masks that exclude everything OUTSIDE a user's moving worm box.
+
+    ``focus_document`` is written by the tool as
+    ``{"box_wh": [w, h], "anchors": [[frame, cx, cy], ...]}`` in FULL-resolution
+    source pixels. The box centre is linearly interpolated between anchors (held
+    flat before the first and after the last), then converted to the downsampled
+    analysis grid with the same ``* scale`` convention the seed outline uses.
+    Returns a list of boolean masks (``True`` = excluded) of length ``n_frames``,
+    or ``None`` when there is nothing to focus on. This only restricts WHERE the
+    tracker looks; it does not touch any pBoc measurement formula.
+    """
+    if not focus_document:
+        return None
+    anchors = focus_document.get("anchors") or []
+    box = focus_document.get("box_wh") or []
+    if not anchors or len(box) < 2:
+        return None
+    H, W = int(image_shape_hw[0]), int(image_shape_hw[1])
+    w = max(1, int(round(float(box[0]) * scale)))
+    h = max(1, int(round(float(box[1]) * scale)))
+    frames_sorted = sorted({int(a[0]) for a in anchors})
+    cx_by_frame = {int(a[0]): float(a[1]) * scale for a in anchors}
+    cy_by_frame = {int(a[0]): float(a[2]) * scale for a in anchors}
+    idx = np.arange(int(n_frames))
+    fs = np.asarray(frames_sorted, dtype=float)
+    cx_series = np.interp(idx, fs, np.asarray([cx_by_frame[f] for f in frames_sorted]))
+    cy_series = np.interp(idx, fs, np.asarray([cy_by_frame[f] for f in frames_sorted]))
+    masks = []
+    for cx, cy in zip(cx_series, cy_series):
+        x0 = int(round(cx - w / 2.0)); y0 = int(round(cy - h / 2.0))
+        x0 = max(0, min(x0, W - w)); y0 = max(0, min(y0, H - h))
+        excluded = np.ones((H, W), dtype=bool)
+        excluded[y0:y0 + h, x0:x0 + w] = False
+        masks.append(excluded)
+    return masks
+
+
+def _union_exclusions(distractor_masks, focus_masks, n_frames):
+    """Combine distractor masks and worm-focus masks (True = excluded)."""
+    if focus_masks is None:
+        return distractor_masks
+    combined = []
+    for i in range(n_frames):
+        focus = focus_masks[i]
+        dm = None
+        if distractor_masks is not None and i < len(distractor_masks):
+            dm = distractor_masks[i]
+        if dm is None:
+            combined.append(focus)
+        else:
+            combined.append(np.asarray(dm, bool) | focus)
+    return combined
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("folder", type=Path)
@@ -266,6 +321,10 @@ def main():
     p.add_argument("--recovery-z", type=float, default=-1.0)
     p.add_argument("--min-period", type=float, default=30)
     p.add_argument("--max-period", type=float, default=90)
+    p.add_argument("--focus-roi-json", type=Path,
+                   help="Optional moving worm-focus ROI: restrict tracking to a "
+                        "box that follows user-dropped anchors so other worms / "
+                        "distractors outside it are ignored.")
     p.add_argument("--output-dir", type=Path)
     args = p.parse_args()
     acquisition=AcquisitionMetadata(args.fps,args.fps_source,args.um_per_px,
@@ -289,6 +348,17 @@ def main():
         seed_document.get("outline_xy") if seed_document else [])
     segmentation_config = scaled_config(
         find_accepted_config(args.folder, "defecation_cycle"), args.scale)
+    # Optional worm-focus ROI: exclude everything outside a moving box so the
+    # tracker stays on the intended worm in a crowded field. Distractor masks are
+    # kept separate for the identity gate; only the tracker's search is narrowed.
+    focus_document = None
+    if args.focus_roi_json:
+        focus_document = json.loads(
+            args.focus_roi_json.read_text(encoding="utf-8-sig"))
+    focus_masks = build_focus_exclusion(
+        focus_document, len(frames), frames.shape[1:], args.scale)
+    track_exclusion_masks = _union_exclusions(
+        distractor_masks, focus_masks, len(frames))
     tracker = raw_track(
         frames, args.fps, (args.head_x, args.head_y), args.scale,
         args.contrast_pct, 1, args.um_per_px/args.scale, args.scale_source,
@@ -296,7 +366,7 @@ def main():
         tail_xy_full=(None if args.tail_x is None else (args.tail_x, args.tail_y)),
         outline_xy_full=(None if seed_document is None else
                          seed_document.get("outline_xy")),
-        exclusion_masks=distractor_masks,
+        exclusion_masks=track_exclusion_masks,
         seed_frame=int(seed_document.get("source_frame", 0)),
         anchor_outlines={int(a["frame"]): a["outline_xy"]
                          for a in seed_document.get("pboc_anchors", [])},
