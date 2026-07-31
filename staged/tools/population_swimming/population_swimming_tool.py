@@ -128,6 +128,7 @@ class App(CockpitApp):
             self.after(0,self.review,summary,out)
         except Exception as e: self.after(0,self.fail,str(e))
     def review(self,summary,out):
+        self.status.set("Analysis complete. Building the track review window...");self.update_idletasks()
         out=Path(out)
         track_path=out/"reviewed_detections_and_tracks.csv"
         summary_path=out/"track_summary_after_stitching.csv"

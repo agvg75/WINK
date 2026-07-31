@@ -170,28 +170,43 @@ def _wave_direction(curves):
     return float(lag)
 
 
-def classify_modality_windows(tracks, fps, window_s=4.0, step_s=1.0):
+def classify_modality_windows(tracks, fps, window_s=4.0, step_s=1.0, progress=None):
     """Generate conservative, reviewable modality proposals."""
     rows = []
     width = max(12, int(round(window_s * fps)))
     step = max(1, int(round(step_s * fps)))
-    for tid, group in tracks.groupby("track_id"):
+    grouped = list(tracks.groupby("track_id"))
+    n_tracks = len(grouped)
+    for track_index, (tid, group) in enumerate(grouped):
         group = group.sort_values("frame")
+        # Windows overlap heavily (step << width), so each frame is revisited
+        # ~width/step times. Parse each frame's curvature JSON and posture score
+        # ONCE here, then just gather them per window below - same values, far
+        # less work than re-parsing every row inside every window.
+        curve_by_frame = {}
+        score_by_frame = {}
+        for frame_value, curvature_json in zip(
+                group.frame.to_numpy(), group.curvature_json.to_numpy()):
+            try:
+                curve = np.asarray(json.loads(curvature_json), float)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if len(curve) != SPINE_POINTS:
+                continue
+            curve_by_frame[int(frame_value)] = curve
+            score_by_frame[int(frame_value)] = _posture_scores(curve)
         start, stop = int(group.frame.min()), int(group.frame.max())
         for first in range(start, stop - width + 2, step):
             window = group[(group.frame >= first) & (group.frame < first + width)]
             coverage = len(window) / width
             curves = []
             scores = []
-            for _, row in window.iterrows():
-                try:
-                    curve = np.asarray(json.loads(row.curvature_json), float)
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    continue
-                if len(curve) != SPINE_POINTS:
+            for frame_value in window.frame.to_numpy():
+                curve = curve_by_frame.get(int(frame_value))
+                if curve is None:
                     continue
                 curves.append(curve)
-                scores.append(_posture_scores(curve))
+                scores.append(score_by_frame[int(frame_value)])
             valid = len(curves) / max(len(window), 1)
             valid_signal = window[np.isfinite(window.midbody_curvature_px_inv)]
             curvature_freq = (_frequency(valid_signal.time_s.to_numpy(),
@@ -229,6 +244,11 @@ def classify_modality_windows(tracks, fps, window_s=4.0, step_s=1.0):
                 median_speed_um_s=speed, c_score=c_score, s_score=s_score, w_score=w_score,
                 posterior_wave_lag_frames=wave_lag, coverage_fraction=coverage,
                 spine_valid_fraction=valid, collision_fraction=collision, proposal_reason=reason))
+        if progress is not None:
+            try:
+                progress(track_index + 1, n_tracks, "Classifying locomotion modality")
+            except TypeError:
+                progress(track_index + 1, n_tracks)
     return pd.DataFrame(rows)
 
 
@@ -791,9 +811,9 @@ def analyze(source, fps, um_per_px, output_dir=None, min_area=40, max_area=2500,
     default_out = (source_path / "population_swimming_results" if source_path.is_dir()
                    else source_path.parent / f"{source_path.stem}_population_swimming_results")
     out=Path(output_dir) if output_dir else default_out; out.mkdir(parents=True,exist_ok=True)
-    report(0,1,"Writing results and timing report");export_started=time.perf_counter();tracks.to_csv(out/"detections_and_tracks.csv",index=False); summary.to_csv(out/"track_summary.csv",index=False)
-    modality_windows=classify_modality_windows(tracks,fps)
-    modality_bouts=windows_to_bouts(modality_windows,fps)
+    report(0,1,"Writing tracks and summary tables");export_started=time.perf_counter();tracks.to_csv(out/"detections_and_tracks.csv",index=False); summary.to_csv(out/"track_summary.csv",index=False)
+    modality_windows=classify_modality_windows(tracks,fps,progress=report)
+    report(0,1,"Writing modality proposals and metadata");modality_bouts=windows_to_bouts(modality_windows,fps)
     modality_windows.to_csv(out/"modality_window_proposals.csv",index=False)
     modality_bouts.to_csv(out/"modality_bouts_for_review.csv",index=False)
     (out/"analysis_rois.json").write_text(json.dumps({
