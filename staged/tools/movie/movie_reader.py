@@ -105,6 +105,23 @@ class Movie:
                     "dynamic range; prefer >=12-bit for quantitative calcium.")
         return f"{self.bit_depth}-bit, no lossy compression: intensity is quantitative."
 
+    # ---- frame count exactness ------------------------------------------
+    # For TIFFs, image sequences and single images the count is known exactly
+    # the moment the source is opened.  Compressed video is the exception: an
+    # exact count costs a full decode pass, so VideoMovie opens with a cheap
+    # container ESTIMATE and only pays for exactness when someone asks.
+    #
+    # Anything that feeds a reported measurement (notably `analyze`, where a
+    # blank end-frame means "to the last frame" and therefore sets
+    # coverage_fraction) MUST call ensure_exact_n_frames() first.  Interactive
+    # code - previews, ROI drawing, scrubbing - should not: the estimate is
+    # what makes opening a movie instant.
+    n_frames_is_exact: bool = True
+
+    def ensure_exact_n_frames(self) -> int:
+        """Return an exact frame count, computing it if necessary."""
+        return self.n_frames
+
     # ---- frame access (subclasses implement _read_frame) ----
     def _read_frame(self, i: int) -> np.ndarray:
         raise NotImplementedError
@@ -114,7 +131,17 @@ class Movie:
             i += self.n_frames
         if not (0 <= i < self.n_frames):
             raise IndexError(f"frame {i} out of range 0..{self.n_frames - 1}")
-        return self._read_frame(i)
+        try:
+            return self._read_frame(i)
+        except IndexError:
+            raise
+        except Exception:
+            # An estimated count can overshoot the real end of the stream, so a
+            # read past the end is a range error, not a decode failure.
+            if not self.n_frames_is_exact and i >= self.ensure_exact_n_frames():
+                raise IndexError(
+                    f"frame {i} out of range 0..{self.n_frames - 1}") from None
+            raise
 
     def frames(self, start: int = 0, stop: Optional[int] = None,
                step: int = 1) -> Iterator[np.ndarray]:
@@ -238,7 +265,13 @@ class ImageSequenceMovie(Movie):
 # Video container (mp4/avi/...). imageio-ffmpeg first, cv2 fallback.
 # --------------------------------------------------------------------------- #
 class VideoMovie(Movie):
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, exact_count: bool = True):
+        # exact_count=True (the default) preserves the historical behaviour: the
+        # frame count is exact the moment the movie is open, at the cost of a
+        # full decode pass.  Interactive callers that only need previews may
+        # pass exact_count=False for an instant open with an approximate count,
+        # but MUST call ensure_exact_n_frames() before any reported number.
+        self._exact_count = bool(exact_count)
         self._backend = None
         n = h = w = c = 0
         dtype = np.uint8
@@ -271,12 +304,55 @@ class VideoMovie(Movie):
             c = 3
             dtype = np.uint8
             self._backend = "cv2"
+        # An exact count costs a full decode pass - on a 126 MB 4K clip that is
+        # ~170 s, and it used to be paid on EVERY open, including opens that
+        # only wanted one preview frame.  Take a cheap container estimate here
+        # and defer the exact count to ensure_exact_n_frames().
+        exact = bool(n)
         if not n:
-            n = self._count_frames(path)
+            if self._exact_count:
+                n = self._count_frames(path); exact = True
+            else:
+                n = self._estimate_frames(path, fps)
         super().__init__(path=path, source_kind="video", n_frames=int(n),
                          height=int(h), width=int(w), n_channels=int(c),
                          dtype=dtype, fps=fps, backend=self._backend, lossy=True,
                          metadata={})
+        self.n_frames_is_exact = exact
+
+    def _estimate_frames(self, path, fps):
+        """Cheap, approximate frame count from container metadata (~0.3 s).
+
+        Deliberately approximate: containers over- and under-report, so this
+        may be off by a handful of frames either way.  It exists so the UI can
+        open instantly; it must never reach a reported measurement.
+        """
+        try:
+            import cv2
+            cap = cv2.VideoCapture(str(path))
+            try:
+                count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            finally:
+                cap.release()
+            if count > 0:
+                return count
+        except Exception:
+            pass
+        try:                                    # duration x rate as a fallback
+            meta = self._iio.immeta(str(path)) if self._iio is not None else {}
+            duration = float(meta.get("duration") or 0)
+            rate = float(fps or meta.get("fps") or 0)
+            if duration > 0 and rate > 0:
+                return max(1, int(round(duration * rate)))
+        except Exception:
+            pass
+        return self._count_frames(path)         # nothing cheap worked
+
+    def ensure_exact_n_frames(self):
+        if not self.n_frames_is_exact:
+            self.n_frames = int(self._count_frames(self.path))
+            self.n_frames_is_exact = True
+        return self.n_frames
 
     def _count_frames(self, path):
         # last resort: iterate once to count (bounded to a sane cap)
@@ -428,8 +504,15 @@ class VideoMovie(Movie):
 # --------------------------------------------------------------------------- #
 # Factory
 # --------------------------------------------------------------------------- #
-def open_movie(path: str | Path) -> Movie:
-    """Open any supported source behind the uniform Movie interface."""
+def open_movie(path: str | Path, *, exact_count: bool = True) -> Movie:
+    """Open any supported source behind the uniform Movie interface.
+
+    ``exact_count=False`` lets a compressed video open instantly with an
+    approximate frame count instead of paying for a full decode pass (~123 s on
+    a 126 MB 4K clip, vs ~3 s).  Only interactive/preview code should use it;
+    call ``ensure_exact_n_frames()`` before anything that reaches a result.
+    Non-video sources are always exact and ignore the flag.
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(path)
@@ -444,7 +527,7 @@ def open_movie(path: str | Path) -> Movie:
 
     ext = path.suffix.lower()
     if ext in VIDEO_EXTS:
-        return VideoMovie(path)
+        return VideoMovie(path, exact_count=exact_count)
     if ext in TIFF_EXTS:
         return TiffMovie(path)
     if ext in IMAGE_EXTS:

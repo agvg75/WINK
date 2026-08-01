@@ -27,8 +27,20 @@ SPINE_POINTS = 25
 MODALITIES = ("swimming", "crawling", "burrowing", "uncertain")
 
 
-def _ordered_spine(component, points=SPINE_POINTS):
-    """Longest endpoint-to-endpoint skeleton path, resampled to fixed points."""
+SPINE_METHODS = ("morphological", "thinning")
+SPINE_METHOD_DEFAULT = "morphological"
+
+
+def _morphological_skeleton(component):
+    """Erosion-residue skeleton. The historical WINK method, kept as the default
+    so existing results remain reproducible.
+
+    Known weakness: the residue is not guaranteed connected. Masks thicker than
+    a few pixels can skeletonise into several disconnected pieces, in which case
+    the longest-path search below can only traverse one piece - yielding either
+    no spine at all or a spine describing part of the animal. Compare against
+    ``thinning`` on your own recording before trusting it on thick masks.
+    """
     image = np.uint8(component > 0) * 255
     skel = np.zeros_like(image)
     element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
@@ -36,8 +48,47 @@ def _ordered_spine(component, points=SPINE_POINTS):
         eroded = cv2.erode(image, element)
         opened = cv2.dilate(eroded, element)
         skel = cv2.bitwise_or(skel, cv2.subtract(image, opened))
+        # TERMINATION GUARD. cv2.erode treats the border as maximal, so it never
+        # erodes inward from the crop edge. A component that fills its own
+        # bounding box therefore erodes to itself: `image` stops changing,
+        # countNonZero never reaches zero, and this loop spins forever at 100%
+        # CPU. That is reachable in normal use - `min_area` is scaled by
+        # detection_scale**2, so a 25% proxy admits ~2 px components, and any
+        # tiny solid blob fills its bounding box.
+        #
+        # Breaking at the fixed point is output-preserving: for every mask that
+        # already terminated the loop is unchanged, and a mask that hung
+        # produced no result at all.
+        if np.array_equal(eroded, image):
+            break
         image = eroded
-    skel = skel > 0
+    return skel > 0
+
+
+def _thinning_skeleton(component):
+    """Zhang-Suen/Lee thinning (scikit-image). Produces a single connected
+    curve for a worm-shaped mask regardless of thickness.
+
+    Not a speed optimisation - measured slower than the morphological loop on
+    large crops - but it does not fragment, so the extracted spine spans the
+    whole animal.
+    """
+    from skimage.morphology import skeletonize
+    return np.asarray(skeletonize(np.asarray(component) > 0))
+
+
+def _skeleton(component, method=SPINE_METHOD_DEFAULT):
+    if method == "thinning":
+        try:
+            return _thinning_skeleton(component)
+        except Exception:
+            return _morphological_skeleton(component)
+    return _morphological_skeleton(component)
+
+
+def _ordered_spine(component, points=SPINE_POINTS, method=SPINE_METHOD_DEFAULT):
+    """Longest endpoint-to-endpoint skeleton path, resampled to fixed points."""
+    skel = _skeleton(component, method)
     pixels = np.argwhere(skel)
     if len(pixels) < 8:
         return None
@@ -297,13 +348,28 @@ def _point_in_any_roi(x, y, roi_records):
 
 
 class FrameSource:
-    """Lazy, indexable frames from a video, TIFF stack, or image folder."""
-    def __init__(self, source):
+    """Lazy, indexable frames from a video, TIFF stack, or image folder.
+
+    ``fast=True`` opens a compressed video without the full decode pass that an
+    exact frame count costs, for previews/ROI drawing/scrubbing.  The length is
+    then approximate until :meth:`ensure_exact_length` is called, so nothing
+    that reaches a reported measurement may use it.
+    """
+    def __init__(self, source, *, fast=False):
         self.source = Path(source)
-        self.movie = open_movie(self.source)
+        self.movie = open_movie(self.source, exact_count=not fast)
 
     def __len__(self):
         return int(self.movie.n_frames)
+
+    @property
+    def length_is_exact(self):
+        return bool(getattr(self.movie, "n_frames_is_exact", True))
+
+    def ensure_exact_length(self):
+        """Pay for an exact frame count. Required before any reported number."""
+        ensure = getattr(self.movie, "ensure_exact_n_frames", None)
+        return int(ensure()) if ensure else int(self.movie.n_frames)
 
     def __getitem__(self, index):
         return self.movie.get_frame(int(index))
@@ -329,8 +395,8 @@ class FrameSource:
         self.movie.close()
 
 
-def list_frames(source):
-    return FrameSource(source)
+def list_frames(source, *, fast=False):
+    return FrameSource(source, fast=fast)
 
 
 def read_gray(frame):
@@ -389,15 +455,61 @@ def _centroid_frequency(track, fps, lo=.2, hi=5):
     return _frequency(frames / float(fps), signal, lo=lo, hi=hi)
 
 
+MANUAL_POINT_COLUMN = "manual_point"
+
+
+def measured_rows(tracks):
+    """Rows that may contribute to a measurement.
+
+    Manually placed points carry identity across frames the detector missed -
+    they say "this animal is here" - but they are human judgement, not a
+    measurement. Speed, coverage, frequency and curvature are therefore
+    computed WITHOUT them; only continuity and identity use them.
+    """
+    if MANUAL_POINT_COLUMN not in tracks:
+        return tracks
+    return tracks[~tracks[MANUAL_POINT_COLUMN].fillna(False).astype(bool)]
+
+
 def summarize_tracks(tracks, fps, scale, actual_frames):
-    """Rebuild track statistics after automatic linking or manual stitching."""
+    """Rebuild track statistics after automatic linking or manual stitching.
+
+    Manual points are excluded from every reported statistic; the count of them
+    is reported per track so a reader can see how much of a track was human-
+    asserted rather than detected.
+    """
     tracks = tracks.sort_values(["track_id", "frame"]).copy()
-    dx = tracks.groupby("track_id")["x"].diff()
-    dy = tracks.groupby("track_id")["y"].diff()
-    tracks["step_px"] = np.hypot(dx, dy)
+    if MANUAL_POINT_COLUMN in tracks:
+        manual_flag = tracks[MANUAL_POINT_COLUMN].fillna(False).astype(bool)
+        manual_counts = manual_flag.groupby(tracks.track_id).sum().to_dict()
+        tracks = tracks.copy()
+        tracks[MANUAL_POINT_COLUMN] = manual_flag
+    else:
+        manual_counts = {}
+    # Steps and speeds are derived from DETECTED positions only; a manual point
+    # would otherwise contribute a human-drawn displacement to a reported speed.
+    measured = measured_rows(tracks)
+    dx = measured.groupby("track_id")["x"].diff()
+    dy = measured.groupby("track_id")["y"].diff()
+    tracks["step_px"] = np.nan
+    tracks.loc[measured.index, "step_px"] = np.hypot(dx, dy)
     tracks["speed_um_s"] = tracks.step_px * fps * scale
     summaries=[]
-    for tid,g in tracks.groupby("track_id"):
+    for tid,g_all in tracks.groupby("track_id"):
+        g=measured_rows(g_all)
+        manual_count=int(manual_counts.get(tid,0))
+        if len(g)<2:
+            # Nothing detected for this track - identity only, no measurement.
+            summaries.append(dict(track_id=int(tid),frames=len(g_all),detected_frames=int(len(g)),
+                manual_points=manual_count,duration_s=float(g_all.time_s.max()-g_all.time_s.min()),
+                coverage_fraction=0.0,activity_fraction=np.nan,mean_speed_um_s=None,
+                spine_bend_frequency_hz=None,centroid_oscillation_frequency_hz=None,
+                curvature_frequency_hz=None,spine_valid_fraction=0.0,
+                edge_fraction=float(g_all.edge.mean()),collision_fraction=np.nan,
+                crossing_ambiguity_fraction=float(g_all.crossing_ambiguous.mean()),
+                eligible_for_frequency=False,needs_review=True,
+                review_reason="no_detected_frames"))
+            continue
         med_area=float(g.area_px.median()); equiv_len=max(2*np.sqrt(med_area),1)
         active_state=(g.step_px*fps/equiv_len)>=.08
         valid=g[np.isfinite(g.midbody_curvature_px_inv)]
@@ -409,7 +521,8 @@ def summarize_tracks(tracks, fps, scale, actual_frames):
         if not eligible: freq=np.nan
         crossing_ambiguous=bool(g.crossing_ambiguous.any())
         review=bool(g.edge.any() or collision.mean()>.05 or crossing_ambiguous or not eligible)
-        summaries.append(dict(track_id=int(tid),frames=len(g),duration_s=float(g.time_s.max()-g.time_s.min()),
+        summaries.append(dict(track_id=int(tid),frames=len(g_all),detected_frames=int(len(g)),
+            manual_points=manual_count,duration_s=float(g.time_s.max()-g.time_s.min()),
             coverage_fraction=float(len(g)/actual_frames),activity_fraction=float(active_state.mean()),
             mean_speed_um_s=float(g.speed_um_s.mean()),spine_bend_frequency_hz=None if not np.isfinite(freq) else freq,
             centroid_oscillation_frequency_hz=None if not np.isfinite(centroid_freq) else centroid_freq,
@@ -422,7 +535,7 @@ def summarize_tracks(tracks, fps, scale, actual_frames):
 
 
 def link_detections(det, max_link_px=60, max_gap_frames=8,
-                    crossing_memory_frames=45):
+                    crossing_memory_frames=45, enforce_speed_limit=True):
     """Link detections while preserving momentum through merged crossings.
 
     Ordinary missing detections use ``max_gap_frames``. When an unassigned
@@ -439,6 +552,14 @@ def link_detections(det, max_link_px=60, max_gap_frames=8,
                 s=active[tid]; gap=fi-s["frame"]
                 predicted.append([s["x"]+s["vx"]*gap,s["y"]+s["vy"]*gap])
             position_cost=np.linalg.norm(np.asarray(predicted)[:,None,:]-cur[None,:,:],axis=2)
+            # Distance from where the animal was actually SEEN, not from where
+            # momentum projects it to be. `predicted` drifts by velocity x gap,
+            # so across a long crossing hold the projection can land most of a
+            # frame away and drag the identity onto a different animal. The raw
+            # displacement is the physical quantity: an animal cannot exceed its
+            # own per-frame travel limit however long it went unseen.
+            observed=np.asarray([[active[tid]["x"],active[tid]["y"]] for tid in ids],float)
+            raw_cost=np.linalg.norm(observed[:,None,:]-cur[None,:,:],axis=2)
             cost=position_cost.copy()
             # Prefer the continuation requiring the smallest heading and speed
             # change, not merely the nearest endpoint after a crossing.
@@ -457,7 +578,9 @@ def link_detections(det, max_link_px=60, max_gap_frames=8,
             for r,c in zip(rr,cc):
                 gap=fi-active[ids[r]]["frame"]
                 gate=max_link_px*np.sqrt(max(gap,1))
-                if position_cost[r,c]<=gate and cost[r,c]<=1.45*gate:
+                speed_limit=(max_link_px*max(gap,1)) if enforce_speed_limit else np.inf
+                if (position_cost[r,c]<=gate and cost[r,c]<=1.45*gate
+                        and raw_cost[r,c]<=speed_limit):
                     assigned[c]=ids[r]; errors[c]=float(position_cost[r,c])
                     alternatives=np.delete(cost[:,c],r)
                     ambiguous[c]=bool(len(alternatives) and np.min(alternatives)-cost[r,c] < max(4.0,.12*gate))
@@ -501,7 +624,7 @@ def link_detections(det, max_link_px=60, max_gap_frames=8,
 
 
 def _attach_selective_spines(tracks, fps, detection_scale, target_spine_fps=15.0,
-                             progress=None):
+                             progress=None, spine_method=SPINE_METHOD_DEFAULT):
     """Detailed second pass on already-linked plausible objects.
 
     Component crops were packed during the fast pass, so this never rescans or
@@ -562,7 +685,7 @@ def _attach_selective_spines(tracks, fps, detection_scale, target_spine_fps=15.0
                              f"{group_number}/{total_groups} "
                              f"({chosen_number}/{chosen_count})")
                 continue
-            spine=_ordered_spine(component)
+            spine=_ordered_spine(component,method=spine_method)
             if spine is None:
                 tracks.at[row_index,"spine_skip_reason"]="no_valid_skeleton_path"
                 continue
@@ -593,7 +716,8 @@ def analyze(source, fps, um_per_px, output_dir=None, min_area=40, max_area=2500,
             single_pass_background=False,cache_two_pass_proxy=False,
             low_resolution_background=False,selective_background_decode=False,
             direct_uint8_proxy=True,locked_tracks=None,
-            locked_exclusion_radius_px=40.0):
+            locked_exclusion_radius_px=40.0,
+            spine_method=SPINE_METHOD_DEFAULT):
     run_started=time.perf_counter();timings={};detection_scale=float(detection_scale)
     if detection_scale not in (1.0,0.5,0.25):
         raise ValueError("Detection scale must be 1.0, 0.5, or 0.25.")
@@ -611,6 +735,12 @@ def analyze(source, fps, um_per_px, output_dir=None, min_area=40, max_area=2500,
         except TypeError:progress(done,total)
     load_started=time.perf_counter()
     files=list_frames(source); fps=float(fps); scale=float(um_per_px)
+    # A blank end frame means "to the last frame", so len(files) sets
+    # selected_count and therefore coverage_fraction. Interactive callers run on
+    # a cheap container estimate; analysis must not. Force the exact count here,
+    # by the same method as before, so reported numbers are unchanged.
+    report(0,1,"Indexing frames")
+    files.ensure_exact_length()
     if len(files) < 2:
         files.close()
         raise ValueError("Population swimming requires a multi-frame movie, stack, or image sequence.")
@@ -788,7 +918,7 @@ def analyze(source, fps, um_per_px, output_dir=None, min_area=40, max_area=2500,
     spine_stride=1;detailed_tracks=int(tracks.track_id.nunique());detailed_frames=int(tracks.spine_valid.sum())
     if fast_first_pass:
         spine_started=time.perf_counter();tracks,spine_stride,detailed_tracks,detailed_frames=_attach_selective_spines(
-            tracks,fps,detection_scale,progress=report)
+            tracks,fps,detection_scale,progress=report,spine_method=spine_method)
         timings["selective_detailed_spines_s"]=time.perf_counter()-spine_started
     tracks=tracks.drop(columns=[c for c in ("_packed_mask","_mask_shape","_bbox_x0","_bbox_y0") if c in tracks],errors="ignore")
     report(0,1,"Orienting spines and calculating summaries");tracks=_orient_spines(tracks)
@@ -820,6 +950,8 @@ def analyze(source, fps, um_per_px, output_dir=None, min_area=40, max_area=2500,
         "mode":roi_mode,"rule":"component centroid inside union of supplied ROIs",
         "rois":roi_records},indent=2),encoding="utf-8")
     meta={**acquisition.as_columns(),
+          "source_frame_width":int(files.movie.width),
+          "source_frame_height":int(files.movie.height),
           "n_frames":actual_frames,"source_frame_start_1_based":start_frame,
           "source_frame_end_1_based":end_frame,"source_total_frames":len(files),
           "n_candidate_tracks":len(summary),"min_area_px":min_area,"max_area_px":max_area,
@@ -841,6 +973,13 @@ def analyze(source, fps, um_per_px, output_dir=None, min_area=40, max_area=2500,
           "detailed_spine_stride_frames":int(spine_stride),
           "detailed_spine_tracks":int(detailed_tracks),
           "detailed_spine_frames":int(detailed_frames),
+          "spine_skeleton_method":str(spine_method),
+          "spine_skeleton_method_note":(
+              "morphological = erosion-residue skeleton (historical default; can "
+              "fragment on masks more than a few pixels thick, yielding a partial "
+              "spine or none). thinning = scikit-image Zhang-Suen/Lee thinning "
+              "(stays connected). Spine, curvature and bend frequency depend on "
+              "this choice, so results from different methods are not comparable."),
           "roi_mode":roi_mode,"roi_count":len(roi_records),
           "roi_rule":"none" if roi_mode=="none" else f"{roi_mode} detections by component centroid within the union of optional ROIs",
           "frequency_definition":"dominant lateral centroid oscillation about the smoothed trajectory; signed midbody spine curvature is retained as a fallback and diagnostic",
@@ -867,7 +1006,8 @@ def analyze(source, fps, um_per_px, output_dir=None, min_area=40, max_area=2500,
             "direct_uint8_proxy":bool(direct_uint8_proxy),
             "locked_track_count":len(locked_track_ids),
             "fast_wrmtrck_style_first_pass":bool(fast_first_pass),
-            "detailed_spine_stride_frames":int(spine_stride)},
+            "detailed_spine_stride_frames":int(spine_stride),
+            "spine_skeleton_method":str(spine_method)},
         "frames_analyzed":actual_frames,"frame_pixels_processed":int(background.size),
         "timings_seconds":{k:round(float(v),4) for k,v in timings.items()}},indent=2),encoding="utf-8")
     files.close()

@@ -47,6 +47,89 @@ class VirtualFrameStack:
         self._cache.clear();self.movie.close()
 
 
+class ProxyFrameStack:
+    """Low-resolution, frame-addressable copy of a movie, built in ONE pass.
+
+    Random access into a compressed video costs a re-decode from the start of
+    the file (seconds per frame on a 4K clip), which makes scrubbing and
+    playback unusable.  This streams the movie once - letting the decoder do
+    the downscaling where possible - into a disk-backed array, after which any
+    frame is available instantly.
+
+    ``scale`` is the proxy-to-source ratio, so source coordinates map onto the
+    proxy by multiplying by ``scale``.  ``len()`` reports the number of frames
+    ACTUALLY decoded, which may differ from the movie's declared count.
+    """
+    is_virtual_stack = True
+
+    @classmethod
+    def build(cls, frame_iter, width, height, n_frames, *, max_side=720,
+              progress=None):
+        """``frame_iter(scale)`` yields 2-D grayscale frames at that scale."""
+        width = int(width); height = int(height); n_frames = max(1, int(n_frames))
+        longest = max(width, height)
+        scale = 1.0 if longest <= max_side else float(max_side) / float(longest)
+        out_w = max(2, int(round(width * scale)))
+        out_h = max(2, int(round(height * scale)))
+
+        handle = tempfile.NamedTemporaryFile(prefix="wink_proxy_", suffix=".npy",
+                                             delete=False)
+        path = Path(handle.name); handle.close()
+        # Allocate for the declared count, then truncate to what really decoded.
+        data = np.lib.format.open_memmap(path, mode="w+", dtype=np.uint8,
+                                         shape=(n_frames, out_h, out_w))
+        written = 0
+        try:
+            for frame in frame_iter(scale):
+                if written >= n_frames:
+                    break
+                frame = np.asarray(frame)
+                if frame.ndim == 3:
+                    frame = frame[..., :3].mean(axis=2)
+                if frame.shape != (out_h, out_w):
+                    ys = np.linspace(0, frame.shape[0] - 1, out_h).astype(int)
+                    xs = np.linspace(0, frame.shape[1] - 1, out_w).astype(int)
+                    frame = frame[np.ix_(ys, xs)]
+                data[written] = np.clip(frame, 0, 255).astype(np.uint8)
+                written += 1
+                if progress and (written % 25 == 0 or written == n_frames):
+                    progress(written, n_frames, "Building preview proxy")
+        except Exception:
+            try:
+                mm = getattr(data, "_mmap", None)
+                if mm is not None:
+                    mm.close()
+            except Exception:
+                pass
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            raise
+        data.flush()
+        return cls(path, data[:written] if written < n_frames else data, scale)
+
+    def __init__(self, path, data, scale):
+        self.path = Path(path); self.data = data; self.scale = float(scale)
+        self.shape = data.shape; self.ndim = 3; self.dtype = data.dtype
+        atexit.register(self._cleanup_path)
+
+    def __len__(self): return int(self.shape[0])
+    def __getitem__(self, key): return self.data[key]
+
+    def close(self):
+        mmap = getattr(self.data, "_mmap", None)
+        if mmap is not None:
+            try: mmap.close()
+            except Exception: pass
+        self.data = None
+        self._cleanup_path()
+
+    def _cleanup_path(self):
+        try: self.path.unlink()
+        except OSError: pass
+
+
 class DiskBackedFrameStack:
     """Numpy-compatible temporary stack stored on disk rather than in RAM."""
     is_virtual_stack=True

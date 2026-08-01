@@ -424,6 +424,18 @@ var REFIMG="";
 var MAINIMG="";
 var LASTMYON=0;
 var SCHEMSHOWN=false;
+// Failure library: auto-capture a before/after image pair whenever the operator
+// corrects the automatic sarcomere detection (Edit ticks / Manual), so the lab
+// builds a browsable record of where the detector was wrong and how a human
+// fixed it. Set CAPTURE_FAILURES=false to turn the whole feature off. Pairs land
+// under <output>\failure_library\myocyte\<id>\ (before.png, after.png, meta.json);
+// point the session output folder at a shared location to pool across students.
+// Failure library: OFF (4th live-test break, 2026-08-01, same symptom even
+// with zero unproven Fiji calls + try/catch). Root cause not yet actually
+// seen - only inferred from symptom description each time. Not touching this
+// again until the real error text/screenshot is in hand and it's confirmed
+// (by testing with this flag false) whether this code is even the cause.
+var CAPTURE_FAILURES=false;
 // Cache of the last measured myocyte's sarcomere line and context, so a
 // blind hand recount can reuse the exact same boundary and line without
 // redrawing. See blindRecount().
@@ -624,6 +636,12 @@ function perImageMeta(){
 
 // ---------------------------------------------------------------------------
 function measureMyocyte(){
+    // Reset failure-library correction flags for THIS myocyte. Without this, a
+    // myocyte that skips sarcomeres entirely (so detectWaves() never runs) could
+    // otherwise inherit a stale fiberCorrectedAny=true left over from an earlier
+    // myocyte and wrongly appear "corrected" to queueMyoFailureBreadcrumb().
+    fiberCorrectedAny=false; failAutoW=0; failAutoL=0;
+
     // guard against the schematic (or any other window) being left active
     if (MAINIMG!="" && isOpen(MAINIMG) && getTitle()!=MAINIMG) selectWindow(MAINIMG);
 
@@ -865,6 +883,8 @@ function measureMyocyte(){
                 editDetectedTicks(ax1,ay1,ax2,ay2,zpos);
                 sarcMode="EDITED"; sarcQual="EDITED";
                 sarcN=E_n; sarcMean=E_mean; sarcSd=E_sd; sarcCv=E_cv;
+                // Failure-library breadcrumb (if any) is queued once, at the very
+                // end of measureMyocyte() - see queueMyoFailureBreadcrumb().
             } else if (v==vo[2]){
                 manualClicks(ax1,ay1,ax2,ay2);
                 sarcMode="MANUAL"; sarcQual="MANUAL";
@@ -934,6 +954,13 @@ function measureMyocyte(){
     Overlay.drawString(lbl, bx+bw/2, by+bh/2);
     Overlay.show();
     run("Select None");
+
+    // Failure-library breadcrumb: a plain-data JSON only (see
+    // queueMyoFailureBreadcrumb() - no image windows touched at all). Runs
+    // after the row write and the block above, so it cannot interfere with
+    // anything the tool still needs. No-op if nothing was corrected.
+    if (CAPTURE_FAILURES) queueMyoFailureBreadcrumb();
+
     // Cache this line/context so a blind hand recount can be done later on
     // the EXACT same boundary and line, without redrawing, for validation
     // (this lab's own, and for future users doing their own sanity check).
@@ -1178,6 +1205,80 @@ function manualClicks(x1,y1,x2,y2){
     if (M_mean>0) M_cv=M_sd/M_mean;
 }
 
+// ---------------------------------------------------------------------------
+//  Failure library: lightweight breadcrumb, rendered to images OFFLINE
+// ---------------------------------------------------------------------------
+// This function does ZERO image-window operations - no Duplicate, no Flatten,
+// no open/close of any window. Earlier versions of this feature used those
+// commands (even AFTER the tool's own Restore Selection step) and repeatedly
+// stalled the tool during live use, most likely on an interactive dialog
+// appearing off-screen. The operations below (roiManager Select,
+// getSelectionBounds, Select None, File.saveString) are the SAME calls this
+// tool already makes constantly elsewhere without incident, so this cannot
+// reproduce that failure mode. It writes only a small JSON "breadcrumb" -
+// which myocyte, what was corrected, the auto-vs-corrected numbers, and the
+// ROI's pixel bounding box - to <output>\failure_queue\<id>.json. A separate
+// script (tools/failure_library/render_failure_queue.py), run AFTER the Fiji
+// session ends, reads these breadcrumbs and crops the actual source image
+// with plain Python/PIL - never Fiji, never while a measurement is running.
+function queueMyoFailureBreadcrumb(){
+    // Every call below is one this exact tool ALREADY makes successfully
+    // elsewhere (roiManager Select, getSelectionBounds, Select None,
+    // cleanTitle, sanitizeForFilename, tstamp, File.*) - no function is used
+    // here that isn't already proven safe in this file. Earlier attempts broke
+    // twice, both times on a Fiji call NEW to this codebase (Duplicate/Flatten,
+    // then getDirectory/String.replace) - deliberately not repeating that
+    // mistake a third time. The source image's folder is intentionally NOT
+    // recorded here (that needed the unproven getDirectory/String.replace); the
+    // offline renderer locates it by searching for image_title instead. Wrapped
+    // in try/catch as a backstop regardless.
+    try {
+        sarcCorrected = (sarcMode=="EDITED" || sarcMode=="MANUAL");
+        if (!sarcCorrected && !fiberCorrectedAny) return;   // nothing was corrected
+        if (roiManager("count")<=0) return;
+        roiManager("Select", roiManager("count")-1);
+        getSelectionBounds(bx,by,bw,bh);
+        run("Select None");   // already used this way throughout the rest of the tool
+
+        correctedAspects="";
+        if (sarcCorrected) correctedAspects=correctedAspects+"sarcomere_ticks";
+        if (fiberCorrectedAny){
+            if (correctedAspects!="") correctedAspects=correctedAspects+"+";
+            correctedAspects=correctedAspects+"fiber_waviness";
+        }
+        gtxt=GENOTYPE; if (BLIND) gtxt="BLINDED";
+
+        rec="{\n";
+        rec=rec+"  \"tool\": \"myocyte_morphometry\",\n";
+        rec=rec+"  \"queued\": \""+tstamp()+"\",\n";
+        rec=rec+"  \"worm_id\": \""+cleanTitle(WORMID)+"\",\n";
+        rec=rec+"  \"genotype\": \""+gtxt+"\",\n";
+        rec=rec+"  \"day\": \""+DAY+"\",\n";
+        rec=rec+"  \"region\": \""+REGION+"\",\n";
+        rec=rec+"  \"myocyte_id\": "+myoCounter+",\n";
+        rec=rec+"  \"um_px\": "+d2s(UMPX,5)+",\n";
+        rec=rec+"  \"corrected_aspects\": \""+correctedAspects+"\",\n";
+        rec=rec+"  \"sarc_mode\": \""+sarcMode+"\",\n";
+        rec=rec+"  \"auto_sarc_number\": "+lenN+",\n";
+        rec=rec+"  \"auto_sarc_length_um\": "+d2s(lenMean,4)+",\n";
+        rec=rec+"  \"corrected_sarc_number\": "+sarcN+",\n";
+        rec=rec+"  \"corrected_sarc_length_um\": "+d2s(sarcMean,4)+",\n";
+        rec=rec+"  \"auto_wavy_fiber_count\": "+failAutoW+",\n";
+        rec=rec+"  \"auto_lowconf_fiber_count\": "+failAutoL+",\n";
+        rec=rec+"  \"corrected_wavy_fiber_count\": "+WAVE_N_AFFECTED+",\n";
+        rec=rec+"  \"corrected_lowconf_fiber_count\": "+WAVE_N_LOWCONF+",\n";
+        rec=rec+"  \"image_title\": \""+cleanTitle(getTitle())+"\",\n";
+        rec=rec+"  \"roi_bbox_px\": ["+bx+", "+by+", "+bw+", "+bh+"]\n";
+        rec=rec+"}\n";
+
+        File.makeDirectory(OUTDIR+"failure_queue");
+        id = sanitizeForFilename(WORMID)+"_m"+myoCounter+"_"+tstamp();
+        File.saveString(rec, OUTDIR+"failure_queue"+File.separator+id+".json");
+    } catch (err) {
+        print("[Myocyte_Morphometry] failure-library breadcrumb skipped: "+err);
+    }
+}
+
 // Blind hand recount of the sarcomere line from the last myocyte measured,
 // WITHOUT redrawing the boundary. Reuses the exact same line coordinates
 // and geometry, so the only thing that differs between this row and the
@@ -1416,6 +1517,10 @@ function detectWaves(zpos, ax1, ay1, mux, muy, nux, nuy, feretUm){
 
     reclassify = true;
     reviewing = true;
+    // Failure library: capture the auto fiber classification (before) once, and
+    // only save a pair if the operator actually relabels a fiber below.
+    fiberCorrectedAny = false;
+    failAutoW = 0; failAutoL = 0;
     while (reviewing){
         if (reclassify){
             // strip this function's own overlay items from a prior pass
@@ -1495,6 +1600,13 @@ function detectWaves(zpos, ax1, ay1, mux, muy, nux, nuy, feretUm){
 
         nW=0; nL=0;
         for (fi=0; fi<nFibers; fi++){ if (fiberClass[fi]==1) nW++; if (fiberClass[fi]==2) nL++; }
+        // Record the automatic wavy/low-confidence counts as plain numbers,
+        // before any correction (re-taken on a Retry, frozen once a correction
+        // happens). Written to the breadcrumb queue at the very end of
+        // measureMyocyte() - see queueMyoFailureBreadcrumb().
+        if (CAPTURE_FAILURES && !fiberCorrectedAny){
+            failAutoW=nW; failAutoL=nL;
+        }
         Dialog.create("Wave detection result");
         Dialog.addMessage("Detected "+nW+" wavy, "+nL+" low-confidence, "
             +(nFibers-nW-nL)+" straight, of "+nFibers+" fibers.\n"
@@ -1524,7 +1636,13 @@ function detectWaves(zpos, ax1, ay1, mux, muy, nux, nuy, feretUm){
             // bookkeeping that would otherwise need.
             correcting=true;
             while (correcting){
-                if (myoRoiIndex>=0) roiManager("Select", myoRoiIndex);
+                // Clear any active selection (especially the myocyte boundary
+                // polygon) BEFORE asking for the click. Leaving the polygon active
+                // made the operator's click land on it instead of creating a fresh
+                // point, so selectionType() stayed !=10, the correction exited
+                // immediately, and the same dialog kept reappearing. The tracing
+                // loop below re-selects the myocyte ROI itself where it needs it.
+                run("Select None");
                 setTool("multipoint");
                 waitForUser("Correct a fiber",
                     "Click ON the fiber you want to relabel, then click OK.\n"
@@ -1570,6 +1688,7 @@ function detectWaves(zpos, ax1, ay1, mux, muy, nux, nuy, feretUm){
                 else if (pickLabel=="Low confidence") newCls=2;
                 fiberClass[bestFi]=newCls;
                 if (newCls!=1) fiberLenFrac[bestFi]=0;
+                fiberCorrectedAny=true;   // a real relabel happened -> save a pair
 
                 // redraw just the corrected fiber, on top of its old
                 // overlay line in the new color; the retrace is
@@ -1617,6 +1736,9 @@ function detectWaves(zpos, ax1, ay1, mux, muy, nux, nuy, feretUm){
         WAVE_LEN_MEAN_FRAC = lfMean;
         WAVE_LEN_MAX_FRAC = lfMax;
     }
+    // Failure-library breadcrumb (if this myocyte was corrected) is queued in
+    // queueMyoFailureBreadcrumb(), called once at the very end of
+    // measureMyocyte() - not here, so it never runs mid-measurement.
 }
 
 // Session-level dialog to retune the five wave detection parameters.
