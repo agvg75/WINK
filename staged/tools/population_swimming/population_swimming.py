@@ -221,8 +221,19 @@ def _wave_direction(curves):
     return float(lag)
 
 
-def classify_modality_windows(tracks, fps, window_s=4.0, step_s=1.0, progress=None):
-    """Generate conservative, reviewable modality proposals."""
+def classify_modality_windows(tracks, fps, window_s=4.0, step_s=1.0, progress=None,
+                              spine_stride=1, min_spine_evidence=.65):
+    """Generate conservative, reviewable modality proposals.
+
+    ``spine_stride`` is the frame interval at which spines were ATTEMPTED - the
+    detailed pass deliberately samples at about 15 Hz rather than every frame.
+    The posture gate is therefore measured against attempted frames, not against
+    every frame in the window: at 30 fps the stride is 2, so a window with a
+    perfect skeleton on every attempted frame still only carries curvature on
+    ~50% of its frames, and a gate expressed against all frames is unreachable
+    by construction. That made every proposal "uncertain" on any recording at
+    30 fps or above, regardless of data quality.
+    """
     rows = []
     width = max(12, int(round(window_s * fps)))
     step = max(1, int(round(step_s * fps)))
@@ -258,11 +269,21 @@ def classify_modality_windows(tracks, fps, window_s=4.0, step_s=1.0, progress=No
                     continue
                 curves.append(curve)
                 scores.append(score_by_frame[int(frame_value)])
-            valid = len(curves) / max(len(window), 1)
+            # Spines exist only on attempted frames; judge coverage against those.
+            stride = max(1, int(spine_stride))
+            attempted = max(1, int(np.ceil(len(window) / stride)))
+            spine_frames_used = len(curves)
+            # `attempted` is an estimate: a window need not start on a stride
+            # boundary, so it can under-count by one and push the ratio slightly
+            # over 1. Report a fraction, not a number that reads as >100%.
+            valid = min(1.0, spine_frames_used / attempted)
+            valid_of_all_frames = spine_frames_used / max(len(window), 1)
+            spine_rate_hz = (spine_frames_used / (len(window) / float(fps))
+                             if len(window) else np.nan)
             valid_signal = window[np.isfinite(window.midbody_curvature_px_inv)]
             curvature_freq = (_frequency(valid_signal.time_s.to_numpy(),
                                          valid_signal.midbody_curvature_px_inv.to_numpy())
-                              if valid >= .65 else np.nan)
+                              if valid >= min_spine_evidence else np.nan)
             centroid_freq = _centroid_frequency(window, fps)
             freq = centroid_freq if np.isfinite(centroid_freq) else curvature_freq
             c_score, s_score, w_score = (np.nanmean(np.asarray(scores)[:, i]) if scores else np.nan for i in range(3))
@@ -270,8 +291,22 @@ def classify_modality_windows(tracks, fps, window_s=4.0, step_s=1.0, progress=No
             wave_lag = _wave_direction(curves)
             collision = float(((window.area_px > 1.8 * window.area_px.median()) |
                                (window.elongation < 1.35)).mean())
-            label, confidence, reason = "uncertain", 0.0, "insufficient_spine_or_track_coverage"
-            if coverage >= .7 and valid >= .65 and collision <= .1 and np.isfinite(freq):
+            # Distinguish WHY a window is uncertain: too little of the animal
+            # tracked, too little posture evidence, a collision, no usable
+            # frequency, or genuinely overlapping evidence. They call for
+            # different actions and were previously indistinguishable.
+            if coverage < .7:
+                reason = "insufficient_track_coverage"
+            elif valid < min_spine_evidence:
+                reason = "insufficient_spine_evidence"
+            elif collision > .1:
+                reason = "possible_collision_in_window"
+            elif not np.isfinite(freq):
+                reason = "no_usable_frequency"
+            else:
+                reason = "overlapping_modality_evidence"
+            label, confidence = "uncertain", 0.0
+            if coverage >= .7 and valid >= min_spine_evidence and collision <= .1 and np.isfinite(freq):
                 evidence = {
                     "swimming": .55 * c_score + .45 * np.clip((freq - .6) / .4, 0, 1),
                     "crawling": .70 * s_score + .30 * np.clip(1 - abs(freq - .4) / .3, 0, 1),
@@ -294,7 +329,14 @@ def classify_modality_windows(tracks, fps, window_s=4.0, step_s=1.0, progress=No
                 curvature_frequency_hz=curvature_freq,
                 median_speed_um_s=speed, c_score=c_score, s_score=s_score, w_score=w_score,
                 posterior_wave_lag_frames=wave_lag, coverage_fraction=coverage,
-                spine_valid_fraction=valid, collision_fraction=collision, proposal_reason=reason))
+                spine_valid_fraction=valid, collision_fraction=collision, proposal_reason=reason,
+                # Provenance: how much real posture evidence backs this window.
+                spine_frames_used=int(spine_frames_used),
+                spine_frames_attempted=int(attempted),
+                spine_stride_frames=int(stride),
+                spine_sampling_rate_hz=float(spine_rate_hz),
+                spine_fraction_of_all_frames=float(valid_of_all_frames),
+                window_frames=int(len(window))))
         if progress is not None:
             try:
                 progress(track_index + 1, n_tracks, "Classifying locomotion modality")
@@ -334,6 +376,16 @@ def windows_to_bouts(windows, fps):
                 median_speed_um_s=float(block.median_speed_um_s.median()),
                 c_score=float(block.c_score.mean()), s_score=float(block.s_score.mean()),
                 w_score=float(block.w_score.mean()), review_status="pending",
+                # Posture provenance carried through to the bout a human reviews.
+                spine_frames_used=int(block.spine_frames_used.sum())
+                    if "spine_frames_used" in block else 0,
+                spine_frames_attempted=int(block.spine_frames_attempted.sum())
+                    if "spine_frames_attempted" in block else 0,
+                spine_evidence_fraction=float(block.spine_valid_fraction.mean()),
+                spine_sampling_rate_hz=float(block.spine_sampling_rate_hz.mean())
+                    if "spine_sampling_rate_hz" in block else np.nan,
+                proposal_reason=(block.proposal_reason.mode().iloc[0]
+                                 if len(block.proposal_reason.mode()) else ""),
                 reviewed_modality="", reviewer_note=""))
             bout_id += 1
     return pd.DataFrame(bouts)
@@ -942,7 +994,8 @@ def analyze(source, fps, um_per_px, output_dir=None, min_area=40, max_area=2500,
                    else source_path.parent / f"{source_path.stem}_population_swimming_results")
     out=Path(output_dir) if output_dir else default_out; out.mkdir(parents=True,exist_ok=True)
     report(0,1,"Writing tracks and summary tables");export_started=time.perf_counter();tracks.to_csv(out/"detections_and_tracks.csv",index=False); summary.to_csv(out/"track_summary.csv",index=False)
-    modality_windows=classify_modality_windows(tracks,fps,progress=report)
+    modality_windows=classify_modality_windows(tracks,fps,progress=report,
+                                               spine_stride=spine_stride)
     report(0,1,"Writing modality proposals and metadata");modality_bouts=windows_to_bouts(modality_windows,fps)
     modality_windows.to_csv(out/"modality_window_proposals.csv",index=False)
     modality_bouts.to_csv(out/"modality_bouts_for_review.csv",index=False)
