@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import sys
 
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button, Slider
@@ -10,6 +11,9 @@ import numpy as np
 import pandas as pd
 
 from basal_slowing import read_gray
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "app"))
+from process_ui import track_colour
 
 
 class TrackReview:
@@ -25,6 +29,13 @@ class TrackReview:
         self.decisions = {
             int(track_id): "unreviewed"
             for track_id in sorted(tracks.track_id.unique())}
+        # Editing state. `edits` is an audit trail: every structural change a
+        # person makes is recorded so the resulting events can be traced back
+        # to a decision rather than appearing unexplained.
+        self.selection = []          # tracks picked for a join, in click order
+        self.edits = []
+        self.undo_stack = []
+        self.tracks_edited = False
         # This reviewer binds r, c, and the arrow keys, which Matplotlib also
         # binds by default (r=reset view [keymap.home], c=back, arrows=back/
         # forward).  Left in place they would jump/zoom the view underneath the
@@ -50,22 +61,36 @@ class TrackReview:
             slider_ax, "Frame", 0, len(self.files) - 1,
             valinit=0, valstep=1)
         self.slider.on_changed(self._slide)
-        self._button(.84, .72, "Accept track", self.accept_track)
-        self._button(.84, .64, "Reject track", self.reject_track)
-        self._button(.84, .56, "Needs correction", self.flag_track)
-        self._button(.84, .48, "Clear decision", self.clear_decision)
-        self._button(.84, .34, "Previous event", self.previous_event)
-        self._button(.84, .26, "Next event", self.next_event)
-        self._button(.84, .10, "Finish review", self.finish)
+        self._button(.855, .90, "Accept track", self.accept_track)
+        self._button(.855, .845, "Reject track", self.reject_track)
+        self._button(.855, .79, "Needs correction", self.flag_track)
+        self._button(.855, .735, "Clear decision", self.clear_decision)
+        # Editing: a flagged track can now be corrected here rather than only
+        # marked for someone else to deal with later.
+        self._button(.855, .655, "Shift-click: pick 2", None, enabled=False)
+        self._button(.855, .60, "Join selected", self.join_selected)
+        self._button(.855, .545, "Split at frame", self.split_here)
+        self._button(.855, .49, "Trim before frame", self.trim_before)
+        self._button(.855, .435, "Trim after frame", self.trim_after)
+        self._button(.855, .38, "Delete track", self.delete_track)
+        self._button(.855, .325, "Undo edit", self.undo_edit)
+        self._button(.855, .245, "Previous event", self.previous_event)
+        self._button(.855, .19, "Next event", self.next_event)
+        self._button(.855, .10, "Finish review", self.finish)
         self.pick_id = self.fig.canvas.mpl_connect(
             "pick_event", self._pick)
         self.key_id = self.fig.canvas.mpl_connect(
             "key_press_event", self._key)
         self._render()
 
-    def _button(self, left, bottom, label, callback):
-        axes = self.fig.add_axes([left, bottom, .145, .055])
+    def _button(self, left, bottom, label, callback, enabled=True):
+        axes = self.fig.add_axes([left, bottom, .135, .048])
         button = Button(axes, label)
+        if not enabled:                      # a caption, not a control
+            button.label.set_fontsize(7)
+            button.color = button.hovercolor = "#e8e8e8"
+            self.buttons.append(button)
+            return button
         button.on_clicked(callback)
         self.buttons.append(button)
         return button
@@ -87,6 +112,11 @@ class TrackReview:
         self._render()
 
     def _colors(self, group):
+        """Marker colours: the review decision, else where the animal is.
+
+        Position markers carry REGION meaning (in the start ROI, on a lawn),
+        which is why they are not coloured per track - see _trail_colour.
+        """
         colors = []
         for _, row in group.iterrows():
             decision = self.decisions[int(row.track_id)]
@@ -103,6 +133,23 @@ class TrackReview:
             else:
                 colors.append("#7CFC00")
         return colors
+
+    def _trail_colour(self, row):
+        """Trail colours carry IDENTITY, so each animal gets its own.
+
+        Previously every undecided track in the open field was drawn the same
+        green, which made several animals impossible to tell apart. A decided
+        track keeps its decision colour, because that state matters more than
+        identity once a call has been made.
+        """
+        decision = self.decisions[int(row.track_id)]
+        if decision == "rejected":
+            return "#dc2626"
+        if decision == "needs_correction":
+            return "#f59e0b"
+        if decision == "accepted":
+            return "#16a34a"
+        return track_colour(int(row.track_id))
 
     def _render(self):
         self.image_artist.set_data(read_gray(self.files[self.frame]))
@@ -123,8 +170,8 @@ class TrackReview:
                 (self.tracks.frame >= trail_start) &
                 (self.tracks.frame <= self.frame)]
             line, = self.ax.plot(
-                trail.x, trail.y, color=self._colors(
-                    pd.DataFrame([row]))[0], lw=1.2, alpha=.8)
+                trail.x, trail.y, color=self._trail_colour(row),
+                lw=2.2, alpha=.95)
             self.trail_artists.append(line)
             if bool(row.get("spine_valid", False)):
                 try:
@@ -173,9 +220,20 @@ class TrackReview:
         if event.artist is not self.scatter or not len(event.ind):
             return
         index = int(event.ind[0])
-        if index < len(self.current_track_ids):
-            self.selected_track = self.current_track_ids[index]
-            self._render()
+        if index >= len(self.current_track_ids):
+            return
+        track_id = self.current_track_ids[index]
+        shift = getattr(event.mouseevent, "key", None) == "shift"
+        if shift:
+            # Shift builds the pair for a join; a plain click just selects.
+            if track_id in self.selection:
+                self.selection.remove(track_id)
+            elif len(self.selection) < 2:
+                self.selection.append(track_id)
+            else:
+                self.selection = [self.selection[-1], track_id]
+        self.selected_track = track_id
+        self._render()
 
     def _set_decision(self, value):
         if self.selected_track is not None:
@@ -193,6 +251,134 @@ class TrackReview:
 
     def clear_decision(self, _event=None):
         self._set_decision("unreviewed")
+
+    # -- editing -----------------------------------------------------------
+    # A "needs correction" flag used to be the end of the line: it marked a
+    # track for someone else and nothing could act on it. These operations let
+    # the correction happen here, and every one is recorded in `edits` so the
+    # recomputed events can be traced to a decision.
+
+    def _push_undo(self, description):
+        self.undo_stack.append((self.tracks.copy(), dict(self.decisions),
+                                list(self.edits), description))
+        if len(self.undo_stack) > 40:
+            self.undo_stack.pop(0)
+
+    def _after_edit(self, record):
+        self.edits.append(record)
+        self.tracks_edited = True
+        self.selection = []
+        self._render()
+
+    def _next_track_id(self):
+        return int(self.tracks.track_id.max()) + 1
+
+    def join_selected(self, _event=None):
+        """Join two fragments of the same animal, in time order."""
+        if len(self.selection) != 2:
+            self._notice("Shift-click exactly two tracks to join them.")
+            return
+        groups = [self.tracks[self.tracks.track_id == t].sort_values("frame")
+                  for t in self.selection]
+        groups = [g for g in groups if len(g)]
+        if len(groups) != 2:
+            return
+        groups.sort(key=lambda g: g.frame.min())
+        first, second = groups
+        if int(first.frame.max()) >= int(second.frame.min()):
+            self._notice("Those tracks overlap in time - they cannot be one animal.")
+            return
+        keep = int(first.track_id.iloc[0]); drop = int(second.track_id.iloc[0])
+        gap = int(second.frame.min() - first.frame.max())
+        distance = float(np.hypot(second.x.iloc[0] - first.x.iloc[-1],
+                                  second.y.iloc[0] - first.y.iloc[-1]))
+        self._push_undo(f"join {drop} into {keep}")
+        self.tracks.loc[self.tracks.track_id == drop, "track_id"] = keep
+        self.decisions.pop(drop, None)
+        self.selected_track = keep
+        self._after_edit({"action": "join", "kept_track_id": keep,
+                          "merged_track_id": drop, "gap_frames": gap,
+                          "endpoint_distance_px": round(distance, 2)})
+
+    def split_here(self, _event=None):
+        """Split a track at the current frame - for one that jumped animals."""
+        track_id = self.selected_track
+        if track_id is None:
+            self._notice("Click a track first.")
+            return
+        group = self.tracks[self.tracks.track_id == track_id]
+        if group.empty or not (group.frame.min() < self.frame <= group.frame.max()):
+            self._notice("Scrub to a frame inside the selected track first.")
+            return
+        new_id = self._next_track_id()
+        self._push_undo(f"split {track_id} at {self.frame}")
+        mask = (self.tracks.track_id == track_id) & (self.tracks.frame >= self.frame)
+        self.tracks.loc[mask, "track_id"] = new_id
+        self.decisions[new_id] = self.decisions.get(track_id, "unreviewed")
+        self._after_edit({"action": "split", "track_id": track_id,
+                          "new_track_id": new_id, "at_frame": int(self.frame)})
+
+    def _trim(self, keep_from_start):
+        track_id = self.selected_track
+        if track_id is None:
+            self._notice("Click a track first.")
+            return
+        group = self.tracks[self.tracks.track_id == track_id]
+        if group.empty:
+            return
+        if keep_from_start:
+            mask = (self.tracks.track_id == track_id) & (self.tracks.frame < self.frame)
+            word, kept = "trim_before", f"frames from {self.frame} onward"
+        else:
+            mask = (self.tracks.track_id == track_id) & (self.tracks.frame > self.frame)
+            word, kept = "trim_after", f"frames up to {self.frame}"
+        removed = int(mask.sum())
+        if not removed:
+            self._notice("Nothing to trim at this frame.")
+            return
+        self._push_undo(f"{word} {track_id} at {self.frame}")
+        self.tracks = self.tracks[~mask]
+        self._after_edit({"action": word, "track_id": track_id,
+                          "at_frame": int(self.frame), "frames_removed": removed,
+                          "kept": kept})
+
+    def trim_before(self, _event=None):
+        """Drop everything before the current frame - a bad lead-in."""
+        self._trim(keep_from_start=True)
+
+    def trim_after(self, _event=None):
+        """Drop everything after the current frame - a bad tail."""
+        self._trim(keep_from_start=False)
+
+    def delete_track(self, _event=None):
+        track_id = self.selected_track
+        if track_id is None:
+            self._notice("Click a track first.")
+            return
+        removed = int((self.tracks.track_id == track_id).sum())
+        self._push_undo(f"delete {track_id}")
+        self.tracks = self.tracks[self.tracks.track_id != track_id]
+        self.decisions.pop(track_id, None)
+        self.selected_track = None
+        self._after_edit({"action": "delete", "track_id": track_id,
+                          "frames_removed": removed})
+
+    def undo_edit(self, _event=None):
+        if not self.undo_stack:
+            self._notice("Nothing to undo.")
+            return
+        self.tracks, self.decisions, self.edits, description = self.undo_stack.pop()
+        self.tracks_edited = bool(self.edits)
+        self.selection = []
+        self._notice(f"Undid: {description}")
+        self._render()
+
+    def _notice(self, text):
+        self._message = text
+        try:
+            self.fig.canvas.draw_idle()
+        except Exception:
+            pass
 
     def _event_frames(self):
         return sorted(set(
@@ -228,10 +414,27 @@ class TrackReview:
         plt.show()
         return self.decisions
 
+    def result(self):
+        """Decisions plus whatever structural editing was done.
 
-def review_tracks(files, tracks, events, start_roi, lawn_rois, fps):
-    return TrackReview(
-        files, tracks, events, start_roi, lawn_rois, fps).show()
+        The caller needs `tracks_edited` to know whether the entry events must
+        be re-derived: an edited trajectory whose events were not rebuilt would
+        describe a track that no longer exists.
+        """
+        return {"decisions": self.decisions, "tracks": self.tracks,
+                "edits": self.edits, "tracks_edited": self.tracks_edited}
+
+
+def review_tracks(files, tracks, events, start_roi, lawn_rois, fps,
+                  return_edits=False):
+    """Review tracks, optionally returning any structural edits.
+
+    ``return_edits=False`` preserves the original contract - a plain decisions
+    mapping - so existing callers are unaffected.
+    """
+    reviewer = TrackReview(files, tracks, events, start_roi, lawn_rois, fps)
+    reviewer.show()
+    return reviewer.result() if return_edits else reviewer.decisions
 
 
 def save_track_review(decisions, output):

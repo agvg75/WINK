@@ -8,17 +8,19 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+import cv2
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
 import pandas as pd
 
-from basal_slowing import analyze, list_frames, read_gray
+from basal_slowing import (analyze, list_frames, read_gray,
+                           recompute_events_from_tracks)
 from track_review import review_tracks, save_track_review
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "app"))
 from roi_editor import draw_roi, draw_rois as draw_multiple_rois
-from process_ui import CockpitApp
+from process_ui import (CockpitApp, ProcessLog, ReviewWorkbench, track_colour)
 
 
 class App(CockpitApp):
@@ -30,6 +32,7 @@ class App(CockpitApp):
         self.scale = tk.StringVar(value="15.0")
         self.min_area = tk.StringVar(value="40")
         self.max_area = tk.StringVar(value="2500")
+        self.max_link_px = tk.StringVar(value="60")
         self.before_s = tk.StringVar(value="10")
         self.after_s = tk.StringVar(value="10")
         self.buffer_px = tk.StringVar(value="10")
@@ -66,6 +69,16 @@ class App(CockpitApp):
                               text="Calibrate scale (scope / bar)...").pack(fill="x", pady=(0, 4))
         entry_row("Minimum worm area (px)", self.min_area)
         entry_row("Maximum worm area (px)", self.max_area)
+        entry_row("Max link (px/frame)", self.max_link_px)
+        ttk.Label(c, wraplength=300, justify="left", foreground="#5E6E76",
+                  text=("How far one animal may travel between frames, in source "
+                        "pixels. Too large and the tracker can carry an identity "
+                        "across the plate to a different animal. Measured motion on "
+                        "a 7.5 fps basal slowing recording was under 4 px per frame "
+                        "at the 95th percentile, against this default of 60 - so a "
+                        "much smaller value is usually right.")).pack(anchor="w", pady=(0, 4))
+        ttk.Button(c, text="Measure motion to set this...",
+                   command=self.measure_motion).pack(fill="x", pady=(0, 4))
         entry_row("Before window (s)", self.before_s)
         entry_row("After window inside lawn (s)", self.after_s)
         entry_row("Outside buffer for before (px)", self.buffer_px)
@@ -279,6 +292,7 @@ class App(CockpitApp):
                     "lawns": self.lawn_roi_records},
                 "min_area": int(self.min_area.get()),
                 "max_area": int(self.max_area.get()),
+                "max_link_px": float(self.max_link_px.get()),
                 "before_s": float(self.before_s.get()),
                 "after_s": float(self.after_s.get()),
                 "outside_buffer_px": float(self.buffer_px.get()),
@@ -305,11 +319,122 @@ class App(CockpitApp):
         except Exception as exc:
             self.after(0, self.fail, str(exc))
 
+    def measure_motion(self):
+        """Measure how far worm-sized objects actually move between frames.
+
+        The link distance is in source pixels, so its correct value depends on
+        magnification and frame rate together - a number carried over from
+        another rig is usually wrong by a large factor, and an over-large gate
+        lets one track jump to a different animal.
+        """
+        folder = self.folder.get().strip()
+        if not folder:
+            messagebox.showerror("Measure motion", "Choose a folder first.",
+                                 parent=self)
+            return
+        self.status.set("Sampling frames to measure motion...")
+        self.update_idletasks()
+        try:
+            files = list_frames(folder)
+            if len(files) < 10:
+                raise ValueError("Need at least ten frames to measure motion.")
+            lo, hi = int(self.min_area.get()), int(self.max_area.get())
+            idx = np.unique(np.linspace(0, len(files) - 1, 31).astype(int))
+            background = np.median(
+                np.stack([read_gray(files[i]) for i in idx]), axis=0).astype(np.uint8)
+            sample = np.unique(np.linspace(0, len(files) - 1, 120).astype(int))
+            previous, steps, per_frame = None, [], []
+            for position, i in enumerate(sample):
+                frame = read_gray(files[i])
+                diff = cv2.GaussianBlur(cv2.absdiff(frame, background), (3, 3), 0)
+                _, mask = cv2.threshold(
+                    diff, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                count, _, stats, centroids = cv2.connectedComponentsWithStats(mask)
+                points = np.array([centroids[k] for k in range(1, count)
+                                   if lo <= stats[k, cv2.CC_STAT_AREA] <= hi], float)
+                per_frame.append(len(points))
+                if previous is not None and len(points) and len(previous[1]):
+                    gap = max(1, i - previous[0])
+                    for point in points:
+                        steps.append(float(np.min(np.hypot(
+                            previous[1][:, 0] - point[0],
+                            previous[1][:, 1] - point[1]))) / gap)
+                previous = (i, points)
+        except Exception as exc:
+            messagebox.showerror("Measure motion",
+                                 f"Could not sample the recording.\n\n{exc}",
+                                 parent=self)
+            return
+        if len(steps) < 20:
+            messagebox.showinfo(
+                "Measure motion",
+                "Too few worm-sized objects were found to measure motion. "
+                "Check the area gates first - they are in source pixels, so the "
+                "right values depend on magnification.", parent=self)
+            return
+        steps = np.array(steps)
+        p95 = float(np.percentile(steps, 95))
+        suggested = max(8.0, round(p95 * 3))
+        current = self.max_link_px.get()
+        message = (
+            f"Measured over {len(steps):,} object pairs "
+            f"({np.mean(per_frame):.1f} objects per frame):\n\n"
+            f"    median      {np.percentile(steps, 50):6.2f} px/frame\n"
+            f"    p95         {p95:6.2f} px/frame\n"
+            f"    p99         {np.percentile(steps, 99):6.2f} px/frame\n\n"
+            f"Suggested max link: {suggested:,.0f} px/frame "
+            f"(p95 x3, for headroom across missed frames).\n"
+            f"Currently {current}.\n\n"
+            "Apply the suggestion?")
+        self.log("Motion measured",
+                 f"median {np.percentile(steps, 50):.2f}, p95 {p95:.2f} px/frame "
+                 f"over {len(steps):,} pairs; suggested max link {suggested:,.0f} "
+                 f"(currently {current}).", status="done")
+        if messagebox.askyesno("Measure motion", message, parent=self):
+            self.max_link_px.set(f"{suggested:g}")
+            self.status.set(f"Max link set from measured motion: {suggested:g} px/frame.")
+        else:
+            self.status.set("Measured motion recorded; max link unchanged.")
+
     def review_tracking(self, events, tracks, out):
         files = list_frames(self.folder.get())
-        decisions = review_tracks(
+        result = review_tracks(
             files, tracks, events, self.start_roi, self.lawn_rois,
-            float(self.fps.get()))
+            float(self.fps.get()), return_edits=True)
+        decisions = result["decisions"]
+        if result["tracks_edited"]:
+            # Entry events are derived FROM the trajectories, so an edited
+            # track whose events were not rebuilt would describe a trajectory
+            # that no longer exists. Rebuild them from the edited tracks.
+            tracks = result["tracks"]
+            summary = ", ".join(
+                f"{e['action']} {e.get('track_id', e.get('kept_track_id', ''))}"
+                for e in result["edits"][:6])
+            self.log("Tracks edited",
+                     f"{len(result['edits'])} edit(s): {summary}"
+                     + (" ..." if len(result["edits"]) > 6 else "")
+                     + ". Re-deriving entry events from the edited tracks.",
+                     status="edit")
+            self.status.set("Re-deriving entry events from the edited tracks...")
+            self.update_idletasks()
+            try:
+                events, tracks, out = recompute_events_from_tracks(
+                    out, tracks=tracks, fps=float(self.fps.get()),
+                    um_per_px=float(self.scale.get()),
+                    reason=f"{len(result['edits'])} manual track edit(s) during review")
+                (Path(out) / "manual_track_edits.json").write_text(
+                    json.dumps(result["edits"], indent=2), encoding="utf-8")
+                self.log("Events re-derived",
+                         f"{len(events)} entry event(s) from the edited tracks; "
+                         f"results in {Path(out).name}. The original run is "
+                         "unchanged.", status="done")
+            except Exception as exc:
+                messagebox.showerror(
+                    "Re-derive events",
+                    "The tracks were edited but the entry events could not be "
+                    f"rebuilt, so they still describe the ORIGINAL tracks:\n\n{exc}",
+                    parent=self)
+                self.log("Re-derive failed", str(exc), status="failed")
         review_table = save_track_review(decisions, out)
         status = dict(zip(
             review_table.track_id.astype(int),
@@ -337,37 +462,71 @@ class App(CockpitApp):
                 row.manual_track_status not in {
                     "rejected", "needs_correction"})
             for _, row in events.iterrows()}
-        fig, ax = plt.subplots(figsize=(11, 8))
+        proc = ProcessLog("Paired lawn entries")
+        proc.add("Review entries",
+                 f"{len(events)} candidate entry event(s) across "
+                 f"{events.track_id.nunique()} track(s). Click a marker to accept "
+                 "or reject it.", "ready")
+        workbench = ReviewWorkbench(self, "Paired lawn entries", proc,
+                                    width=1380, height=880)
+        fig, ax = workbench.fig, workbench.ax
+        # The recording underneath, so a trajectory can be judged against what
+        # the animal was actually crossing rather than against blank space.
+        background = Path(out) / "background_reference.png"
+        if background.exists():
+            try:
+                image = plt.imread(str(background))
+                ax.imshow(image, cmap="gray", zorder=0)
+            except Exception:
+                pass
         for _, lawn in enumerate(self.lawn_rois, 1):
             p = np.asarray(lawn + [lawn[0]])
-            ax.plot(p[:, 0], p[:, 1], color="#990000", lw=1.5)
+            ax.plot(p[:, 0], p[:, 1], color="#ef4444", lw=2.0, zorder=2)
         start = np.asarray(self.start_roi + [self.start_roi[0]])
-        ax.plot(start[:, 0], start[:, 1], color="#00a6a6", lw=1.5)
-        for _, group in tracks.groupby("track_id"):
-            ax.plot(group.x, group.y, color="#777777", lw=.7, alpha=.6)
+        ax.plot(start[:, 0], start[:, 1], color="#22d3ee", lw=2.0, zorder=2)
+        # One colour per animal: uniform grey at 60% opacity made several
+        # trajectories impossible to tell apart, which is most of what this
+        # view is for.
+        for track_id, group in tracks.groupby("track_id"):
+            ax.plot(group.x, group.y, color=track_colour(int(track_id)),
+                    lw=1.6, alpha=.9, zorder=3)
         artists = {}
         for _, event in events.iterrows():
             event_id = int(event.event_id)
             color = "green" if accepted[event_id] else "orange"
             artist, = ax.plot(
                 event.entry_x, event.entry_y, "o", color=color,
-                markersize=8, picker=7)
+                markersize=13, markeredgecolor="white", markeredgewidth=1.6,
+                picker=7, zorder=5)
             artists[artist] = event_id
-        ax.invert_yaxis()
+        if not background.exists():
+            ax.invert_yaxis()
         ax.set_aspect("equal")
         ax.set_title(
-            "Paired lawn entries: click markers to accept/reject; "
-            "close to save\nGreen = accepted, orange/red = rejected or flagged")
+            "Paired lawn entries: click a marker to accept or reject it.\n"
+            "Green = accepted, red = rejected. Each animal has its own colour.")
 
         def picked(event):
             event_id = artists[event.artist]
             accepted[event_id] = not accepted[event_id]
             event.artist.set_color(
-                "green" if accepted[event_id] else "red")
-            fig.canvas.draw_idle()
+                "#16a34a" if accepted[event_id] else "#dc2626")
+            self.log("Entry " + ("accepted" if accepted[event_id] else "rejected"),
+                     f"event {event_id}", status="review")
+            workbench.draw_idle()
 
         fig.canvas.mpl_connect("pick_event", picked)
-        plt.show()
+        workbench.add_control_label("Paired lawn entries")
+        workbench.add_control_label(
+            "Click a marker to accept or reject that entry. Trajectories are "
+            "coloured per animal; the red outline is a lawn and the cyan one is "
+            "the start region.")
+        workbench.add_control_separator()
+        workbench.add_control_button("Save and close", workbench.close)
+        workbench.add_control_button("Hide controls (c)", workbench.toggle_controls)
+        workbench.add_control_button("Hide hood (h)", workbench.toggle_hood)
+        workbench.refresh()
+        workbench.wait()
         reviewed = events.copy()
         reviewed["accepted"] = reviewed.event_id.map(accepted).fillna(False)
         reviewed["review_status"] = np.where(

@@ -377,6 +377,22 @@ class MatplotlibProcessPanel:
             pass
 
 
+def track_colour(track_id):
+    """A stable, distinguishable colour per track id.
+
+    Several animals reviewed at once are impossible to tell apart when every
+    trajectory is drawn in the same colour. tab20 is categorical, so adjacent
+    ids get clearly different hues, and the mapping is stable across redraws
+    and across sessions for the same id.
+    """
+    import matplotlib
+    palette = getattr(track_colour, "_palette", None)
+    if palette is None:
+        palette = [matplotlib.colormaps["tab20"](i / 20.0) for i in range(20)]
+        track_colour._palette = palette
+    return palette[int(track_id) % len(palette)]
+
+
 def install_error_reporting(root, title="Action failed", log=None, status=None):
     """Make Tk callback failures visible in a window that has no process hood.
 

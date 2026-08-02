@@ -373,78 +373,21 @@ def stitch_tracklets(tracks, max_gap_frames=30, max_distance_px=100,
     return table.sort_values(["track_id", "frame"]), pd.DataFrame(stitch_records)
 
 
-def analyze(folder, fps, um_per_px, start_roi, lawn_rois, output_dir=None,
-            min_area=40, max_area=2500, max_link_px=60,
-            before_s=10.0, after_s=10.0, pre_entry_gap_s=0.0,
-            outside_buffer_px=10.0, min_window_fraction=0.70,
-            sample_background=31, max_stitch_gap_s=4.0,
-            max_stitch_distance_px=100, max_heading_change_deg=60,
-            roi_metadata=None, minimum_worm_fraction_inside=.50,
-            progress=None):
-    files = list_frames(folder)
-    fps, scale = float(fps), float(um_per_px)
-    acquisition = AcquisitionMetadata(
-        fps, "declared", scale, "declared", None,
-        "not_applicable").validate()
-    if before_s < 3 or after_s < 3:
-        raise ValueError("Before and after windows must each be at least 3 s.")
-    if not 0 < min_window_fraction <= 1:
-        raise ValueError("Minimum window fraction must be in (0, 1].")
-    if not 0 < minimum_worm_fraction_inside <= 1:
-        raise ValueError("Worm area required inside a lawn must be in (0, 1].")
-    start_poly = _polygon_array(start_roi)
-    lawns = [_polygon_array(x) for x in lawn_rois]
-    if not lawns:
-        raise ValueError("Draw at least one OP50 lawn ROI.")
+def derive_entry_events(tracks, fps, lawns, before_s=10.0, after_s=10.0,
+                        pre_entry_gap_s=0.0, outside_buffer_px=10.0,
+                        min_window_fraction=0.70):
+    """Find paired lawn-entry events in ALREADY ANNOTATED tracks.
 
-    config_source = Path(folder)
-    detections, background = _detect(
-        files, int(min_area), int(max_area), int(sample_background),
-        lawn_polys=lawns, progress=progress, config_source=config_source)
-    if detections.empty:
-        raise ValueError(
-            "No worm-sized moving objects were detected. Adjust area limits.")
-    for column, default in {
-            "spine_valid": False, "spine_length_px": np.nan,
-            "midbody_curvature_px_inv": np.nan, "spine_x_json": "",
-            "spine_y_json": "", "curvature_json": ""}.items():
-        if column not in detections:
-            detections[column] = default
-    detections["time_s"] = detections.frame / fps
-    tracks = link_detections(
-        detections, max_link_px=float(max_link_px), max_gap_frames=8)
-    tracks, stitches = stitch_tracklets(
-        tracks, max_gap_frames=max(1, int(round(max_stitch_gap_s * fps))),
-        max_distance_px=float(max_stitch_distance_px),
-        max_heading_change_deg=float(max_heading_change_deg))
-    tracks = _orient_track_spines(tracks)
-    tracks["time_s"] = tracks.frame / fps
-    dx = tracks.groupby("track_id").x.diff()
-    dy = tracks.groupby("track_id").y.diff()
-    tracks["step_px"] = np.hypot(dx, dy)
-    tracks["speed_um_s"] = tracks.step_px * fps * scale
-    tracks["inside_start"] = [
-        _signed_distance(start_poly, x, y) >= 0
-        for x, y in zip(tracks.x, tracks.y)]
-    tracks = apply_release_gate(tracks)
+    Split out of ``analyze`` so events can be re-derived after a person
+    edits the trajectories - splitting, joining or trimming a track changes
+    which entries exist and what falls inside their before/after windows, so
+    an edited track whose events were not recomputed would describe the old
+    trajectory.
 
-    med_area = tracks.groupby("track_id").area_px.transform("median")
-    tracks["possible_collision"] = (
-        (tracks.area_px > 1.8 * med_area) | (tracks.elongation < 1.35))
-    for number, lawn in enumerate(lawns, 1):
-        tracks[f"lawn_{number}_distance_px"] = [
-            _signed_distance(lawn, x, y) for x, y in zip(tracks.x, tracks.y)]
-        fraction_column = f"fraction_inside_lawn_{number}"
-        if fraction_column in tracks:
-            tracks[f"inside_lawn_{number}"] = (
-                tracks[fraction_column] >= minimum_worm_fraction_inside)
-        else:
-            tracks[f"inside_lawn_{number}"] = (
-                tracks[f"lawn_{number}_distance_px"] >= 0)
-    inside_columns = [
-        f"inside_lawn_{number}" for number in range(1, len(lawns) + 1)]
-    tracks["inside_any_lawn"] = tracks[inside_columns].any(axis=1)
-
+    ``tracks`` must already carry the per-frame annotations ``analyze``
+    adds: speed_um_s, inside_start, analysis_active, possible_collision,
+    inside_lawn_N and inside_any_lawn.
+    """
     events = []
     expected_before = max(1, int(round(before_s * fps)))
     expected_after = max(1, int(round(after_s * fps)))
@@ -591,13 +534,6 @@ def analyze(folder, fps, um_per_px, start_roi, lawn_rois, output_dir=None,
                     record["after_body_axis_frequency_proxy_hz"])
                 events.append(record)
 
-    out = Path(output_dir) if output_dir else (
-        Path(folder) / "basal_slowing_results")
-    out.mkdir(parents=True, exist_ok=True)
-    tracks.to_csv(out / "detections_and_tracks.csv", index=False)
-    summarize_departures(tracks, start_poly).to_csv(
-        out / "departure_clocks.csv", index=False)
-    stitches.to_csv(out / "inferred_tracklet_stitches.csv", index=False)
     event_table = pd.DataFrame(events)
     if not event_table.empty:
         event_table = event_table.sort_values(
@@ -615,6 +551,201 @@ def analyze(folder, fps, um_per_px, start_roi, lawn_rois, output_dir=None,
         residence = event_table.lawn_residence_s.fillna(0)
         event_table["prior_cumulative_lawn_time_s"] = (
             residence.groupby(event_table.track_id).cumsum() - residence)
+    return event_table
+
+
+def recompute_events_from_tracks(results_dir, tracks=None, fps=None,
+                                 um_per_px=None, output_dir=None, reason="",
+                                 before_s=None, after_s=None,
+                                 pre_entry_gap_s=None, outside_buffer_px=None,
+                                 min_window_fraction=None):
+    """Re-derive entry events from saved (or edited) tracks.
+
+    Two things make this necessary. A declared frame rate or scale that turns
+    out to be wrong changes every reported speed and frequency but not the
+    trajectories, which are in pixels and frame numbers. And a person editing
+    tracks - splitting one that jumped between animals, joining fragments,
+    trimming a bad tail - changes which entries exist and what falls inside
+    their before/after windows, so the events must be rebuilt or they describe
+    a trajectory that no longer exists.
+
+    Detection, linking and spines are NOT repeated. Nothing is decoded.
+    The original results are left untouched; output goes to a new folder.
+    """
+    results_dir = Path(results_dir)
+    if tracks is None:
+        for name in ("detections_and_tracks_reviewed.csv",
+                     "detections_and_tracks.csv"):
+            candidate = results_dir / name
+            if candidate.exists():
+                tracks = pd.read_csv(candidate)
+                break
+    if tracks is None or not len(tracks):
+        raise FileNotFoundError(
+            "No saved tracks found to recompute from - this needs a completed run.")
+    tracks = tracks.copy()
+
+    metadata = {}
+    metadata_path = results_dir / "analysis_metadata.json"
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception:
+            metadata = {}
+    old_fps = metadata.get("fps")
+    old_scale = metadata.get("um_per_px")
+    fps = float(fps if fps is not None else (old_fps or 0))
+    scale = float(um_per_px if um_per_px is not None else (old_scale or 0))
+    if fps <= 0 or scale <= 0:
+        raise ValueError("Frame rate and scale must both be greater than zero.")
+
+    def pick(value, key, fallback):
+        if value is not None:
+            return float(value)
+        recorded = metadata.get(key)
+        return float(recorded) if recorded is not None else float(fallback)
+
+    before_s = pick(before_s, "before_s", 10.0)
+    after_s = pick(after_s, "after_s", 10.0)
+    pre_entry_gap_s = pick(pre_entry_gap_s, "pre_entry_gap_s", 0.0)
+    outside_buffer_px = pick(outside_buffer_px, "outside_buffer_px", 10.0)
+    min_window_fraction = pick(min_window_fraction, "minimum_window_fraction", 0.70)
+
+    rois_path = results_dir / "rois.json"
+    if not rois_path.exists():
+        raise FileNotFoundError(
+            "rois.json is required - the lawn geometry defines what an entry is.")
+    roi_data = json.loads(rois_path.read_text(encoding="utf-8"))
+    lawns = [_polygon_array(x) for x in roi_data.get("lawn_rois", [])]
+    if not lawns:
+        raise ValueError("rois.json contains no lawn ROIs.")
+
+    # Time and speed follow the declared parameters; positions do not.
+    tracks["time_s"] = tracks.frame.astype(float) / fps
+    dx = tracks.groupby("track_id")["x"].diff()
+    dy = tracks.groupby("track_id")["y"].diff()
+    tracks["step_px"] = np.hypot(dx, dy)
+    tracks["speed_um_s"] = tracks.step_px * fps * scale
+
+    event_table = derive_entry_events(
+        tracks, fps, lawns, before_s=before_s, after_s=after_s,
+        pre_entry_gap_s=pre_entry_gap_s, outside_buffer_px=outside_buffer_px,
+        min_window_fraction=min_window_fraction)
+
+    out = Path(output_dir) if output_dir else (
+        results_dir / f"recomputed_fps{fps:g}_scale{scale:g}")
+    out.mkdir(parents=True, exist_ok=True)
+    tracks.to_csv(out / "detections_and_tracks.csv", index=False)
+    event_table.to_csv(out / "paired_entry_events.csv", index=False)
+    for carry in ("rois.json", "background_reference.png"):
+        source = results_dir / carry
+        if source.exists() and not (out / carry).exists():
+            (out / carry).write_bytes(source.read_bytes())
+
+    new_metadata = dict(metadata)
+    new_metadata.update({
+        "fps": fps, "um_per_px": scale,
+        "recomputed_from": str(results_dir),
+        "recompute_reason": str(reason or ""),
+        "superseded_fps": old_fps, "superseded_um_per_px": old_scale,
+        "n_candidate_entries": int(len(event_table)),
+        "recompute_note": (
+            "Entry events re-derived from saved tracks. Detection, linking and "
+            "spine extraction were NOT repeated - they depend only on pixels "
+            "and frame numbers. Any manual review of the original run does not "
+            "carry over."),
+    })
+    (out / "analysis_metadata.json").write_text(
+        json.dumps(new_metadata, indent=2), encoding="utf-8")
+    return event_table, tracks, out
+
+
+def analyze(folder, fps, um_per_px, start_roi, lawn_rois, output_dir=None,
+            min_area=40, max_area=2500, max_link_px=60,
+            before_s=10.0, after_s=10.0, pre_entry_gap_s=0.0,
+            outside_buffer_px=10.0, min_window_fraction=0.70,
+            sample_background=31, max_stitch_gap_s=4.0,
+            max_stitch_distance_px=100, max_heading_change_deg=60,
+            roi_metadata=None, minimum_worm_fraction_inside=.50,
+            progress=None):
+    files = list_frames(folder)
+    fps, scale = float(fps), float(um_per_px)
+    acquisition = AcquisitionMetadata(
+        fps, "declared", scale, "declared", None,
+        "not_applicable").validate()
+    if before_s < 3 or after_s < 3:
+        raise ValueError("Before and after windows must each be at least 3 s.")
+    if not 0 < min_window_fraction <= 1:
+        raise ValueError("Minimum window fraction must be in (0, 1].")
+    if not 0 < minimum_worm_fraction_inside <= 1:
+        raise ValueError("Worm area required inside a lawn must be in (0, 1].")
+    start_poly = _polygon_array(start_roi)
+    lawns = [_polygon_array(x) for x in lawn_rois]
+    if not lawns:
+        raise ValueError("Draw at least one OP50 lawn ROI.")
+
+    config_source = Path(folder)
+    detections, background = _detect(
+        files, int(min_area), int(max_area), int(sample_background),
+        lawn_polys=lawns, progress=progress, config_source=config_source)
+    if detections.empty:
+        raise ValueError(
+            "No worm-sized moving objects were detected. Adjust area limits.")
+    for column, default in {
+            "spine_valid": False, "spine_length_px": np.nan,
+            "midbody_curvature_px_inv": np.nan, "spine_x_json": "",
+            "spine_y_json": "", "curvature_json": ""}.items():
+        if column not in detections:
+            detections[column] = default
+    detections["time_s"] = detections.frame / fps
+    tracks = link_detections(
+        detections, max_link_px=float(max_link_px), max_gap_frames=8)
+    tracks, stitches = stitch_tracklets(
+        tracks, max_gap_frames=max(1, int(round(max_stitch_gap_s * fps))),
+        max_distance_px=float(max_stitch_distance_px),
+        max_heading_change_deg=float(max_heading_change_deg))
+    tracks = _orient_track_spines(tracks)
+    tracks["time_s"] = tracks.frame / fps
+    dx = tracks.groupby("track_id").x.diff()
+    dy = tracks.groupby("track_id").y.diff()
+    tracks["step_px"] = np.hypot(dx, dy)
+    tracks["speed_um_s"] = tracks.step_px * fps * scale
+    tracks["inside_start"] = [
+        _signed_distance(start_poly, x, y) >= 0
+        for x, y in zip(tracks.x, tracks.y)]
+    tracks = apply_release_gate(tracks)
+
+    med_area = tracks.groupby("track_id").area_px.transform("median")
+    tracks["possible_collision"] = (
+        (tracks.area_px > 1.8 * med_area) | (tracks.elongation < 1.35))
+    for number, lawn in enumerate(lawns, 1):
+        tracks[f"lawn_{number}_distance_px"] = [
+            _signed_distance(lawn, x, y) for x, y in zip(tracks.x, tracks.y)]
+        fraction_column = f"fraction_inside_lawn_{number}"
+        if fraction_column in tracks:
+            tracks[f"inside_lawn_{number}"] = (
+                tracks[fraction_column] >= minimum_worm_fraction_inside)
+        else:
+            tracks[f"inside_lawn_{number}"] = (
+                tracks[f"lawn_{number}_distance_px"] >= 0)
+    inside_columns = [
+        f"inside_lawn_{number}" for number in range(1, len(lawns) + 1)]
+    tracks["inside_any_lawn"] = tracks[inside_columns].any(axis=1)
+
+    event_table = derive_entry_events(
+        tracks, fps, lawns, before_s=before_s, after_s=after_s,
+        pre_entry_gap_s=pre_entry_gap_s,
+        outside_buffer_px=outside_buffer_px,
+        min_window_fraction=min_window_fraction)
+    events = event_table.to_dict("records") if not event_table.empty else []
+
+    out = Path(output_dir) if output_dir else (
+        Path(folder) / "basal_slowing_results")
+    out.mkdir(parents=True, exist_ok=True)
+    tracks.to_csv(out / "detections_and_tracks.csv", index=False)
+    summarize_departures(tracks, start_poly).to_csv(
+        out / "departure_clocks.csv", index=False)
+    stitches.to_csv(out / "inferred_tracklet_stitches.csv", index=False)
     event_table.to_csv(out / "paired_entry_events.csv", index=False)
     cv2.imwrite(str(out / "background_reference.png"), background)
     roi_data = {
