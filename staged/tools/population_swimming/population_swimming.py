@@ -760,6 +760,110 @@ def _attach_selective_spines(tracks, fps, detection_scale, target_spine_fps=15.0
     return tracks,stride,detailed_tracks,detailed_frames
 
 
+def recompute_from_detections(results_dir, fps, um_per_px, output_dir=None,
+                              progress=None, reason=""):
+    """Re-derive a finished run under a corrected frame rate and/or scale.
+
+    A declared frame rate or micrometres-per-pixel that turns out to be wrong
+    does not invalidate the detection work: positions are in source pixels and
+    frame numbers are integers, neither of which depends on either parameter.
+    Everything downstream does.
+
+    Speed and frequency could in principle be rescaled arithmetically, but the
+    modality classifier compares frequency against FIXED thresholds - so a run
+    whose frequency changes must be reclassified, not multiplied. This therefore
+    recomputes rather than rescales: it reloads the saved detections, restamps
+    time from the corrected rate, and re-runs the summary and the classifier.
+    No frames are decoded, so it is fast.
+
+    The original results are never modified; output goes to a new folder.
+    """
+    results_dir = Path(results_dir)
+    detections_path = results_dir / "detections_and_tracks.csv"
+    if not detections_path.exists():
+        raise FileNotFoundError(
+            f"{detections_path.name} not found - recompute needs a completed run.")
+    fps = float(fps); um_per_px = float(um_per_px)
+    if fps <= 0 or um_per_px <= 0:
+        raise ValueError("Frame rate and scale must both be greater than zero.")
+
+    def report(done, total, phase="Recomputing"):
+        if progress is None:
+            return
+        try:
+            progress(done, total, phase)
+        except TypeError:
+            progress(done, total)
+
+    report(0, 1, "Reloading saved detections")
+    tracks = pd.read_csv(detections_path)
+
+    metadata = {}
+    metadata_path = results_dir / "analysis_metadata.json"
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception:
+            metadata = {}
+    old_fps = metadata.get("fps")
+    old_scale = metadata.get("um_per_px")
+    analyzed_frames = int(metadata.get("n_frames") or (int(tracks.frame.max()) + 1))
+    spine_stride = int(metadata.get("detailed_spine_stride_frames") or 1)
+
+    # Time is the only per-row quantity that depends on the frame rate; the
+    # positions, areas, spines and curvatures are all in pixel units already.
+    tracks["time_s"] = tracks.frame.astype(float) / fps
+
+    report(0, 1, "Rebuilding track summaries")
+    tracks, summary = summarize_tracks(tracks, fps, um_per_px, analyzed_frames)
+
+    out = Path(output_dir) if output_dir else (
+        results_dir / f"recomputed_fps{fps:g}_scale{um_per_px:g}")
+    out.mkdir(parents=True, exist_ok=True)
+    tracks.to_csv(out / "detections_and_tracks.csv", index=False)
+    summary.to_csv(out / "track_summary.csv", index=False)
+
+    windows = classify_modality_windows(tracks, fps, progress=report,
+                                        spine_stride=spine_stride)
+    report(0, 1, "Writing recomputed proposals")
+    bouts = windows_to_bouts(windows, fps)
+    windows.to_csv(out / "modality_window_proposals.csv", index=False)
+    bouts.to_csv(out / "modality_bouts_for_review.csv", index=False)
+
+    new_metadata = dict(metadata)
+    new_metadata.update({
+        "fps": fps, "um_per_px": um_per_px, "n_frames": analyzed_frames,
+        "recomputed_from": str(results_dir),
+        "recompute_reason": str(reason or ""),
+        "superseded_fps": old_fps, "superseded_um_per_px": old_scale,
+        "recompute_note": (
+            "Re-derived from the saved detections of the run named in "
+            "recomputed_from. Detection, linking and spine extraction were NOT "
+            "repeated - those depend only on pixels and frame numbers. Track "
+            "summaries and modality proposals WERE recomputed, because the "
+            "classifier compares frequency against fixed thresholds and so "
+            "cannot be rescaled arithmetically. Any human review of the "
+            "original run does not carry over and must be redone."),
+    })
+    (out / "analysis_metadata.json").write_text(
+        json.dumps(new_metadata, indent=2), encoding="utf-8")
+    (out / "recompute_provenance.json").write_text(json.dumps({
+        "source_results": str(results_dir),
+        "declared_before": {"fps": old_fps, "um_per_px": old_scale},
+        "declared_after": {"fps": fps, "um_per_px": um_per_px},
+        "fps_factor": (fps / float(old_fps)) if old_fps else None,
+        "scale_factor": (um_per_px / float(old_scale)) if old_scale else None,
+        "reason": str(reason or ""),
+        "recomputed_outputs": ["detections_and_tracks.csv", "track_summary.csv",
+                               "modality_window_proposals.csv",
+                               "modality_bouts_for_review.csv"],
+        "not_carried_over": ["reviewed_track_summary.csv",
+                             "reviewed_modality_bouts.csv",
+                             "track_stitch_edits.json"],
+    }, indent=2), encoding="utf-8")
+    return summary, out
+
+
 def analyze(source, fps, um_per_px, output_dir=None, min_area=40, max_area=2500,
             max_link_px=60, activity_speed_lengths_s=.08, sample_background=31,
             progress=None, roi_records=None, roi_mode="none", start_frame=1,

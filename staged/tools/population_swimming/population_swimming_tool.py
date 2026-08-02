@@ -14,6 +14,7 @@ import pandas as pd
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"app"))
 from population_swimming import (analyze,list_frames,read_gray,summarize_tracks,
+                                 recompute_from_detections,
                                  SPINE_METHODS,SPINE_METHOD_DEFAULT,
                                  MANUAL_POINT_COLUMN)
 
@@ -48,6 +49,8 @@ from results_summary import population_track_summary
 import cv2
 from process_ui import CockpitApp,ProcessLog,collect_image_points,apply_wink_theme
 from virtual_frame_stack import ProxyFrameStack
+import worm_reference as wr
+import substrate_texture as st
 
 class App(CockpitApp):
     def __init__(self):
@@ -66,6 +69,13 @@ class App(CockpitApp):
         self.spine_method=tk.StringVar(value=SPINE_METHOD_LABELS[SPINE_METHOD_DEFAULT])
         self.max_link_px=tk.StringVar(value="60")
         self.marked_animals=None
+        # Calibration cross-checks. Blank/unset means "not stated", which is
+        # different from a wrong value - checks that need them simply do not run.
+        self.stage=tk.StringVar(value="AD1")
+        self.vessel=tk.StringVar(value="")
+        self.locomotion_mode=tk.StringVar(value="crawling")
+        self._traced_length_px=None
+        self._scale_estimates=[]
         self.roi_mode=tk.StringVar(value="none");self.roi_records=[]
         self._build_controls();self._build_center()
         # Callback-exception reporting is inherited from CockpitApp.
@@ -105,6 +115,29 @@ class App(CockpitApp):
         pr=ttk.Frame(perf);pr.pack(fill="x",padx=6,pady=3);ttk.Label(pr,text="Detection resolution").pack(side="left");ttk.Combobox(pr,textvariable=self.detection_resolution,values=("Auto: lowest safe resolution","Original resolution","50% proxy","25% proxy (fastest)"),state="readonly",width=22).pack(side="right")
         for text,var in (("Adaptive background samples",self.adaptive_background),("Fast wrMTrck-style first pass",self.fast_first_pass),("Single-pass background (experimental; verify track count)",self.single_pass_background),("Cache decoded proxy locally (experimental)",self.cache_two_pass_proxy),("Low-resolution background (experimental; verify tracks)",self.low_resolution_background),("Pipe only selected background frames (experimental)",self.selective_background_decode),("Use decoder-ready 8-bit grayscale directly (recommended)",self.direct_uint8_proxy)):
             ttk.Checkbutton(perf,text=text,variable=var).pack(anchor="w",padx=6,pady=1)
+        cal=ttk.LabelFrame(c,text="Calibration cross-checks (optional)");cal.pack(fill="x",pady=6)
+        sr=ttk.Frame(cal);sr.pack(fill="x",padx=6,pady=3)
+        ttk.Label(sr,text="Stage").pack(side="left")
+        ttk.Combobox(sr,textvariable=self.stage,state="readonly",width=18,
+                     values=[wr.STAGE_LABELS[s] for s in wr.STAGE_ORDER]).pack(side="right")
+        self.stage.set(wr.STAGE_LABELS["AD1"])
+        vr=ttk.Frame(cal);vr.pack(fill="x",padx=6,pady=3)
+        ttk.Label(vr,text="Vessel").pack(side="left")
+        ttk.Combobox(vr,textvariable=self.vessel,state="readonly",width=24,
+                     values=[""]+[wr.VESSEL_LABELS[v] for v in wr.VESSEL_ORDER]).pack(side="right")
+        mr=ttk.Frame(cal);mr.pack(fill="x",padx=6,pady=3)
+        ttk.Label(mr,text="Expected mode").pack(side="left")
+        ttk.Combobox(mr,textvariable=self.locomotion_mode,state="readonly",width=14,
+                     values=("crawling","swimming","burrowing")).pack(side="right")
+        ttk.Button(cal,text="Trace a worm to set the scale...",command=self.trace_worm).pack(fill="x",padx=6,pady=2)
+        ttk.Button(cal,text="Check the scale against the vessel...",command=self.check_vessel).pack(fill="x",padx=6,pady=(0,2))
+        ttk.Label(cal,wraplength=300,justify="left",foreground="#5E6E76",
+                  text=("Frame rate and scale are declared by hand and nothing verifies "
+                        "them. Both scale reported speed; frame rate alone scales "
+                        "frequency, so a rate that is wrong by 4x makes every Hz wrong "
+                        "by 4x. Tracing one animal of a known stage, or measuring a "
+                        "vessel of known size, gives an independent estimate. Leave "
+                        "Vessel blank if none is visible.")).pack(anchor="w",padx=6,pady=(0,4))
         spine=ttk.LabelFrame(c,text="Spine extraction (affects curvature and bend frequency)");spine.pack(fill="x",pady=6)
         sr=ttk.Frame(spine);sr.pack(fill="x",padx=6,pady=3)
         ttk.Label(sr,text="Skeleton").pack(side="left")
@@ -125,6 +158,7 @@ class App(CockpitApp):
         rb=ttk.Frame(roi);rb.pack(fill="x",padx=6,pady=3);ttk.Button(rb,text="Draw / replace ROIs",command=self.draw_optional_rois).pack(side="left");self.roi_label=ttk.Label(rb,text="0 ROIs");self.roi_label.pack(side="left",padx=8);ttk.Button(rb,text="Clear",command=self.clear_rois).pack(side="right")
         self.go=ttk.Button(c,text="Analyze population",command=self.start);self.go.pack(fill="x",pady=(8,2))
         ttk.Button(c,text="Resume existing results review",command=self.resume_review).pack(fill="x",pady=2)
+        ttk.Button(c,text="Correct the scale or FPS of a finished run...",command=self.recompute_run).pack(fill="x",pady=2)
 
     def _build_center(self):
         self.page_setup=ttk.Frame(self.center);self.page_setup.pack(fill="both",expand=True)
@@ -236,6 +270,121 @@ class App(CockpitApp):
     MEASURE_MIN_FACTOR=0.40      # curled/foreshortened or younger animals
     MEASURE_MAX_FACTOR=5.0       # two animals briefly touching
     MEASURE_BACKGROUND_SAMPLES=15
+
+    # -- calibration cross-checks -------------------------------------------
+    def _stage_key(self):
+        label=self.stage.get()
+        for key,text in wr.STAGE_LABELS.items():
+            if text==label:return key
+        return label if label in wr.STAGE_LENGTH_UM else "AD1"
+
+    def _vessel_key(self):
+        label=(self.vessel.get() or "").strip()
+        if not label:return None
+        for key,text in wr.VESSEL_LABELS.items():
+            if text==label:return key
+        return label if label in wr.VESSELS else None
+
+    def _offer_scale(self,route,implied,detail):
+        """Show an independent estimate beside the declared value, and offer it."""
+        self._scale_estimates=[e for e in self._scale_estimates if e["route"]!=route]
+        self._scale_estimates.append({"route":route,"um_per_px":float(implied),
+                                      "detail":detail})
+        try:declared=float(self.scale.get())
+        except (TypeError,ValueError):declared=None
+        ratio=(implied/declared) if declared else None
+        message=(f"{detail}\n\n"
+                 f"    implied scale   {implied:.3f} um/px\n"
+                 +(f"    declared scale  {declared:.3f} um/px\n"
+                   f"    ratio           {ratio:.2f}x\n\n" if declared else "\n")
+                 +"Use the implied value?\n\n"
+                 "Either way the estimate is recorded with the results, so a "
+                 "disagreement stays visible later even if it is not acted on now.")
+        self.log(f"Scale estimate: {route}",
+                 f"{implied:.3f} um/px ({detail})"
+                 +(f"; declared {declared:.3f} um/px, ratio {ratio:.2f}x" if declared else ""),
+                 status="info")
+        if messagebox.askyesno("Scale cross-check",message,parent=self):
+            self.scale.set(f"{implied:.4f}")
+            self.status.set(f"Scale set from {route}: {implied:.3f} um/px.")
+        else:
+            self.status.set(f"{route} estimate recorded but not applied.")
+
+    def trace_worm(self):
+        """Trace one animal head to tail; its stage gives an independent scale."""
+        stage=self._stage_key()
+        image=self._current_frame()
+        if image is None:
+            messagebox.showerror("Trace a worm","Choose a valid recording first.",parent=self);return
+        typical,_,_=wr.stage_length_um(stage)
+        points=collect_image_points(
+            self,image,title="Trace a worm, head to tail",
+            instructions=(f"Click along one animal from head to tail - several points "
+                          f"around the bends, not just the two ends. A "
+                          f"{wr.STAGE_LABELS.get(stage,stage)} is taken to be about "
+                          f"{typical:,.0f} um long, which converts the traced pixel "
+                          f"length into micrometres per pixel."),
+            mode="polyline",min_points=2,
+            process_log=ProcessLog("Worm trace for scale"))
+        if not points:
+            self.status.set("Worm trace cancelled.");return
+        pts=np.asarray(points,float)
+        length_px=float(np.sum(np.hypot(*np.diff(pts,axis=0).T)))
+        if length_px<=1:
+            messagebox.showerror("Trace a worm","That trace is too short to measure.",parent=self);return
+        self._traced_length_px=length_px
+        implied=wr.scale_from_trace(length_px,stage)
+        self._offer_scale("worm_trace",implied,
+                          f"Traced {length_px:,.0f} px along a "
+                          f"{wr.STAGE_LABELS.get(stage,stage)} (~{typical:,.0f} um)")
+
+    def check_vessel(self):
+        """Measure a vessel of known size: whole rim if visible, else an arc."""
+        vessel=self._vessel_key()
+        if not vessel:
+            messagebox.showinfo("Vessel check",
+                "Choose the vessel type first - it is blank by default because "
+                "not every recording contains one.",parent=self);return
+        image=self._current_frame()
+        if image is None:
+            messagebox.showerror("Vessel check","Choose a valid recording first.",parent=self);return
+        label=wr.VESSEL_LABELS.get(vessel,vessel)
+        diameter=wr.detect_vessel_diameter_px(image,scale=1.0)
+        if diameter and messagebox.askyesno(
+                "Vessel check",
+                f"A circular feature {diameter:,.0f} px across was detected.\n\n"
+                f"Is that the {label}?\n\n"
+                "Choose No to click points along the rim instead - which also "
+                "works when only part of the vessel is in frame.",parent=self):
+            implied=wr.scale_from_vessel(diameter,vessel)
+            self._offer_scale("vessel_rim",implied,
+                              f"{label} detected at {diameter:,.0f} px across")
+            return
+        points=collect_image_points(
+            self,image,title=f"Click along the {label} rim",
+            instructions=("Click three or more points along the visible rim. The "
+                          "whole vessel does not need to be in frame - an arc "
+                          "determines the circle - but a longer arc gives a much "
+                          "better estimate than a short, nearly straight one."),
+            mode="points",min_points=3,
+            process_log=ProcessLog("Vessel rim for scale"))
+        if not points:
+            self.status.set("Vessel check cancelled.");return
+        got=wr.scale_from_arc(points,vessel,image_scale=1.0)
+        if got is None:
+            messagebox.showerror("Vessel check",
+                "Those points do not define a circle. Try again with points "
+                "spread further along the rim.",parent=self);return
+        implied,diameter,span,confidence=got
+        if confidence=="poor":
+            messagebox.showwarning("Vessel check",
+                f"Those points span only {span:.0f} degrees of the rim. A short, "
+                "nearly straight arc barely constrains the radius, so this "
+                "estimate is weak - it is recorded, but treat it with caution.",
+                parent=self)
+        self._offer_scale("vessel_arc",implied,
+                          f"{label} fitted from a {span:.0f} degree arc "
+                          f"({diameter:,.0f} px across, {confidence} fit)")
 
     def _detection_preview(self,title):
         """Background-subtracted view of one frame, with its components.
@@ -718,6 +867,7 @@ class App(CockpitApp):
             self.status.set(text)
         self.log("Load reviewed tracks",f"{len(tracks)} detection rows across {int(tracks.track_id.nunique())} candidate track(s) over {analyzed_frame_count} analyzed frames.",status="done")
         self.log("Restore prior review",f"{sum(1 for value in accepted.values() if value)} track(s) start accepted; {len(edits)} prior stitch edit(s) reloaded.",status="done")
+        self._calibration_review(out,summary,metadata)
         marked=self.marked_animals
         if marked and marked.get("count"):
             found=int(tracks.track_id.nunique())
@@ -1189,6 +1339,7 @@ class App(CockpitApp):
                             "speed, coverage, frequency and curvature - only detected "
                             "positions are ever measured.")
         self._control_separator()
+        self._control_button("Confirm calibration for the lab library",self.confirm_calibration)
         self._control_button("Lock good + rescue rest",request_rescue)
         self._control_button("Continue to bout review",finish)
         fig.canvas.mpl_connect("pick_event",pick)
@@ -1196,6 +1347,114 @@ class App(CockpitApp):
         self._show_page("review")
         self.review_canvas.draw_idle()
         self._build_proxy_async(frames_ready)
+
+    def _calibration_review(self,out,summary,metadata):
+        """Compare this run against reference ranges, and store what was inferred.
+
+        The provenance is written whether or not anything looked wrong, and
+        whether or not the student acts on it, so returning to the dataset later
+        shows which estimates existed and what disagreed at the time.
+        """
+        out=Path(out)
+        try:declared_scale=float(self.scale.get())
+        except (TypeError,ValueError):declared_scale=None
+        try:declared_fps=float(self.fps.get())
+        except (TypeError,ValueError):declared_fps=None
+        stage=self._stage_key();vessel=self._vessel_key()
+        mode=self.locomotion_mode.get() or "crawling"
+
+        speed=freq=None
+        try:
+            eligible=summary[summary.eligible_for_frequency.astype(bool)] if "eligible_for_frequency" in summary else summary
+            speed=float(pd.to_numeric(eligible.mean_speed_um_s,errors="coerce").median())
+            freq=float(pd.to_numeric(eligible.spine_bend_frequency_hz,errors="coerce").median())
+        except Exception:
+            pass
+        if speed is not None and not np.isfinite(speed):speed=None
+        if freq is not None and not np.isfinite(freq):freq=None
+
+        container_fps=metadata.get("fps_from_container") or metadata.get("container_fps")
+        warnings=wr.review(length_px=self._traced_length_px,um_per_px=declared_scale,
+                           stage=stage,speed_um_s=speed,freq_hz=freq,mode=mode,
+                           declared_fps=declared_fps,container_fps=container_fps)
+        for warning in warnings:
+            self.log(f"Check: {warning.subject}",
+                     f"{warning.observed} vs {warning.expected}. {warning.message}",
+                     status="warning")
+        if not warnings:
+            self.log("Calibration checks","Nothing looked out of range for "
+                     f"{wr.STAGE_LABELS.get(stage,stage)} {mode}.",status="done")
+
+        substrate=None
+        try:
+            background=out/"background_reference.png"
+            if background.exists():
+                substrate=st.read_substrate(st.substrate_metrics(
+                    cv2.imread(str(background),cv2.IMREAD_GRAYSCALE)))
+        except Exception:
+            substrate=None
+        if substrate:
+            self.log("Substrate reading",
+                     f"{substrate['label']} ({substrate['confidence']}). {substrate['basis']}",
+                     status="info")
+
+        provenance=wr.calibration_provenance(
+            declared_um_per_px=declared_scale,declared_fps=declared_fps,
+            container_fps=container_fps,stage=stage,vessel=vessel,
+            estimates=list(self._scale_estimates),warnings=warnings,
+            confirmed=False,substrate=substrate,
+            notes=f"expected locomotion mode: {mode}")
+        provenance["measured"]={"median_speed_um_s":speed,"median_bend_hz":freq,
+                                "traced_worm_length_px":self._traced_length_px}
+        try:
+            (out/"calibration_provenance.json").write_text(
+                json.dumps(provenance,indent=2),encoding="utf-8")
+        except Exception:
+            pass
+        self._pending_calibration=(provenance,out,stage,mode,speed,freq,declared_scale,declared_fps)
+        return warnings
+
+    def confirm_calibration(self):
+        """Record this run in the lab library as a trusted example.
+
+        Only confirmed runs shape the lab's own reference ranges - otherwise a
+        run with a mistaken frame rate would teach the library that the mistake
+        is normal.
+        """
+        pending=getattr(self,"_pending_calibration",None)
+        if not pending:
+            messagebox.showinfo("Confirm calibration",
+                "Run an analysis first - there is nothing to confirm yet.",parent=self);return
+        provenance,out,stage,mode,speed,freq,scale,fps=pending
+        if not messagebox.askyesno("Confirm calibration",
+            f"Record this run as a trusted example?\n\n"
+            f"    stage    {wr.STAGE_LABELS.get(stage,stage)}\n"
+            f"    mode     {mode}\n"
+            f"    scale    {scale if scale else '-'} um/px\n"
+            f"    fps      {fps if fps else '-'}\n"
+            f"    speed    {f'{speed:,.0f} um/s' if speed else '-'}\n"
+            f"    bend     {f'{freq:.2f} Hz' if freq else '-'}\n\n"
+            "Confirm only if the frame rate and scale are right. Confirmed runs "
+            "become part of this lab's own reference ranges, so a run confirmed "
+            "in error teaches the mistake to every later check.",parent=self):
+            return
+        wr.record_observation(module="population_tracking",run_id=Path(out).name,
+                              stage=stage,mode=mode,
+                              length_px=self._traced_length_px,um_per_px=scale,
+                              speed_um_s=speed,freq_hz=freq,declared_fps=fps,
+                              confirmed=True,warnings=[])
+        provenance["confirmed_by_user"]=True
+        try:
+            (Path(out)/"calibration_provenance.json").write_text(
+                json.dumps(provenance,indent=2),encoding="utf-8")
+        except Exception:
+            pass
+        summary=wr.library_summary()
+        self.log("Calibration confirmed",
+                 f"recorded to the lab library; it now holds "
+                 f"{summary['observations_confirmed']} confirmed observation(s) "
+                 f"({summary['observations_excluded']} excluded).",status="done")
+        self.status.set("Calibration confirmed and recorded in the lab library.")
 
     def _finish_run(self,out,summary,reviewed):
         """Tail of a completed run: status, feedback prompt, back to setup."""
@@ -1310,6 +1569,95 @@ class App(CockpitApp):
             summary=pd.read_csv(summary_path if summary_path.exists() else out/"track_summary.csv")
             self.review(summary,out)
         except Exception as exc:messagebox.showerror("Resume review",str(exc))
+
+    def recompute_run(self):
+        """Correct a finished run's declared scale or frame rate, without re-detecting.
+
+        Detection, linking and spines depend only on pixels and frame numbers,
+        so they are reused as-is. Everything that depends on the declared
+        parameters is re-derived - not rescaled, because the modality
+        classifier compares frequency against fixed thresholds.
+        """
+        folder=filedialog.askdirectory(title="Choose the results folder to correct",
+                                       parent=self)
+        if not folder:return
+        out=Path(folder)
+        if not (out/"detections_and_tracks.csv").exists():
+            messagebox.showerror("Correct a run",
+                "That folder has no detections_and_tracks.csv, so there is nothing "
+                "to recompute from.",parent=self);return
+        metadata={}
+        try:
+            metadata=json.loads((out/"analysis_metadata.json").read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        old_fps=metadata.get("fps");old_scale=metadata.get("um_per_px")
+        dialog=tk.Toplevel(self);apply_wink_theme(dialog)
+        dialog.title("Correct scale or frame rate")
+        try:
+            screen_w=dialog.winfo_screenwidth();screen_h=dialog.winfo_screenheight()
+        except Exception:
+            screen_w,screen_h=1366,768
+        win_w=max(520,min(600,screen_w-80));win_h=max(340,min(430,screen_h-120))
+        dialog.geometry(f"{win_w}x{win_h}+{max(0,(screen_w-win_w)//2)}+{max(0,(screen_h-win_h)//3)}")
+        try:dialog.resizable(True,True)
+        except Exception:pass
+        ttk.Label(dialog,text=out.name,font=("Segoe UI",10,"bold")).pack(anchor="w",padx=12,pady=(12,2))
+        ttk.Label(dialog,wraplength=win_w-40,justify="left",text=(
+            f"This run was analysed with "
+            f"{old_fps if old_fps else 'an unrecorded'} fps and "
+            f"{old_scale if old_scale else 'an unrecorded'} um/pixel.\n\n"
+            "Detection, linking and spines are reused unchanged - they depend only "
+            "on pixels and frame numbers. Track summaries and modality proposals "
+            "are recomputed, because the classifier compares frequency against "
+            "fixed thresholds and cannot simply be rescaled.\n\n"
+            "The original run is not modified; results go to a new folder beside "
+            "it. Any review already done there does not carry over.")).pack(
+            anchor="w",padx=12,pady=4)
+        new_fps=tk.StringVar(value=str(old_fps or self.fps.get()))
+        new_scale=tk.StringVar(value=str(old_scale or self.scale.get()))
+        reason=tk.StringVar(value="")
+        for label,var in (("Corrected FPS",new_fps),("Corrected um/pixel",new_scale),
+                          ("Reason (recorded)",reason)):
+            row=ttk.Frame(dialog);row.pack(fill="x",padx=12,pady=3)
+            ttk.Label(row,text=label,width=20).pack(side="left")
+            ttk.Entry(row,textvariable=var).pack(side="right",fill="x",expand=True)
+        result={"go":False}
+        buttons=ttk.Frame(dialog);buttons.pack(fill="x",padx=12,pady=(8,12))
+        def go():
+            result["go"]=True;dialog.destroy()
+        ttk.Button(buttons,text="Cancel",command=dialog.destroy).pack(side="right",padx=4)
+        ttk.Button(buttons,text="Recompute",command=go).pack(side="right",padx=4)
+        dialog.grab_set()
+        try:
+            dialog.lift();dialog.focus_force()
+        except Exception:pass
+        self.wait_window(dialog)
+        if not result["go"]:
+            self.status.set("Correction cancelled.");return
+        try:
+            fps=float(new_fps.get());scale=float(new_scale.get())
+        except (TypeError,ValueError):
+            messagebox.showerror("Correct a run","FPS and um/pixel must be numbers.",parent=self);return
+        self.go.state(["disabled"])
+        self.status.set("Recomputing from the saved detections...")
+        self.log("Correcting a finished run",
+                 f"{out.name}: fps {old_fps} -> {fps}, um/px {old_scale} -> {scale}. "
+                 "Detection is reused; summaries and modality proposals are re-derived.",
+                 status="running")
+        threading.Thread(target=self._run_recompute,args=(out,fps,scale,reason.get()),
+                         daemon=True).start()
+
+    def _run_recompute(self,out,fps,scale,reason):
+        try:
+            summary,new_out=recompute_from_detections(
+                out,fps,scale,reason=reason,
+                progress=lambda i,n,phase="Recomputing":self.after(
+                    0,self.status.set,f"{phase}: {i} of {n}..."))
+            self.fps.set(f"{fps:g}");self.scale.set(f"{scale:g}")
+            self.after(0,self.review,summary,new_out,True)
+        except Exception as exc:
+            self.after(0,self.fail,str(exc))
 
     def draw_optional_rois(self):
         try:
