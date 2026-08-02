@@ -377,6 +377,49 @@ class MatplotlibProcessPanel:
             pass
 
 
+def install_error_reporting(root, title="Action failed", log=None, status=None):
+    """Make Tk callback failures visible in a window that has no process hood.
+
+    Tk writes callback exceptions to stderr, which ``pythonw`` discards, so a
+    handler that raises leaves a button that silently does nothing - the failure
+    mode that hides broken controls until someone reports them. ``CockpitApp``
+    routes these into its hood; plain ``tk.Tk`` tools use this instead.
+
+    ``log`` and ``status`` are optional one-argument callables.
+    """
+    import traceback
+    from tkinter import messagebox
+
+    def handler(exc_type, value, tb):
+        detail = f"{exc_type.__name__}: {value}"
+        try:
+            frames = traceback.extract_tb(tb)
+            if frames:
+                last = frames[-1]
+                name = str(last.filename).replace("\\", "/").rsplit("/", 1)[-1]
+                detail += f"  [{name}:{last.lineno} in {last.name}]"
+        except Exception:
+            pass
+        for sink in (log, status):
+            if sink is not None:
+                try:
+                    sink(detail)
+                except Exception:
+                    pass
+        if log is None and status is None:
+            try:
+                messagebox.showerror(title, detail, parent=root)
+            except Exception:
+                pass
+        traceback.print_exception(exc_type, value, tb)
+
+    try:
+        root.report_callback_exception = handler
+    except Exception:
+        pass
+    return handler
+
+
 class ReviewWorkbench:
     """Three-pane review shell: controls | editing canvas | process hood.
 
@@ -600,6 +643,33 @@ class CockpitApp(tk.Tk):
         self._hood_visible = True
         apply_wink_theme(self)
         self._build_cockpit(controls_label, hood_label)
+        # Tk sends callback exceptions to stderr, which pythonw discards - so a
+        # button whose handler raises simply appears to do nothing, and the user
+        # has no way to tell a broken control from an inapplicable one. Surface
+        # them in the hood and the status line instead. Every CockpitApp tool
+        # gets this; a subclass may still override the method.
+        self.report_callback_exception = self._report_callback_exception
+
+    def _report_callback_exception(self, exc_type, value, tb):
+        import traceback
+        detail = f"{exc_type.__name__}: {value}"
+        try:
+            frames = traceback.extract_tb(tb)
+            if frames:
+                last = frames[-1]
+                name = str(last.filename).replace("\\", "/").rsplit("/", 1)[-1]
+                detail += f"  [{name}:{last.lineno} in {last.name}]"
+        except Exception:
+            pass
+        try:
+            self.log("Action failed", detail, status="failed")
+        except Exception:
+            pass
+        try:
+            self.set_status("Action failed: " + detail)
+        except Exception:
+            pass
+        traceback.print_exception(exc_type, value, tb)
 
     def _build_cockpit(self, controls_label, hood_label):
         tk.Frame(self, bg=WINK_SAGE, height=5).pack(fill="x")

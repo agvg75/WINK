@@ -678,7 +678,15 @@ def analyze(folder, fps, um_per_px, start_roi, lawn_rois, output_dir=None,
             summary={
                 "paired_events": int(len(event_table)) if event_table is not None else 0,
                 "tracks_analyzed": int(len(tracks)) if tracks is not None else 0,
-                "minimum_window_s": minimum_window_s,
+                # There is no single "minimum window" parameter - the paired
+                # comparison is sized by the before and after windows, so record
+                # both. This line previously referenced an undefined name, and
+                # because the whole manifest write sits in a try/except the
+                # NameError was caught silently: the decision manifest was never
+                # written for ANY basal slowing run, leaving only a
+                # decision_transparency_error.txt stub.
+                "before_window_s": before_s,
+                "after_window_s": after_s,
                 "minimum_window_fraction": min_window_fraction,
                 "minimum_worm_fraction_inside": minimum_worm_fraction_inside,
                 "tracklet_stitch_max_gap_s": max_stitch_gap_s,

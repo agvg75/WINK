@@ -449,6 +449,14 @@ class App(tk.Tk):
         self.status = tk.StringVar(
             value="Step 1: track a movie (its kinematics load here "
                   "automatically). Or load an existing tracking CSV below.")
+        # Tk discards callback errors to stderr under pythonw, so a failing
+        # button looks like one that does nothing. Report them instead.
+        try:
+            from process_ui import install_error_reporting
+            install_error_reporting(
+                self, status=lambda m: self.status.set("Action failed: " + m))
+        except Exception:
+            pass
         # Drop-down choices for the category fields (blank values stay Entry).
         self._choices = {
             "design": ["single_trial", "habituation_series",

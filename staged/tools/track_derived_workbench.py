@@ -181,6 +181,14 @@ class App(tk.Tk):
                   for key, value in defaults.items()}
         self.status = tk.StringVar(
             value="Choose a reviewed input table and configuration.")
+        # Tk discards callback errors to stderr under pythonw, so a failing
+        # button looks like one that does nothing. Report them instead.
+        try:
+            from process_ui import install_error_reporting
+            install_error_reporting(
+                self, status=lambda m: self.status.set("Action failed: " + m))
+        except Exception:
+            pass
         fields = [
             ("Reviewed input CSV", "source"), ("Configuration JSON", "config"),
             ("FPS", "fps"), ("Scale (µm/pixel)", "scale"),

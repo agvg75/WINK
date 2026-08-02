@@ -68,10 +68,7 @@ class App(CockpitApp):
         self.marked_animals=None
         self.roi_mode=tk.StringVar(value="none");self.roi_records=[]
         self._build_controls();self._build_center()
-        # Tk swallows callback exceptions to stderr, which pythonw discards - a
-        # failing button then looks like a button that does nothing. Surface
-        # them in the hood and the status line instead.
-        self.report_callback_exception=self._report_callback_exception
+        # Callback-exception reporting is inherited from CockpitApp.
         self.status.trace_add("write",lambda *_:self.set_status(self.status.get()));self.set_status(self.status.get())
 
     def _build_controls(self):
@@ -471,23 +468,6 @@ class App(CockpitApp):
                  f"about {thickness_proxy:.1f} px thick at {int(scale*100)}% detection scale.",
                  status="done")
         self.status.set(f"Area gates set from a measured worm: {low:,.0f} - {high:,.0f} source px.")
-
-    def _report_callback_exception(self,exc_type,value,tb):
-        import traceback
-        detail=f"{exc_type.__name__}: {value}"
-        try:
-            frames=traceback.extract_tb(tb)
-            if frames:
-                last=frames[-1]
-                detail+=f"  [{Path(last.filename).name}:{last.lineno} in {last.name}]"
-        except Exception:
-            pass
-        try:
-            self.log("Action failed",detail,status="failed")
-            self.status.set("Action failed: "+detail)
-        except Exception:
-            pass
-        traceback.print_exception(exc_type,value,tb)
 
     def _ask_detection_resolution(self,recommended,width,height,typical_area,proxy_fps,profile):
         """Recommend a detection resolution and let the user actually change it.

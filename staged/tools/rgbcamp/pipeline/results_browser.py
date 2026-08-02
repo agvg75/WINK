@@ -575,6 +575,13 @@ class ResultsBrowser(tk.Tk):
         super().__init__()
         self.title(f"RGBCaMP Results Browser -- {Path(csv_path).name}")
         self.geometry("1150x720")
+        # No status line here, so failures surface as a dialog rather than
+        # vanishing into the stderr pythonw discards.
+        try:
+            from process_ui import install_error_reporting
+            install_error_reporting(self, title="RGBCaMP results browser")
+        except Exception:
+            pass
 
         self._current_view: Optional[ViewDef] = None
         self._current_table_full: Optional[pd.DataFrame] = None

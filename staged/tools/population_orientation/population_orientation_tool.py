@@ -13,6 +13,12 @@ class App(tk.Tk):
  def __init__(self):
   super().__init__();self.title("Population Orientation - Plate State");self.geometry("760x480")
   self.v={k:tk.StringVar(value=v) for k,v in {"source":"","plate":"","fps":"1","known":"20","radius":"2","worms":""}.items()};self.points=None;self.scale=None;self.status=tk.StringVar(value="Choose a movie, TIFF stack, or image folder.")
+  # Tk discards callback errors to stderr under pythonw; report them instead.
+  try:
+   from process_ui import install_error_reporting
+   install_error_reporting(self,status=lambda m:self.status.set("Action failed: "+m))
+  except Exception:
+   pass
   labels=[("Source","source"),("Plate ID (required)","plate"),("Declared FPS","fps"),("Calibration distance (mm)","known"),("ROI radius (mm)","radius"),("Approximate worms on plate","worms")]
   for i,(lab,key) in enumerate(labels):ttk.Label(self,text=lab).grid(row=i,column=0,padx=10,pady=6,sticky="w");ttk.Entry(self,textvariable=self.v[key],width=60).grid(row=i,column=1,pady=6)
   ttk.Button(self,text="Choose file",command=self.file).grid(row=0,column=2);ttk.Button(self,text="Choose folder",command=self.folder).grid(row=1,column=2)

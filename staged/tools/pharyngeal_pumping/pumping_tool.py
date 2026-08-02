@@ -869,6 +869,14 @@ class PumpingTool(tk.Tk):
 
         self.status = ttk.Label(self, text="Choose one frame from a numbered image sequence.")
         self.status.pack(fill="x", padx=10, pady=(0, 4))
+        # Tk discards callback errors to stderr under pythonw, so a failing
+        # button looks like one that does nothing. Report them instead.
+        try:
+            from process_ui import install_error_reporting
+            install_error_reporting(
+                self, status=lambda m: self.status.config(text="Action failed: " + m))
+        except Exception:
+            pass
         self.canvas = tk.Canvas(self.center_frame, bg="#202020", highlightthickness=0)
         self.canvas.grid(row=1, column=0, sticky="nsew", padx=0, pady=4)
         # In-panel analysis graph: the trace + detected pumps appear here, below
