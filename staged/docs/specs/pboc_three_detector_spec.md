@@ -387,28 +387,30 @@ because they change every run, which is what makes them a data stream.
 
 Pairing a reviewer's marked peak with a detector's decides every count in the
 confusion matrices below, so the rule must be measured rather than picked. The
-rule is **within 1 SD** — but of the right quantity:
+rule is **within 1 SD, taking the most permissive of the available spreads** —
+in practice the interval SD, roughly 3 s at 20 °C.
 
-- **not** the interval SD (~3 s at 20 °C). That is cycle-to-cycle timing
-  variation, which says nothing about how precisely a peak can be located.
-- **not** the detector's own error against ground truth. Using that to define
-  agreement is circular: the detector would be scored against a tolerance
-  derived from its own performance, and a sloppier detector would earn a wider
-  one.
-- **yes:** the SD of the **reviewer-minus-detector peak offset**, measured on
-  unambiguously paired events.
+The reason to prefer the widest is that **the costs are asymmetric**:
 
-Unambiguous pairs are easy to obtain because events sit roughly 45 s apart: any
-isolated event where exactly one reviewer mark and one detector peak fall within
-a few seconds is unarguably the same event, whatever the final tolerance turns
-out to be. Compute the offset SD over those, then apply 1 SD as the pairing rule
-everywhere, including the ambiguous cases. The easy cases calibrate the rule for
-the hard ones, and nothing is chosen by hand.
+- Too strict, and a single well-detected event is split into two errors — the
+  detector's peak is scored a false positive *and* the reviewer's mark a missed
+  event. Strictness does not merely fail to credit a match; it manufactures a
+  pair of errors from a success, and it does so precisely where the detector was
+  working.
+- Too permissive, and two genuinely distinct events could be merged. But events
+  sit roughly 45 s apart, so this cannot happen at any tolerance remotely near
+  3 s. The failure mode the strict rule invents is real; the one the permissive
+  rule risks is not reachable.
 
-Report the tolerance in seconds alongside the N it was derived from, and
-re-derive it as N grows rather than freezing the first estimate. If it ever
-approaches the interval SD, pairing has stopped being meaningful and the
-matrices should say so rather than quietly counting.
+Rejected alternative: the detector's own peak error against ground truth. Using
+it to define agreement is circular — the detector would be judged against a
+tolerance derived from its own performance, so a sloppier detector would earn a
+wider one and score no worse.
+
+Report the tolerance in seconds beside every matrix, and state the interval SD
+it came from. **Guard rail:** if the tolerance ever exceeds roughly a quarter of
+the local median interval, pairing has stopped being meaningful and the matrices
+must say so rather than quietly counting.
 
 Worth measuring separately, though not required for the first version: the SD of
 **reviewer against reviewer** on the same events. That is the floor on how well
