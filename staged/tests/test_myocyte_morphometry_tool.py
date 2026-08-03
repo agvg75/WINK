@@ -79,6 +79,30 @@ try:
 
     check("controls frame has nonzero width",
           app.controls.winfo_reqwidth() > 0, app.controls.winfo_reqwidth())
+
+    # --- in-tool contextual help: a '?' the student can summon, answering
+    # "what do I do next, and why" for the step they are actually on. It
+    # lives in the hood and only appears when asked for. ------------------
+    def hood_text():
+        # Collapse whitespace: the help is wrapped to the hood's width, so a
+        # phrase can be split across lines and an exact substring check on
+        # the raw text would fail on formatting rather than content.
+        return " ".join(app.hood_text.get("1.0", "end").split())
+
+    check("help is hidden until summoned (the hood shows the process log)",
+          app._help_visible is False)
+    app.toggle_help()
+    check("pressing help shows help in the hood", app._help_visible is True)
+    check("the help shown is for the CURRENT step, not generic boilerplate",
+          "draw the cell boundary" in hood_text().lower(), hood_text()[:60])
+    check("help explains WHY, not just which button to press",
+          "measured from the outline" in hood_text().lower())
+    check("the button now offers a way back to the process log",
+          "process log" in app._help_button.cget("text").lower(),
+          app._help_button.cget("text"))
+    app.toggle_help()
+    check("pressing it again returns the process log",
+          app._help_visible is False and "myocyte" in hood_text().lower())
     check("center canvas has nonzero size after layout",
           app.center_canvas.get_tk_widget().winfo_reqwidth() > 0)
 
@@ -712,6 +736,64 @@ try:
           app.waves["n_affected"] == sum(
               1 for f in app.waves["fibers"] if f["class"] == 1),
           (app.waves["n_affected"], app.waves["n_fibers"]))
+
+    # --- cut a fiber in two: for one trace covering a genuinely straight
+    # stretch AND a wavy one, so each half can be labelled separately -----
+    n_before_cut = app.waves["n_fibers"]
+    long_i = max(range(len(app.waves["fibers"])),
+                 key=lambda k: len(app.waves["fibers"][k]["x"]))
+    long_fiber = app.waves["fibers"][long_i]
+    mid = len(long_fiber["x"]) // 2
+    total_pts_before = sum(len(f["x"]) for f in app.waves["fibers"])
+    app.start_fiber_cut()
+    check("cut mode connects a click handler", app._cut_cid is not None)
+    app._fiber_cut_click(fake_event(float(long_fiber["x"][mid]),
+                                     float(long_fiber["y"][mid]), button=1))
+    check("cutting a fiber produces one more fiber",
+          app.waves["n_fibers"] == n_before_cut + 1, app.waves["n_fibers"])
+    check("cutting conserves the traced points (nothing invented or lost)",
+          sum(len(f["x"]) for f in app.waves["fibers"]) == total_pts_before,
+          (sum(len(f["x"]) for f in app.waves["fibers"]), total_pts_before))
+    check("both halves are marked corrected, so the row records human "
+          "judgement rather than the automatic trace",
+          all(f.get("corrected") for f in app.waves["fibers"][long_i:long_i + 2]))
+
+    # a cut that would leave an unclassifiable stub is refused, not silently
+    # allowed to produce a meaningless fragment
+    n_after_cut = app.waves["n_fibers"]
+    stub_target = app.waves["fibers"][long_i]
+    app._fiber_cut_click(fake_event(float(stub_target["x"][1]),
+                                     float(stub_target["y"][1]), button=1))
+    check("a cut that would leave a stub under 10 points is refused",
+          app.waves["n_fibers"] == n_after_cut, app.waves["n_fibers"])
+    check("the refusal explains itself and offers the alternative",
+          "too short" in app.status.get().lower(), app.status.get())
+    app.finish_fiber_cut()
+    check("finishing the cut disconnects the handler", app._cut_cid is None)
+
+    # --- extend a fiber the tracer stopped short on ----------------------
+    ext_i = 0
+    ext_fiber = app.waves["fibers"][ext_i]
+    pts_before_extend = len(ext_fiber["x"])
+    end_x, end_y = float(ext_fiber["x"][-1]), float(ext_fiber["y"][-1])
+    app.start_fiber_extend()
+    check("extend mode connects a click handler", app._extend_cid is not None)
+    app._fiber_extend_click(fake_event(end_x, end_y, button=1))   # pick the fiber+end
+    check("clicking near a fiber end selects it for extension",
+          app._extend_target is not None, app._extend_target)
+    app._fiber_extend_click(fake_event(end_x + 20, end_y, button=1))  # trace onward
+    extended = app.waves["fibers"][app._extend_target[0]]
+    check("extending appends points to the fiber",
+          len(extended["x"]) > pts_before_extend,
+          (len(extended["x"]), pts_before_extend))
+    check("the extension is filled in at traced spacing (~2 px), not left "
+          "as one sparse jump - classify_fiber_wavy counts POINTS",
+          len(extended["x"]) >= pts_before_extend + 8,
+          len(extended["x"]) - pts_before_extend)
+    check("an extended fiber is marked corrected", extended.get("corrected") is True)
+    app._fiber_extend_click(fake_event(end_x + 20, end_y, button=3))   # right-click finishes
+    check("right-clicking finishes extending and disconnects the handler",
+          app._extend_cid is None and app._extend_target is None)
 
     reviewed = {"n_fibers": app.waves["n_fibers"],
                 "n_affected": app.waves["n_affected"]}

@@ -657,6 +657,8 @@ class CockpitApp(tk.Tk):
         self.process_log = ProcessLog(process_title or title)
         self._controls_visible = True
         self._hood_visible = True
+        self._help_visible = False
+        self._help = None
         apply_wink_theme(self)
         self._build_cockpit(controls_label, hood_label)
         # Tk sends callback exceptions to stderr, which pythonw discards - so a
@@ -698,6 +700,14 @@ class CockpitApp(tk.Tk):
                   wraplength=640).pack(side="left", padx=8, fill="x", expand=True)
         ttk.Button(header, text="hood >",
                    command=self.toggle_hood).pack(side="right", padx=4)
+        # Contextual, step-by-step help, shown in the hood only when asked
+        # for. A tool calls set_help() as its workflow advances, so this
+        # answers "what do I do next, and why" for the step the student is
+        # actually on - which the one definitive manual cannot do without
+        # them leaving the tool to go and find the right page.
+        self._help_button = ttk.Button(header, text="?  help",
+                                        command=self.toggle_help)
+        self._help_button.pack(side="right", padx=4)
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=8, pady=5)
@@ -742,10 +752,57 @@ class CockpitApp(tk.Tk):
         try:
             self.hood_text.configure(state="normal")
             self.hood_text.delete("1.0", "end")
-            self.hood_text.insert("1.0", self.process_log.as_text(max_rows=20))
+            if self._help_visible:
+                self.hood_text.insert("1.0", self._help_body())
+            else:
+                self.hood_text.insert("1.0", self.process_log.as_text(max_rows=20))
             self.hood_text.configure(state="disabled")
         except Exception:
             pass
+
+    # -- contextual help ----------------------------------------------------
+    def set_help(self, title, body, steps=None):
+        """Register help for the step the tool is CURRENTLY on.
+
+        Call this whenever the workflow advances. `body` says what to do and
+        why; `steps` is an optional ordered list shown beneath it. The text
+        is only rendered when the student presses '?  help', so a tool can
+        keep this current without adding noise to the hood.
+        """
+        self._help = {"title": str(title), "body": str(body),
+                      "steps": list(steps or [])}
+        if self._help_visible:
+            self.refresh_hood()
+
+    def _help_body(self):
+        import textwrap
+        help_data = getattr(self, "_help", None)
+        if not help_data:
+            return ("Help\n\nThis tool has not registered step-by-step help "
+                    "yet. The full manual is in the docs folder, and the "
+                    "hub's description of this tool says what it is for.\n\n"
+                    "Press '?  help' again to return to the process log.")
+        lines = [help_data["title"], "=" * min(len(help_data["title"]), 34), ""]
+        lines += textwrap.wrap(help_data["body"], width=40) or [""]
+        if help_data["steps"]:
+            lines.append("")
+            for n, step in enumerate(help_data["steps"], 1):
+                wrapped = textwrap.wrap(step, width=36) or [""]
+                lines.append(f"{n}. {wrapped[0]}")
+                lines += [f"   {piece}" for piece in wrapped[1:]]
+        lines += ["", "-" * 34, "Press '?  help' again for the process log."]
+        return "\n".join(lines)
+
+    def toggle_help(self):
+        self._help_visible = not self._help_visible
+        try:
+            self._help_button.configure(
+                text="process log" if self._help_visible else "?  help")
+        except Exception:
+            pass
+        if self._help_visible and not self._hood_visible:
+            self.toggle_hood()   # summoning help should reveal where it appears
+        self.refresh_hood()
 
     # -- toggles ------------------------------------------------------------
     def toggle_controls(self):

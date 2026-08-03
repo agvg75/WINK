@@ -126,6 +126,9 @@ class App(CockpitApp):
         self.wave_link_um = mm.WAVE_LINK_UM
         self.manual_fiber_class = tk.StringVar(value="straight")
         self._fiber_cid = None
+        self._cut_cid = None
+        self._extend_cid = None
+        self._extend_target = None   # (fiber index, extending-the-start?)
         self._manual_fiber_cid = None
         self._manual_fiber_pts = []
 
@@ -295,6 +298,19 @@ class App(CockpitApp):
 
     def _show_stage_boundary(self):
         self._clear_actions()
+        self.set_help(
+            "Step 1 - draw the cell boundary",
+            "Everything about this cell is measured from the outline you draw, so "
+            "trace the myocyte itself and not the bright fibres inside it. Area, "
+            "perimeter, Feret and the sarcomere sampling line are all derived from "
+            "this polygon.",
+            ["Set Worm ID, Day and Region first - they go into every row.",
+             "Calibrate the scale if you have not: enter the length PRINTED on the "
+             "image, then apply it. A wrong scale makes every result wrong by the "
+             "same factor.",
+             "Press Start boundary, then left-click around the cell.",
+             "Right-click to close it (3 or more points).",
+             "Scroll to zoom in if the edge is hard to see."])
         ttk.Label(self._actions, wraplength=205, justify="left", foreground="#555555",
                   text="1. Draw the cell boundary: left-click vertices on the "
                        "image, right-click to close (3+ vertices).").pack(
@@ -304,6 +320,15 @@ class App(CockpitApp):
 
     def _show_stage_line(self):
         self._clear_actions()
+        self.set_help(
+            "Step 2 - the across-band sampling line",
+            "Sarcomere LENGTH is read across the striations, not along them. The "
+            "cyan line is placed at the cell's widest point, square to the bands "
+            "the image itself shows, so edge sarcomeres are not missed. Accept it "
+            "if it crosses the bands squarely.",
+            ["Accept the proposed line if it cuts across the bands.",
+             "Draw your own if the automatic angle is wrong - click the two ends.",
+             "Skip sarcomeres to record this cell's shape only."])
         ttk.Label(self._actions, wraplength=205, justify="left", foreground="#555555",
                   text=(f"Proposed across-band sampling line (auto-oriented "
                         f"{np.degrees(self.normal_angle):.0f} deg). Accept it, "
@@ -318,6 +343,17 @@ class App(CockpitApp):
 
     def _show_stage_review(self):
         self._clear_actions()
+        self.set_help(
+            "Step 3 - check the sarcomere ticks",
+            "Each red tick is one detected band. Spacing between ticks is the "
+            "sarcomere length, and the tick count is the sarcomere number. Zoom in "
+            "and check they sit on real bands before accepting - a tick on noise "
+            "changes both numbers.",
+            ["Accept if every tick is on a band and none are missing.",
+             "Edit ticks to drag, add or delete individual marks.",
+             "Manual to count from scratch, ignoring the automatic pass.",
+             "Expect roughly 1.4-1.9 um; CHECK_CALIBRATION means the scale is "
+             "probably wrong, not the biology."])
         ttk.Label(self._actions, wraplength=205, justify="left", foreground="#555555",
                   text="Review the automatic sarcomere detection (red ticks)."
                   ).pack(fill="x", pady=(0, 4))
@@ -343,16 +379,31 @@ class App(CockpitApp):
 
     def _show_stage_waves(self):
         self._clear_actions()
+        self.set_help(
+            "Step 4 - check the fibres",
+            "Each line is one traced actin fibre: blue straight, red wavy, yellow "
+            "low-confidence (likely a split or branch). Waviness is a comparative "
+            "damage proxy, so it is only meaningful if the traces really follow "
+            "single fibres. Correct them here - nothing is written until you save.",
+            ["Click a fibre to relabel it; right-click deletes one.",
+             "Delete a trace that zigzags between two different fibres - that is "
+             "the tracer hopping, not a real wave.",
+             "Cut a fibre that covers a straight stretch AND a wavy one.",
+             "Extend one the tracer stopped short on.",
+             "Draw a fibre it missed entirely.",
+             "Retry tracing with a smaller link distance if it keeps hopping."])
         ttk.Label(self._actions, wraplength=205, justify="left", foreground="#555555",
                   text="Review the fiber traces on the image: blue=straight, "
                        "red=wavy, yellow=low-confidence. Correct anything "
                        "wrong BEFORE saving.").pack(fill="x", pady=(0, 4))
-        ttk.Button(self._actions, text="Relabel a fiber (click it)",
+        ttk.Button(self._actions, text="Relabel / delete a fiber (click it)",
                    command=self.start_fiber_relabel).pack(fill="x", pady=2)
+        ttk.Button(self._actions, text="Cut a fiber in two",
+                   command=self.start_fiber_cut).pack(fill="x", pady=2)
+        ttk.Button(self._actions, text="Extend a fiber",
+                   command=self.start_fiber_extend).pack(fill="x", pady=2)
         ttk.Button(self._actions, text="Draw a missed fiber by hand",
                    command=self.start_manual_fiber).pack(fill="x", pady=2)
-        ttk.Button(self._actions, text="Delete a fiber (right-click it)",
-                   command=self.start_fiber_relabel).pack(fill="x", pady=2)
         ttk.Button(self._actions, text="Retry tracing (change link distance)",
                    command=self.retry_wave_detection).pack(fill="x", pady=2)
         ttk.Separator(self._actions, orient="horizontal").pack(fill="x", pady=4)
@@ -369,6 +420,26 @@ class App(CockpitApp):
             fill="x", pady=(0, 4))
         ttk.Button(self._actions, text="Done relabelling",
                    command=self.finish_fiber_relabel).pack(fill="x", pady=2)
+
+    def _show_stage_fiber_cut(self):
+        self._clear_actions()
+        ttk.Label(self._actions, wraplength=205, justify="left", foreground="#555555",
+                  text="Click a fiber at the point where it should be cut in "
+                       "two. Use this when one trace covers a genuinely "
+                       "straight stretch and a wavy one, so each half can be "
+                       "labelled separately.").pack(fill="x", pady=(0, 4))
+        ttk.Button(self._actions, text="Done cutting",
+                   command=self.finish_fiber_cut).pack(fill="x", pady=2)
+
+    def _show_stage_fiber_extend(self):
+        self._clear_actions()
+        ttk.Label(self._actions, wraplength=205, justify="left", foreground="#555555",
+                  text="Click near the END of a fiber to pick it, then click "
+                       "along where it really continues. Right-click to "
+                       "finish. Use this where the tracer stopped early.").pack(
+            fill="x", pady=(0, 4))
+        ttk.Button(self._actions, text="Done extending",
+                   command=self.finish_fiber_extend).pack(fill="x", pady=2)
 
     def _show_stage_manual_fiber(self):
         self._clear_actions()
@@ -388,6 +459,15 @@ class App(CockpitApp):
 
     def _show_stage_save(self):
         self._clear_actions()
+        self.set_help(
+            "Step 5 - save this myocyte",
+            "Saving appends one row to the CSV next to your image and updates the "
+            "session file, so nothing is lost if you close the tool. The cell stays "
+            "outlined on the image so you can see what is already done.",
+            ["Set the Myocyte number if you can identify the cell on the schematic.",
+             "Save myocyte writes the row immediately.",
+             "Discard throws this cell away without writing anything.",
+             "Then draw the next boundary - the number advances for you."])
         ttk.Button(self._actions, text="4. Save myocyte",
                    command=self.save_myocyte).pack(fill="x", pady=2)
         if self.waves:
@@ -960,6 +1040,181 @@ class App(CockpitApp):
             except Exception:
                 pass
             self._fiber_cid = None
+        self._recount_wave_summary()
+        self._update_wave_label()
+        self._show_stage_waves()
+        self._redraw()
+
+    # -- cut / extend an existing fiber -------------------------------------
+    # Between them, relabel, delete, cut, extend and hand-draw give a fiber
+    # the same editing power the population tracker gives an animal track -
+    # split, trim, delete, add missing points - except applied to one
+    # frame's traced fiber rather than a trajectory over time.
+    def _nearest_fiber_and_point(self, x, y):
+        """(fiber_index, point_index) of the closest traced point to (x, y),
+        or None when the click is not near any fiber."""
+        best = None
+        for i, fiber in enumerate(self.waves.get("fibers", [])):
+            fx = np.asarray(fiber["x"], dtype=float)
+            fy = np.asarray(fiber["y"], dtype=float)
+            if fx.size == 0:
+                continue
+            d = np.hypot(fx - x, fy - y)
+            j = int(np.argmin(d))
+            if best is None or d[j] < best[2]:
+                best = (i, j, float(d[j]))
+        if best is None or best[2] > self._pick_radius() * 3:
+            return None
+        return best[0], best[1]
+
+    def _fiber_arc_length_px(self, fx, fy):
+        fx = np.asarray(fx, dtype=float); fy = np.asarray(fy, dtype=float)
+        if fx.size < 2:
+            return 0.0
+        return float(np.hypot(np.diff(fx), np.diff(fy)).sum())
+
+    def _refresh_length_fraction(self, fiber):
+        """Keep a wavy fiber's length fraction consistent with its CURRENT
+        extent after a cut or extend. The automatic value came from the
+        classifier's wavy-window count on the original trace; once a person
+        changes the trace's extent that number no longer describes it, so it
+        is re-derived from the fiber's own arc length against the cell's
+        Feret - the same basis used for a hand-drawn fiber."""
+        if fiber.get("class") != 1:
+            fiber["length_fraction"] = 0.0
+            return
+        try:
+            geo = mm.boundary_measurements(self.boundary)
+            feret_um = geo["feret_px"] * self.scale
+            arc_um = self._fiber_arc_length_px(fiber["x"], fiber["y"]) * self.scale
+            fiber["length_fraction"] = float(arc_um / feret_um) if feret_um > 0 else 0.0
+        except Exception:
+            pass
+
+    def start_fiber_cut(self):
+        if not self.waves or not self.waves.get("fibers"):
+            self.status.set("No fibers to cut.")
+            return
+        self._cut_cid = self.center_canvas.mpl_connect(
+            "button_press_event", self._fiber_cut_click)
+        self._show_stage_fiber_cut()
+        self.status.set("Click a fiber where it should be cut in two.")
+
+    def _fiber_cut_click(self, event):
+        if event.inaxes != self.center_ax or event.xdata is None:
+            return
+        hit = self._nearest_fiber_and_point(float(event.xdata), float(event.ydata))
+        if hit is None:
+            self.status.set("No fiber near that click - try closer to a traced line.")
+            return
+        i, j = hit
+        fiber = self.waves["fibers"][i]
+        fx = list(fiber["x"]); fy = list(fiber["y"])
+        # Both halves must survive classify_fiber_wavy's own 10-point floor,
+        # otherwise a "cut" would silently produce a stub too short to mean
+        # anything.
+        if j < 10 or (len(fx) - j) < 10:
+            self.status.set(
+                "That cut would leave a stub shorter than 10 points, which is "
+                "too short to classify - cut nearer the middle, or delete the "
+                "fiber instead.")
+            return
+        head = dict(fiber); tail = dict(fiber)
+        head["x"] = fx[:j]; head["y"] = fy[:j]
+        tail["x"] = fx[j:]; tail["y"] = fy[j:]
+        for part in (head, tail):
+            part["corrected"] = True
+            part["source"] = fiber.get("source", "auto")
+            self._refresh_length_fraction(part)
+        self.waves["fibers"][i:i + 1] = [head, tail]
+        self._recount_wave_summary()
+        self.status.set(
+            f"Fiber cut into two ({len(head['x'])} and {len(tail['x'])} points; "
+            f"{self.waves['n_fibers']} fibers total). Relabel either half if "
+            "the cut separated a straight stretch from a wavy one.")
+        self._update_wave_label()
+        self._redraw()
+
+    def finish_fiber_cut(self):
+        if self._cut_cid is not None:
+            try:
+                self.center_canvas.mpl_disconnect(self._cut_cid)
+            except Exception:
+                pass
+            self._cut_cid = None
+        self._recount_wave_summary()
+        self._update_wave_label()
+        self._show_stage_waves()
+        self._redraw()
+
+    def start_fiber_extend(self):
+        if not self.waves or not self.waves.get("fibers"):
+            self.status.set("No fibers to extend.")
+            return
+        self._extend_target = None
+        self._extend_cid = self.center_canvas.mpl_connect(
+            "button_press_event", self._fiber_extend_click)
+        self._show_stage_fiber_extend()
+        self.status.set("Click near the END of the fiber you want to extend.")
+
+    def _fiber_extend_click(self, event):
+        if event.inaxes != self.center_ax or event.xdata is None:
+            return
+        x, y = float(event.xdata), float(event.ydata)
+        if event.button == 3:
+            self.finish_fiber_extend()
+            return
+        if self._extend_target is None:
+            hit = self._nearest_fiber_and_point(x, y)
+            if hit is None:
+                self.status.set("No fiber near that click - click near the end "
+                                "of the fiber you want to extend.")
+                return
+            i, j = hit
+            fiber = self.waves["fibers"][i]
+            # Extend whichever end the click was closer to.
+            at_start = j < (len(fiber["x"]) - 1 - j)
+            self._extend_target = (i, at_start)
+            self.status.set(
+                f"Extending the {'start' if at_start else 'end'} of this fiber. "
+                "Click along where it continues; right-click when done.")
+            self._redraw()
+            return
+        i, at_start = self._extend_target
+        fiber = self.waves["fibers"][i]
+        fx = list(fiber["x"]); fy = list(fiber["y"])
+        anchor = (fx[0], fy[0]) if at_start else (fx[-1], fy[-1])
+        # Fill in ~2 px steps so an extended stretch has the same point
+        # spacing as the traced part - classify_fiber_wavy counts POINTS, so
+        # a sparsely clicked extension would otherwise be weighted wrongly
+        # against the rest of the fiber.
+        seg = float(np.hypot(x - anchor[0], y - anchor[1]))
+        n = max(1, int(round(seg / 2.0)))
+        xs = list(np.linspace(anchor[0], x, n + 1)[1:])
+        ys = list(np.linspace(anchor[1], y, n + 1)[1:])
+        if at_start:
+            fiber["x"] = list(reversed(xs)) + fx
+            fiber["y"] = list(reversed(ys)) + fy
+        else:
+            fiber["x"] = fx + xs
+            fiber["y"] = fy + ys
+        fiber["corrected"] = True
+        self._refresh_length_fraction(fiber)
+        self._recount_wave_summary()
+        self.status.set(
+            f"Extended to {len(fiber['x'])} points. Keep clicking, or "
+            "right-click to finish.")
+        self._update_wave_label()
+        self._redraw()
+
+    def finish_fiber_extend(self):
+        if self._extend_cid is not None:
+            try:
+                self.center_canvas.mpl_disconnect(self._extend_cid)
+            except Exception:
+                pass
+            self._extend_cid = None
+        self._extend_target = None
         self._recount_wave_summary()
         self._update_wave_label()
         self._show_stage_waves()
@@ -1538,7 +1793,8 @@ class App(CockpitApp):
         self._blind_recount_active = False
         self.waves = None
         self._manual_fiber_pts = []
-        for _cid_attr in ("_fiber_cid", "_manual_fiber_cid"):
+        self._extend_target = None
+        for _cid_attr in ("_fiber_cid", "_cut_cid", "_extend_cid", "_manual_fiber_cid"):
             _cid = getattr(self, _cid_attr, None)
             if _cid is not None:
                 try:

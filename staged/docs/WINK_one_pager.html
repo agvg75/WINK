@@ -1,0 +1,342 @@
+<title>WINK — Worm Imaging and Kinematics</title>
+<style>
+  :root {
+    --slate:      #3E4F58;
+    --slate-deep: #2C3B44;
+    --sage:       #688877;
+    --sage-lift:  #7FA08D;
+    --ground:     #FAFAF7;
+    --panel:      #EEF1F0;
+    --ink:        #22303A;
+    --muted:      #5E6E76;
+    --rule:       #C9D4D0;
+    --flag:       #A8642E;
+
+    --measure: 68ch;
+    --step--1: clamp(0.78rem, 0.76rem + 0.1vw, 0.84rem);
+    --step-0:  clamp(0.97rem, 0.94rem + 0.16vw, 1.06rem);
+    --step-1:  clamp(1.17rem, 1.1rem + 0.34vw, 1.4rem);
+    --step-2:  clamp(1.5rem, 1.34rem + 0.8vw, 2.1rem);
+    --step-3:  clamp(2.1rem, 1.72rem + 1.9vw, 3.5rem);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --slate:      #A9BEC6;
+      --slate-deep: #C6D6DB;
+      --sage:       #8FB39D;
+      --sage-lift:  #A9C7B4;
+      --ground:     #171E22;
+      --panel:      #1F282D;
+      --ink:        #DCE5E7;
+      --muted:      #93A5AC;
+      --rule:       #33424A;
+      --flag:       #D89A63;
+    }
+  }
+  :root[data-theme="dark"] {
+    --slate:      #A9BEC6;
+    --slate-deep: #C6D6DB;
+    --sage:       #8FB39D;
+    --sage-lift:  #A9C7B4;
+    --ground:     #171E22;
+    --panel:      #1F282D;
+    --ink:        #DCE5E7;
+    --muted:      #93A5AC;
+    --rule:       #33424A;
+    --flag:       #D89A63;
+  }
+  :root[data-theme="light"] {
+    --slate:      #3E4F58;
+    --slate-deep: #2C3B44;
+    --sage:       #688877;
+    --sage-lift:  #7FA08D;
+    --ground:     #FAFAF7;
+    --panel:      #EEF1F0;
+    --ink:        #22303A;
+    --muted:      #5E6E76;
+    --rule:       #C9D4D0;
+    --flag:       #A8642E;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-size: var(--step-0);
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sheet {
+    max-width: 74ch;
+    margin: 0 auto;
+    padding: clamp(1.6rem, 5vw, 4.5rem) clamp(1.2rem, 5vw, 3rem) 4rem;
+  }
+
+  /* ---- masthead ---------------------------------------------------- */
+  .mast { border-top: 6px solid var(--sage); padding-top: 1.5rem; }
+
+  .wordmark {
+    font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+    font-size: var(--step-3);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 0.95;
+    color: var(--slate);
+    margin: 0;
+  }
+  .expansion {
+    font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+    font-size: var(--step--1);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--sage);
+    margin: 0.55rem 0 0;
+    font-weight: 600;
+  }
+  .standfirst {
+    font-size: var(--step-1);
+    line-height: 1.45;
+    color: var(--ink);
+    max-width: 56ch;
+    margin: 1.4rem 0 0;
+    text-wrap: balance;
+  }
+  .byline {
+    font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+    font-size: var(--step--1);
+    color: var(--muted);
+    margin: 1.1rem 0 0;
+  }
+
+  /* ---- the rule that carries the sage accent ----------------------- */
+  hr.div {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: 2.6rem 0 2.2rem;
+  }
+
+  h2 {
+    font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+    font-size: var(--step-2);
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    color: var(--slate);
+    margin: 0 0 0.8rem;
+    text-wrap: balance;
+  }
+
+  p { max-width: var(--measure); margin: 0 0 1rem; }
+  p:last-child { margin-bottom: 0; }
+
+  strong { color: var(--slate-deep); font-weight: 700; }
+
+  /* ---- the four principles: the page's one bold move --------------- */
+  .principles {
+    display: grid;
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin: 1.4rem 0 0;
+  }
+  @media (min-width: 46rem) { .principles { grid-template-columns: 1fr 1fr; } }
+
+  .principle { background: var(--ground); padding: 1.35rem 1.4rem; }
+  .principle h3 {
+    font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+    font-size: var(--step-0);
+    font-weight: 700;
+    color: var(--sage);
+    margin: 0 0 0.4rem;
+    letter-spacing: -0.01em;
+  }
+  .principle p { font-size: var(--step--1); line-height: 1.55; color: var(--muted); margin: 0; }
+
+  /* ---- capability list --------------------------------------------- */
+  dl.caps { margin: 1.3rem 0 0; }
+  dl.caps > div {
+    display: grid;
+    gap: 0.15rem 1.6rem;
+    padding: 0.95rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  dl.caps > div:first-child { border-top: 1px solid var(--rule); }
+  @media (min-width: 46rem) {
+    dl.caps > div { grid-template-columns: 15rem 1fr; align-items: baseline; }
+  }
+  dl.caps dt {
+    font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+    font-size: var(--step--1);
+    font-weight: 700;
+    color: var(--slate);
+    letter-spacing: -0.005em;
+  }
+  dl.caps dd { margin: 0; font-size: var(--step--1); line-height: 1.55; color: var(--muted); }
+
+  /* ---- start sequence: numbering is real here (it is a sequence) --- */
+  ol.start { list-style: none; counter-reset: s; padding: 0; margin: 1.3rem 0 0; }
+  ol.start li {
+    counter-increment: s;
+    position: relative;
+    padding-left: 3.1rem;
+    margin-bottom: 1.05rem;
+    max-width: var(--measure);
+  }
+  ol.start li::before {
+    content: counter(s);
+    position: absolute;
+    left: 0; top: -0.1rem;
+    width: 2.1rem; height: 2.1rem;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    background: var(--sage);
+    color: var(--ground);
+    font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+    font-size: var(--step--1);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  code {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--panel);
+    padding: 0.14em 0.42em;
+    border-radius: 3px;
+    color: var(--slate-deep);
+  }
+
+  .note {
+    border-left: 3px solid var(--flag);
+    padding: 0.15rem 0 0.15rem 1.1rem;
+    margin: 1.5rem 0 0;
+    max-width: var(--measure);
+  }
+  .note p { font-size: var(--step--1); color: var(--muted); }
+
+  footer {
+    margin-top: 3rem;
+    padding-top: 1.4rem;
+    border-top: 1px solid var(--rule);
+    font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+    font-size: var(--step--1);
+    color: var(--muted);
+  }
+  footer a { color: var(--sage); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  footer a:focus-visible { outline: 2px solid var(--sage); outline-offset: 3px; border-radius: 2px; }
+</style>
+
+<div class="sheet">
+
+  <header class="mast">
+    <h1 class="wordmark">WINK</h1>
+    <p class="expansion">Worm Imaging &amp; Kinematics</p>
+    <p class="standfirst">
+      A free toolset for measuring <em>C.&nbsp;elegans</em> behaviour and physiology
+      from video and confocal imaging — built so you can see inside every
+      measurement it makes.
+    </p>
+    <p class="byline">Vidal-Gadea Lab · Illinois State University</p>
+  </header>
+
+  <hr class="div">
+
+  <h2>What it is</h2>
+  <p>
+    WINK grew out of a single worm tracker and became a full lab bench: roughly
+    forty tools spanning locomotion, sensory behaviour, rhythmic programs,
+    calcium imaging, and muscle morphometry. They all launch from one hub and
+    share one interface, so a student who learns one tool already knows how the
+    rest behave.
+  </p>
+  <p>
+    It is for labs that want tracking and analysis they can inspect and argue
+    with, rather than a black box that returns a number. Some tools are marked
+    <strong>Experimental</strong> — usable, but not yet validated to the same
+    standard. WINK says so rather than hiding it.
+  </p>
+
+  <hr class="div">
+
+  <h2>How it thinks</h2>
+  <div class="principles">
+    <div class="principle">
+      <h3>You approve it, or it isn't data</h3>
+      <p>Automatic detection is a first pass you accept, edit, or override — never a silent final answer.</p>
+    </div>
+    <div class="principle">
+      <h3>Calibration is required, not assumed</h3>
+      <p>Missing scale or frame rate stops a measurement. A wrong scale makes every result wrong by the same factor, plausibly and invisibly.</p>
+    </div>
+    <div class="principle">
+      <h3>Corrections are kept</h3>
+      <p>Every override is logged, building a real record of where the automatic detectors can and cannot be trusted.</p>
+    </div>
+    <div class="principle">
+      <h3>A failure is not a zero</h3>
+      <p>When detection finds nothing, WINK says so — instead of writing a zero that reads later like a real measurement.</p>
+    </div>
+  </div>
+
+  <hr class="div">
+
+  <h2>What it measures</h2>
+  <dl class="caps">
+    <div>
+      <dt>Locomotion</dt>
+      <dd>Single-worm tracking across crawling, swimming and burrowing; population tracking with bout classification; swimming fatigue, healthspan decline, burrowing against graded resistance.</dd>
+    </div>
+    <div>
+      <dt>Sensory-guided behaviour</dt>
+      <dd>Mechanosensation and tap habituation, thermotaxis, chemotaxis and avoidance, magnetotaxis, area-restricted search, roaming versus dwelling.</dd>
+    </div>
+    <div>
+      <dt>Rhythmic programs</dt>
+      <dd>Pharyngeal pumping and the defecation motor program.</dd>
+    </div>
+    <div>
+      <dt>Calcium &amp; cellular activity</dt>
+      <dd>Single- and multi-channel GCaMP extraction, AFD neuron tracking, cell position and orientation over time.</dd>
+    </div>
+    <div>
+      <dt>Anatomy &amp; morphology</dt>
+      <dd>Body-wall muscle sarcomere morphometry with reviewable fibre tracing; non-striated muscle of the pharynx, uterus and anal depressor.</dd>
+    </div>
+    <div>
+      <dt>Acquisition &amp; utilities</dt>
+      <dd>Scale and magnification calculators, sample-size planning, plate-orientation statistics, and a failure library for reviewing what went wrong on a run.</dd>
+    </div>
+  </dl>
+
+  <hr class="div">
+
+  <h2>Getting started</h2>
+  <ol class="start">
+    <li>Run <code>Setup_Lab_Tools.bat</code> once on each lab computer.</li>
+    <li>Launch <code>Launch_Lab_Hub.bat</code> — the front door to every tool.</li>
+    <li>Read a tool's own description in the hub before its first run. That is the fastest way to know whether it fits your assay.</li>
+  </ol>
+  <p style="margin-top:1.2rem">
+    No programming is needed for day-to-day use. WINK checks for updates itself,
+    so a lab machine stays current without a reinstall.
+  </p>
+
+  <div class="note">
+    <p>
+      <strong>Under active development.</strong> Recent work includes a full
+      striated-muscle morphometry module validated against the lab's own
+      historical measurements, an in-app documentation assistant, and confocal
+      z-stack support for 3D neurite tracing and muscle volume. Check the hub's
+      changelog for what is current.
+    </p>
+  </div>
+
+  <footer>
+    Distributed via <a href="https://github.com/agvg75/WINK">github.com/agvg75/WINK</a> ·
+    Questions, bug reports, or an assay WINK doesn't fit yet — talk to the Vidal-Gadea lab.
+  </footer>
+
+</div>

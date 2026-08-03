@@ -42,6 +42,20 @@ jobs:
         shell: pwsh
         run: ./BUILD_INSTALLER.ps1 -Mode online
 
+      - name: Make fixed-name copies for permanent download links
+        # Asset filenames carry the version, so
+        # /releases/latest/download/<name> - GitHub's permalink form - cannot
+        # resolve them. These unversioned copies give the installer and the
+        # update package a link that always points at the newest release,
+        # which is what gets shared with new users and put in documentation.
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          Copy-Item "distribution/installers/WINK_Installer_Online_v$v.zip" `
+                    "distribution/installers/WINK_Installer_Online_latest.zip"
+          Copy-Item "distribution/updates/WINK_App_Update_v$v.zip" `
+                    "distribution/updates/WINK_App_Update_latest.zip"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -57,3 +71,5 @@ jobs:
             distribution/updates/update_manifest.json
             distribution/installers/WINK_Installer_Online_v${{ steps.ver.outputs.version }}.zip
             staged/docs/WINK_Lab_Tools_Manual.pdf
+            distribution/installers/WINK_Installer_Online_latest.zip
+            distribution/updates/WINK_App_Update_latest.zip
