@@ -153,6 +153,15 @@ public class WormRGBCaMPMap_v1 implements PlugIn {
     double[]   headPx, headPy;    // head point per frame (was pharynx)
     double     widthScale = 1.0;  // ROI bands sit at this fraction of half-width
     boolean    smoothMidlineForRois = true;  // biologically plausible spine for ROI geometry
+    // Write <base>_geometry.json beside the CSV: the midline, the body outline
+    // and the per-(segment,side) measurement bands, frame by frame. The ROI ZIP
+    // is the Fiji-facing artefact; this is the machine-readable one, so a
+    // downstream tool does not need an ImageJ ROI parser to know where this run
+    // actually measured. Without it the bands exist only on screen and are gone
+    // when the window closes - a reviewer can then see where the worm was, but
+    // not where it was measured. Default on; see the dialog label for the cost.
+    boolean    exportGeometryJson = true;
+    static final int MYOCYTE_SEGMENTS = 24;  // anatomy, not a resolution knob
     int        midlineSmoothPasses = 2;       // light smoothing; intensity pixels remain raw
     // manual endpoint overrides: frame -> {headX,headY,tailX,tailY}; NaN = none
     double[][] manualEnds;
@@ -1361,6 +1370,8 @@ public class WormRGBCaMPMap_v1 implements PlugIn {
         gd.addCheckbox("Use fluorescent tip anchoring", useFluorTips);
         gd.addCheckbox("Use eigenworm-on-fluorescence body (wins where well-constrained)", useFluorBody);
         gd.addCheckbox("Faster adaptive temporal-background sampling", adaptiveTemporalSamples);
+        gd.addCheckbox("Export geometry sidecar (unchecking = no results movie and "
+            +"no post-hoc ROI review for this recording)", exportGeometryJson);
         gd.addNumericField("Combined-fluor threshold (fraction of max)", fluorThreshFrac, 3);
         gd.addNumericField("Eigenworm-fit-wins min quality (0-1)", eigenFitMinFrac, 2);
         gd.showDialog();
@@ -1369,6 +1380,33 @@ public class WormRGBCaMPMap_v1 implements PlugIn {
         genotype = GENOTYPE_OPTS[gd.getNextChoiceIndex()];
         nMid   = Math.max(20,(int)gd.getNextNumber());
         nSeg   = Math.max(2,(int)gd.getNextNumber());
+        // 24 per side is anatomy, not a resolution setting: each segment is one
+        // projected myocyte, which is what lets a diagram name individual
+        // muscles. The older 12 lumped neighbours, and any other value maps to
+        // nothing anatomical - the numbers stay internally consistent, so a
+        // mis-set run produces a CSV that looks perfectly normal and is not
+        // comparable to anything. Caught here rather than downstream, because
+        // by then the recording exists and the mistake is expensive.
+        if (nSeg != MYOCYTE_SEGMENTS) {
+            boolean useAnatomical = IJ.showMessageWithCancel(
+                "Segment count does not match the myocytes",
+                nSeg+" segments per side does not correspond to individual\n"+
+                "myocytes. At "+MYOCYTE_SEGMENTS+" each segment is one projected\n"+
+                "myocyte; at 12 each segment lumps several neighbours, and other\n"+
+                "values map to no anatomical unit at all.\n\n"+
+                "This recording would still export, but its per-segment values\n"+
+                "would not be comparable with runs at "+MYOCYTE_SEGMENTS+", and tools that\n"+
+                "name individual muscles will refuse it.\n\n"+
+                "OK  - use "+MYOCYTE_SEGMENTS+" (recommended)\n"+
+                "Cancel - keep "+nSeg+" deliberately");
+            if (useAnatomical) {
+                nSeg = MYOCYTE_SEGMENTS;
+            } else {
+                IJ.log("[segments] WARNING: continuing with "+nSeg+" segments per side. "
+                    +"These do not correspond to individual myocytes and are not "
+                    +"comparable with "+MYOCYTE_SEGMENTS+"-segment runs.");
+            }
+        }
         buildMuscleBoundaries();
         IJ.log("Muscle segmentation: "+nSeg+" proportional segments per side (size-weighted, "
             +"larger mid-body, tapered at ends). Boundary fractions head->tail: "
@@ -1390,6 +1428,7 @@ public class WormRGBCaMPMap_v1 implements PlugIn {
         useFluorTips = gd.getNextBoolean();
         useFluorBody = gd.getNextBoolean();
         adaptiveTemporalSamples = gd.getNextBoolean();
+        exportGeometryJson = gd.getNextBoolean();
         fluorThreshFrac = gd.getNextNumber(); if (fluorThreshFrac<=0||fluorThreshFrac>=1) fluorThreshFrac=0.08;
         eigenFitMinFrac = gd.getNextNumber(); if (eigenFitMinFrac<0||eigenFitMinFrac>1) eigenFitMinFrac=0.70;
         return true;
@@ -3952,6 +3991,7 @@ public class WormRGBCaMPMap_v1 implements PlugIn {
             java.io.FileWriter fw=new java.io.FileWriter(sd.getDirectory()+sd.getFileName());
             fw.write(sb.toString()); fw.close();
             exportReviewRois(sd.getDirectory(),sd.getFileName());
+            if (exportGeometryJson) exportGeometrySidecar(sd.getDirectory(),sd.getFileName());
             exportSeconds=(System.nanoTime()-exportStarted)/1e9;
             exportTimingReport(sd.getDirectory(),sd.getFileName());
             IJ.log("Exported "+(nFrames*nSeg*2)+" rows ("+nMeas+" channels) to "+sd.getDirectory()+sd.getFileName());
@@ -4010,6 +4050,90 @@ public class WormRGBCaMPMap_v1 implements PlugIn {
         if(manager.getCount()>0 && !manager.runCommand("Save",directory+base+"_review_rois.zip"))
             throw new java.io.IOException("Could not save review ROI ZIP");
         manager.close();
+    }
+
+    // Machine-readable twin of the review ROI ZIP: the same accepted geometry,
+    // plus the measurement bands, as plain JSON. Two reasons it is not the ZIP:
+    // the bands are not in the ZIP at all (segPolygon's ROIs are built for the
+    // on-screen overlay and die with the window), and reading ImageJ ROI files
+    // from Python needs a parser library on every lab machine to decode a
+    // format this side already holds natively.
+    //
+    // Coordinates are image pixels in the ORIGINAL frame, matching the CSV.
+    // Frames with no accepted geometry carry found/skip and nothing else, so a
+    // gap stays a gap rather than being filled with a stale outline.
+    // JSON has no NaN literal. IJ.d2s would write the bare token NaN, which
+    // makes the WHOLE file unparseable - so one bad coordinate would silently
+    // cost the entire recording rather than one point. null says the same
+    // thing truthfully and keeps the file readable.
+    String jnum(double v, int dp){
+        return (Double.isNaN(v)||Double.isInfinite(v)) ? "null" : IJ.d2s(v,dp);
+    }
+
+    void exportGeometrySidecar(String directory,String csvName) throws Exception {
+        String base=csvName.toLowerCase().endsWith(".csv")?csvName.substring(0,csvName.length()-4):csvName;
+        if (muscleBoundaryFrac==null) buildMuscleBoundaries();
+        java.io.BufferedWriter w=new java.io.BufferedWriter(
+            new java.io.FileWriter(directory+base+"_geometry.json"));
+        try {
+            w.write("{\n  \"tool\": \"rgbcamp_fiji\",\n");
+            w.write("  \"n_frames\": "+nFrames+",\n");
+            w.write("  \"n_seg\": "+nSeg+",\n");
+            w.write("  \"n_mid\": "+nMid+",\n");
+            w.write("  \"width_scale\": "+jnum(widthScale,6)+",\n");
+            // The FULL boundary array. boundaryFracString() samples every
+            // nSeg/8th value for the log, which is a summary and cannot
+            // reconstruct where a band actually sat.
+            w.write("  \"muscle_boundary_frac\": [");
+            for (int k=0;k<=nSeg;k++){ if(k>0) w.write(", "); w.write(jnum(muscleBoundaryFrac[k],6)); }
+            w.write("],\n  \"frames\": [\n");
+            boolean first=true;
+            for (int f=0; f<nFrames; f++){
+                if(!first) w.write(",\n");
+                first=false;
+                w.write("    {\"frame\": "+(f+1)
+                    +", \"found\": "+(found[f]?"true":"false")
+                    +", \"skip\": "+(skip[f]?"true":"false"));
+                if (found[f] && !skip[f]) {
+                    boolean head0=headIsPoint0[f];
+                    w.write(", \"midline\": [");
+                    for (int i=0;i<nMid;i++){
+                        int q=head0?i:nMid-1-i;
+                        if(i>0) w.write(",");
+                        w.write("["+jnum(midX[f][q],2)+","+jnum(midY[f][q],2)+"]");
+                    }
+                    w.write("], \"outline\": [");
+                    for (int i=0;i<nMid;i++){
+                        if(i>0) w.write(",");
+                        w.write("["+jnum(ex(f,i,0),2)+","+jnum(ey(f,i,0),2)+"]");
+                    }
+                    for (int i=nMid-1;i>=0;i--){
+                        w.write(",["+jnum(ex(f,i,1),2)+","+jnum(ey(f,i,1),2)+"]");
+                    }
+                    w.write("], \"bands\": {");
+                    for (int k=0;k<nSeg;k++){
+                        if(k>0) w.write(",");
+                        w.write("\""+k+"\": {");
+                        for (int s=0;s<2;s++){
+                            int[][] poly=segPolygon(f,k,s);
+                            if(s>0) w.write(",");
+                            w.write("\""+(s==0?"L":"R")+"\": [");
+                            for (int p=0;p<poly[0].length;p++){
+                                if(p>0) w.write(",");
+                                w.write("["+poly[0][p]+","+poly[1][p]+"]");
+                            }
+                            w.write("]");
+                        }
+                        w.write("}");
+                    }
+                    w.write("}");
+                }
+                w.write("}");
+            }
+            w.write("\n  ]\n}\n");
+        } finally { w.close(); }
+        IJ.log("[geometry] wrote "+base+"_geometry.json - midline, outline and "
+            +nSeg+"x2 measurement bands per accepted frame.");
     }
 
     double safeRatio(double a, double b){ return (Double.isNaN(a)||Double.isNaN(b)||b<1e-6)?Double.NaN:a/b; }
