@@ -2,17 +2,24 @@
 
 Confocal work runs across several stations and which one gets used is not
 predictable, so "does this machine have what it needs" has to be answerable
-without guessing. This reports capability in three tiers:
+without guessing.
 
-  BASE      the Tkinter-only install every station gets. Opens confocal
-            stacks, traces neurites from an existing annotation sidecar,
-            measures, exports. No Qt, no GPU.
+There used to be a second, opt-in VIEWER tier here, for a Napari/Qt
+annotation viewer on a few appointed machines. That viewer was never built:
+the annotation viewer ships as `tools/neurite_viewer.py`, which is Tkinter
+and matplotlib and is part of the base install like every other WINK tool.
+The tier has been removed rather than left to rot, because a stale
+capability check is worse than none - it told every station it could not
+create annotations and sent students to appointed machines that do not
+exist. Annotation is BASE. If a genuinely optional heavyweight dependency
+ever arrives, add the tier back then, for that thing.
 
-  VIEWER    the opt-in 3D annotation viewer (Napari/Qt), installed only on
-            appointed stations. Needed ONLY to create annotations, never to
-            use them.
+What remains is two questions:
 
-  HARDWARE  whether this machine could host the viewer if you wanted it to.
+  BASE      are the packages every WINK tool needs actually installed?
+  HARDWARE  can this machine comfortably hold a large confocal stack in
+            memory? Nothing here is optional software - it is about whether
+            a big acquisition will fit.
 
 Run it plain for a human summary, or with --json to collect across machines:
 
@@ -32,18 +39,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Appointed viewer stations. Keep this list here, in the shipped code, so a
-# station that lacks the viewer can NAME the machines that have it instead
-# of leaving someone to ask around. Hostnames are matched case-insensitively.
-VIEWER_STATIONS = {
-    # "SLB122E-01": "confocal acquisition PC (Vidal-Gadea_lab share)",
-}
-
 BASE_PACKAGES = ("numpy", "scipy", "matplotlib", "tifffile", "skimage",
                  "cv2", "PIL", "nd2", "czifile", "readlif")
-VIEWER_PACKAGES = ("napari", "qtpy")
 
-MIN_RAM_GB_VIEWER = 16
+# A single Leica plane in this lab is ~8.2 megapixels; a 24-plane 3-channel
+# acquisition is well over a gigabyte once it is float. Below this there is
+# nothing to install - the stack simply will not be comfortable.
+MIN_RAM_GB_LARGE_STACKS = 16
 MIN_FREE_DISK_GB = 10
 
 
@@ -126,31 +128,25 @@ def check_station():
     host = socket.gethostname()
     base = {p: _version(p) for p in BASE_PACKAGES if _have(p)}
     base_missing = [p for p in BASE_PACKAGES if not _have(p)]
-    viewer = {p: _version(p) for p in VIEWER_PACKAGES if _have(p)}
-    viewer_missing = [p for p in VIEWER_PACKAGES if not _have(p)]
 
     ram = _ram_gb()
     gpus = _gpu()
     free = _free_disk_gb()
-    appointed = any(k.lower() == host.lower() for k in VIEWER_STATIONS)
 
     hardware_ok = True
     hardware_notes = []
-    if ram is not None and ram < MIN_RAM_GB_VIEWER:
+    if ram is not None and ram < MIN_RAM_GB_LARGE_STACKS:
         hardware_ok = False
         hardware_notes.append(
-            f"{ram} GB RAM, below the {MIN_RAM_GB_VIEWER} GB a 3D viewer wants "
-            f"for whole-stack rendering.")
+            f"{ram} GB RAM, below the {MIN_RAM_GB_LARGE_STACKS} GB a large "
+            f"confocal acquisition wants. Small stacks are unaffected; a big "
+            f"multi-channel one may swap.")
     elif ram is None:
         hardware_notes.append("RAM could not be read on this platform.")
     if free is not None and free < MIN_FREE_DISK_GB:
         hardware_notes.append(
-            f"Only {free} GB free; installing the viewer needs roughly "
-            f"{MIN_FREE_DISK_GB} GB.")
-    if not gpus:
-        hardware_notes.append(
-            "No GPU could be identified. This check cannot prove one is "
-            "absent, but 3D rendering will fall back to software if so.")
+            f"Only {free} GB free, which is tight for exporting converted "
+            f"stacks.")
 
     report = {
         "station": host,
@@ -160,16 +156,11 @@ def check_station():
         "base_ok": not base_missing,
         "base_present": base,
         "base_missing": base_missing,
-        "viewer_installed": not viewer_missing,
-        "viewer_present": viewer,
-        "viewer_missing": viewer_missing,
-        "appointed_viewer_station": appointed,
         "ram_gb": ram,
         "free_disk_gb": free,
         "gpus": gpus,
-        "viewer_hardware_ok": hardware_ok,
+        "large_stack_hardware_ok": hardware_ok,
         "hardware_notes": hardware_notes,
-        "appointed_stations": VIEWER_STATIONS,
     }
     report["capabilities"] = _capabilities(report)
     return report
@@ -177,51 +168,15 @@ def check_station():
 
 def _capabilities(r):
     """What this station can actually do today, in plain terms."""
-    caps = []
-    if r["base_ok"]:
-        caps.append("Open confocal stacks (CZI/ND2/LIF/OME-TIFF)")
-        caps.append("Trace neurites from an existing annotation sidecar")
-        caps.append("Measure length, radius and volume; export CSV")
-    else:
-        caps.append(f"BASE INSTALL INCOMPLETE - missing {', '.join(r['base_missing'])}. "
-                    f"Run Setup_Lab_Tools.bat.")
-    if r["viewer_installed"]:
-        caps.append("Create neurite annotations in the 3D viewer")
-    else:
-        caps.append("CANNOT create new annotations here (3D viewer not installed)")
-    return caps
-
-
-def viewer_requirement_message(host=None):
-    """What a tool should say when it needs the viewer and cannot find it.
-
-    Names the appointed stations rather than telling someone to install
-    something they may not be meant to install.
-    """
-    host = host or socket.gethostname()
-    if VIEWER_STATIONS:
-        listing = "\n".join(f"  - {name}  ({why})"
-                            for name, why in sorted(VIEWER_STATIONS.items()))
-        where = f"Stations set up for annotation:\n{listing}"
-    else:
-        where = ("No annotation stations have been appointed yet. Ask the lab "
-                 "which machine should host the viewer, then add it to "
-                 "VIEWER_STATIONS in app/check_station.py.")
-    return (
-        f"Creating a new neurite annotation needs the 3D viewer, which is not "
-        f"installed on this station ({host}).\n\n"
-        f"The viewer is an opt-in install kept off the base setup on purpose, "
-        f"so ordinary stations stay light.\n\n{where}\n\n"
-        f"You do NOT need the viewer to work with annotations that already "
-        f"exist: tracing, measuring and exporting run on any station.")
-
-
-def require_viewer():
-    """Raise with a station-naming message unless the viewer is available."""
-    missing = [p for p in VIEWER_PACKAGES if not _have(p)]
-    if missing:
-        raise RuntimeError(viewer_requirement_message())
-    return True
+    if not r["base_ok"]:
+        return [f"BASE INSTALL INCOMPLETE - missing "
+                f"{', '.join(r['base_missing'])}. Run Setup_Lab_Tools.bat."]
+    return [
+        "Open confocal stacks (CZI/ND2/LIF/OME-TIFF)",
+        "Mark neurites in the annotation viewer (Tkinter, no 3D hardware)",
+        "Trace neurites from an existing annotation sidecar",
+        "Measure length, radius and volume; export CSV",
+    ]
 
 
 def format_report(r):
@@ -238,15 +193,11 @@ def format_report(r):
     ]
     if r["base_missing"]:
         lines.append(f"  missing:      {', '.join(r['base_missing'])}")
-    lines.append(f"3D VIEWER       {'installed' if r['viewer_installed'] else 'not installed'}")
-    lines.append(f"appointed here  {'yes' if r['appointed_viewer_station'] else 'no'}")
-    lines.append(f"viewer-capable  {'yes' if r['viewer_hardware_ok'] else 'no'}")
+    lines.append(f"large stacks    {'comfortable' if r['large_stack_hardware_ok'] else 'tight'}")
     for note in r["hardware_notes"]:
         lines.append(f"  - {note}")
     lines += ["", "This station can:"]
     lines += [f"  * {c}" for c in r["capabilities"]]
-    if not r["viewer_installed"]:
-        lines += ["", viewer_requirement_message(r["station"])]
     return "\n".join(lines)
 
 

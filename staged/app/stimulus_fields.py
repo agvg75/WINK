@@ -128,8 +128,26 @@ class MagnetProvider(StimulusFieldProvider):
             import magpylib as magpy
         except ImportError as exc:
             raise RuntimeError(
-                "MagnetProvider requires magpylib; install the declared "
-                "dependency before magnetic analysis.") from exc
+                "Magnetic analysis needs the magpylib library, which is not "
+                "installed on this machine.\n\n"
+                "Re-run Setup_Lab_Tools.bat to install it. An app update will "
+                "NOT add it - updates replace program files only, they do not "
+                "install libraries.") from exc
+        # The pin in Setup_Lab_Tools.bat protects a fresh install; this
+        # protects a machine that already had magpylib from somewhere else.
+        # v4 accepted magnetization= in mT/mm and v5 takes polarization= in
+        # T/m, so the wrong major version does not fail here - it returns
+        # field values that are wrong by orders of magnitude and look fine.
+        major = str(getattr(magpy, "__version__", "0")).split(".")[0]
+        if major != "5":
+            raise RuntimeError(
+                f"Magnetic analysis needs magpylib 5.x; this machine has "
+                f"{getattr(magpy, '__version__', 'an unknown version')}.\n\n"
+                f"The field calculation passes polarization in tesla with "
+                f"dimensions in metres, which is the 5.x convention. Another "
+                f"major version would not raise an error - it would report "
+                f"plausible field strengths that are simply wrong.\n\n"
+                f"Re-run Setup_Lab_Tools.bat to install the pinned version.")
         direction = _unit(magnetization_direction_xyz)
         if direction is None or len(direction) != 3:
             raise ValueError("A non-zero 3D magnetization direction is required.")

@@ -37,3 +37,14 @@ def test_feasibility_can_say_do_not_attempt():
     result = feasibility_pass(
         frames, [(10, 10)] * 3, neuron_radius_px=2, fps=30)
     assert result["difficulty_tier"] == "do not attempt"
+
+
+if __name__ == "__main__":
+    # Without this the file defines its tests and runs none of them, then
+    # exits 0. See tests/_runner.py.
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from _runner import run_module_tests
+
+    raise SystemExit(run_module_tests(globals(), 'tier 3 - T12/T13'))

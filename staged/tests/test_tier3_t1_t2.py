@@ -75,3 +75,14 @@ def test_t2_nondeparture_is_censored_and_plate_curve_is_primary(tmp_path):
     assert sum(row["event_observed"] for row in outcomes) == 1
     assert result["inferential_unit"] == "plate"
     assert not result["worm_level_p_value_emitted"]
+
+
+if __name__ == "__main__":
+    # Without this the file defines its tests and runs none of them, then
+    # exits 0. See tests/_runner.py.
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from _runner import run_module_tests
+
+    raise SystemExit(run_module_tests(globals(), 'tier 3 - T1/T2'))

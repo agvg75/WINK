@@ -244,6 +244,14 @@ REGISTRY = [
     Tool("Nonstriated muscle degeneration", "Measure pharyngeal, uterine, somatointestinal, or anal-depressor structure and force-vector geometry.",
          "Anatomy and morphology", "python", "ready", "tools/morphology/nonstriated_morphology_tool.py",
          requires="raw fluorescence image, scale calibration, tissue ROI, and body orientation"),
+    Tool("Neurite annotation viewer",
+         "Mark where a neurite runs in a confocal stack: orthogonal XY/XZ/YZ slices, start and end points, and correction anchors wherever the automatic path would go wrong. Saves a small sidecar next to the stack - it does no tracing itself.",
+         "Anatomy and morphology", "python", "ready", "tools/neurite_viewer.py",
+         requires="a confocal stack (LIF/CZI/ND2/OME-TIFF) with its voxel size, if traced lengths are to mean anything"),
+    Tool("Trace marked neurites",
+         "Trace, measure and export every neurite from an annotation sidecar - length, radius and volume. Headless: needs no viewer, so it runs on any station, including re-tracing old marks with new settings.",
+         "Anatomy and morphology", "python", "ready", "tools/neurite_trace_runner.py",
+         requires="an annotation sidecar written by the viewer, beside its stack"),
 
     # --- Acquisition and utilities ---
     Tool("Probe a movie", "Check what a file is and whether it suits calcium or behaviour.",
@@ -513,11 +521,9 @@ class Hub(_BASE):
         self.card_canvas.configure(yscrollcommand=scroll.set)
         self.card_canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
-        self.card_inner.bind(
-            "<Configure>", lambda _:
-            self.card_canvas.configure(
-                scrollregion=self.card_canvas.bbox("all")))
+        self.card_inner.bind("<Configure>", self._cards_content_resized)
         self.card_canvas.bind("<Configure>", self._canvas_resized)
+        self._card_signature = None
 
         detail = ttk.Frame(body, width=310)
         body.add(detail, weight=1)
@@ -699,6 +705,30 @@ class Hub(_BASE):
             self.card_window, width=event.width)
         self._rebuild_cards()
 
+    def _cards_content_resized(self, _event=None):
+        """Grow or shrink the scrollable area, and never leave the view
+        stranded past the end of it.
+
+        Rebuilding destroys every card, which momentarily collapses the
+        content to nothing while Tk keeps the old pixel offset. Without the
+        clamp the hub opens scrolled to the bottom of an empty view and looks
+        like it has no tools at all.
+        """
+        try:
+            bbox = self.card_canvas.bbox("all")
+            if not bbox:
+                return
+            self.card_canvas.configure(scrollregion=bbox)
+            region = bbox[3] - bbox[1]
+            visible = self.card_canvas.winfo_height()
+            if region <= 0:
+                return
+            highest = max(0, region - visible)
+            if self.card_canvas.canvasy(0) > highest:
+                self.card_canvas.yview_moveto(highest / region)
+        except tk.TclError:
+            pass
+
     def _rebuild_cards(self):
         if not hasattr(self, "card_inner"):
             return
@@ -726,6 +756,14 @@ class Hub(_BASE):
                 self.card_inner,
                 text="No tools match this view. Clear the filter or choose another status.",
                 wraplength=420).grid(row=0, column=0, padx=20, pady=30)
+
+        # A different set of tools is a different list, so it starts at the
+        # top. A mere window resize is the SAME list and keeps the reader
+        # where they were - scrolling them back would be its own small bug.
+        signature = tuple(tool.name for tool in tools)
+        if signature != getattr(self, "_card_signature", None):
+            self._card_signature = signature
+            self.card_canvas.yview_moveto(0)
 
     def _make_card(self, tool):
         active = tool is self.selected_tool

@@ -186,7 +186,13 @@ class ApplicationUpdater:
                 and _version_tuple(local["installed_runtime_version"])
                 < _version_tuple(required_runtime)):
             raise UpdateError(
-                "This update requires a newer runtime. Run the full installer.")
+                "This update needs a newer runtime than this machine has "
+                f"(needs {required_runtime}, this machine has "
+                f"{local['installed_runtime_version']}).\n\n"
+                "Re-run Setup_Lab_Tools.bat - the full installer. Updates "
+                "replace program files only and never install libraries, so "
+                "applying this one would leave tools whose dependencies are "
+                "missing.")
         download_dir = None
         if self._use_github:
             url = self._github_assets.get(manifest["package_filename"])

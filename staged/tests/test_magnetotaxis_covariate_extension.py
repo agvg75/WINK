@@ -63,3 +63,14 @@ def test_regime_split_supports_rotation_with_conserved_chirality():
     assert plate["rotation_not_reflection_supported"]
     assert plate["chirality_conserved"]
     assert plate["decisive_internal_field_flip_analog"]
+
+
+if __name__ == "__main__":
+    # Without this the file defines its tests and runs none of them, then
+    # exits 0. See tests/_runner.py.
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from _runner import run_module_tests
+
+    raise SystemExit(run_module_tests(globals(), 'magnetotaxis covariate extension'))

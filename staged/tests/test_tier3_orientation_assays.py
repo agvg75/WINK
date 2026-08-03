@@ -39,3 +39,14 @@ def test_thermotaxis_endpoint_declares_isothermal_blindness(tmp_path):
         geometry="radial", source_xy_mm=(0, 0), endpoint_only=True)
     assert not result["isothermal_tracking_available"]
     assert "endpoint_limitation" in result
+
+
+if __name__ == "__main__":
+    # Without this the file defines its tests and runs none of them, then
+    # exits 0. See tests/_runner.py.
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from _runner import run_module_tests
+
+    raise SystemExit(run_module_tests(globals(), 'tier 3 - orientation assays'))

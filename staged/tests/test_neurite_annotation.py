@@ -112,8 +112,8 @@ try:
     # -----------------------------------------------------------------------
     # 3. Tracing from the sidecar is headless - no viewer, no Qt
     # -----------------------------------------------------------------------
-    check("napari is NOT needed for tracing (it is not even installed here)",
-          not cs._have("napari"))
+    check("napari is NOT needed anywhere in this workflow, and is not "
+          "installed on this station", not cs._have("napari"))
     traced = na.trace_annotations(stack, loaded, radius_um=0.2)
     check("tracing from a sidecar produces one result per annotation",
           len(traced) == 1, len(traced))
@@ -146,44 +146,36 @@ try:
               "meaningful" in str(exc).lower())
 
     # -----------------------------------------------------------------------
-    # 4. Station check and the viewer requirement message
+    # 4. Station check - one tier, because annotation IS the base install
     # -----------------------------------------------------------------------
     report = cs.check_station()
     check("the station check names the machine", bool(report["station"]))
     check("it reports base install completeness", report["base_ok"] is True,
           report["base_missing"])
-    check("it distinguishes base from viewer capability",
-          report["viewer_installed"] is False)
     check("it lists what the station can actually do",
           any("Trace neurites" in c for c in report["capabilities"]))
-    check("a station without the viewer is still reported as able to trace",
-          any("Trace neurites" in c for c in report["capabilities"])
-          and not report["viewer_installed"])
+    check("a complete base install can MARK neurites here, because the "
+          "annotation viewer is Tkinter and ships with everything else",
+          any("Mark neurites" in c for c in report["capabilities"]),
+          report["capabilities"])
+    check("nothing tells this station it cannot annotate",
+          not any("CANNOT" in c for c in report["capabilities"]),
+          report["capabilities"])
     check("--json shape is collectable across a fleet",
-          set(["station", "base_ok", "viewer_installed", "ram_gb"])
-          <= set(report))
+          set(["station", "base_ok", "ram_gb", "capabilities"]) <= set(report))
 
-    msg = cs.viewer_requirement_message("SOME-PC")
-    check("the missing-viewer message names the station it ran on",
-          "SOME-PC" in msg)
-    check("it says annotations that already exist need no viewer",
-          "already exist" in msg)
-    cs.VIEWER_STATIONS["CONFOCAL-1"] = "Leica acquisition PC"
-    try:
-        named = cs.viewer_requirement_message("SOME-PC")
-        check("when stations are appointed, the message NAMES them instead of "
-              "telling someone to install software they may not be meant to",
-              "CONFOCAL-1" in named and "Leica acquisition PC" in named)
-    finally:
-        cs.VIEWER_STATIONS.pop("CONFOCAL-1", None)
-
-    try:
-        cs.require_viewer()
-        check("require_viewer raises where the viewer is absent", False)
-    except RuntimeError as exc:
-        check("require_viewer raises where the viewer is absent", True)
-        check("and its message is the station-naming one",
-              "opt-in install" in str(exc))
+    # The old opt-in Napari tier is gone. These names must stay gone: a check
+    # that reports a capability nothing implements sends people to machines
+    # that do not exist.
+    for dead in ("VIEWER_PACKAGES", "VIEWER_STATIONS", "require_viewer",
+                 "viewer_requirement_message"):
+        check(f"the stale viewer tier is gone, not merely unused ({dead})",
+              not hasattr(cs, dead))
+    check("and no viewer keys survive in the report",
+          not any("viewer" in k for k in report), list(report))
+    check("hardware is reported for what it actually limits - holding a big "
+          "stack in memory, not hosting a 3D renderer",
+          "large_stack_hardware_ok" in report)
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

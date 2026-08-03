@@ -100,7 +100,22 @@ Cache the filtered volume per stack since it is the expensive step and multiple 
 
 ### 2.3 Interactive tracing UI
 
-Use Napari's orthogonal slice viewer, same justified exception already approved for the volume module. Students need to see XY, XZ, and YZ views simultaneously to place a start or end point correctly, this is exactly the problem Napari was chosen to solve for the muscle boundary module and the same reasoning applies here, arguably more so since a neurite is a true 3D curve rather than a layer.
+**Superseded by what was built (2026-08-03).** This section originally
+specified Napari's orthogonal slice viewer. The requirement it was serving -
+seeing XY, XZ and YZ at once to place a start or end point - was met with
+Tkinter and matplotlib instead (`tools/neurite_viewer.py`), because the
+judgement being made is slice by slice and a volume renderer added little
+against putting Qt on every station that ever opens a stack.
+
+Two things Napari would have given for free had to be built explicitly, and
+both turned out to matter more than any feature in the comparison:
+blitting from a decimated display texture (an XY plane is 8.15M pixels), and
+an explicit z stretch for the depth panels (at true physical aspect a plane
+is 0.35 screen pixels tall - unclickable). See `tools/neurite_viewer_core.py`.
+
+Annotation and tracing were also split: the viewer only writes a sidecar of
+marked points, and all measurement is headless, so re-tracing with different
+parameters costs no re-marking.
 
 Point placement snaps to the local maximum of the tubeness filtered volume within a small 3D neighborhood of the click, mirroring SNT's cursor snapping behavior, so students do not need pixel perfect clicking.
 
@@ -169,10 +184,14 @@ The only new requirement is that the module now receives the full metadata dict 
 ## 4. New dependencies to add to Setup_Lab_Tools.bat
 
 ```
-pip install nd2 czifile readlif napari
+pip install nd2 czifile readlif
 ```
 
-napari may already be pending from the volume module spec, only add once.
+No napari. The annotation viewer was built on Tkinter and matplotlib
+instead (see section 3), so nothing in Phase 0 or Phase 1 needs Qt, and the
+base install stays as light as it was. The volume module spec still assumes
+Napari for its own reasons; if that module is built, its dependency is its
+own decision to justify, not one inherited from here.
 
 ---
 

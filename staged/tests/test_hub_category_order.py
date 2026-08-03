@@ -32,3 +32,14 @@ def test_new_categories_are_appended_without_reordering_known_categories():
     assert list(sections)[:-1] == CATEGORY_ORDER
     assert list(sections)[-1] == "Future category"
     assert sections["Future category"] == [future_tool]
+
+
+if __name__ == "__main__":
+    # Without this the file defines its tests and runs none of them, then
+    # exits 0. See tests/_runner.py.
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from _runner import run_module_tests
+
+    raise SystemExit(run_module_tests(globals(), 'hub category order'))

@@ -52,3 +52,14 @@ def test_power_linear_circular_refusal_and_retrospective():
     rows.append({**rows[0], "tool_version": "2"})
     assert retrospective_variance(
         rows, assay="speed", strain="N2")["mixed_instrument_stream"]
+
+
+if __name__ == "__main__":
+    # Without this the file defines its tests and runs none of them, then
+    # exits 0. See tests/_runner.py.
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from _runner import run_module_tests
+
+    raise SystemExit(run_module_tests(globals(), 'v11 validation power feedback'))

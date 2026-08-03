@@ -716,10 +716,32 @@ class CockpitApp(tk.Tk):
         body.grid_columnconfigure(2, weight=0)
         body.grid_rowconfigure(0, weight=1)
 
+        # The controls column scrolls. It used to be a plain Frame, which
+        # meant a tool with a long workflow (the myocyte fiber-review step is
+        # the worst) pushed its last buttons below the window edge where they
+        # could not be reached even maximized - the tool looked broken rather
+        # than crowded. `self.controls` is still an ordinary Frame that tools
+        # pack into, so nothing downstream changes.
         self._controls_holder = ttk.LabelFrame(body, text=controls_label)
         self._controls_holder.grid(row=0, column=0, sticky="nsw", padx=(0, 5))
-        self.controls = self.controls_frame = ttk.Frame(self._controls_holder)
-        self.controls.pack(fill="both", expand=True, padx=4, pady=4)
+        self._controls_canvas = tk.Canvas(self._controls_holder,
+                                          highlightthickness=0, borderwidth=0)
+        self._controls_scroll = ttk.Scrollbar(
+            self._controls_holder, orient="vertical",
+            command=self._controls_canvas.yview)
+        self._controls_canvas.configure(
+            yscrollcommand=self._controls_scroll.set)
+        self._controls_canvas.pack(side="left", fill="both", expand=True,
+                                   padx=(4, 0), pady=4)
+        self._controls_scrollbar_shown = False
+        self._controls_sync_pending = False
+        self.controls = self.controls_frame = ttk.Frame(self._controls_canvas)
+        self._controls_window = self._controls_canvas.create_window(
+            (0, 0), window=self.controls, anchor="nw")
+        self._control_sections = []
+        self.controls.bind("<Configure>", self._controls_content_resized)
+        self._controls_canvas.bind("<Configure>", self._controls_view_resized)
+        self.bind_all("<MouseWheel>", self._controls_wheel, add="+")
 
         self.center = self.center_frame = ttk.Frame(body)
         self.center.grid(row=0, column=1, sticky="nsew", padx=3)
@@ -736,6 +758,185 @@ class CockpitApp(tk.Tk):
         self.bind("<h>", lambda _e: self.toggle_hood())
         self.bind("<H>", lambda _e: self.toggle_hood())
         self.refresh_hood()
+
+    # -- scrolling controls column ------------------------------------------
+    def _controls_content_height(self):
+        """How tall the controls actually are.
+
+        Not simply winfo_reqheight: a Frame with no slaves left stops
+        re-requesting a size and reports its last one forever, so a column
+        that has been emptied would still claim to overflow.
+        """
+        children = self.controls.winfo_children()
+        if not children:
+            return 0
+        try:
+            packed = max(c.winfo_y() + c.winfo_reqheight() for c in children)
+        except (tk.TclError, ValueError):
+            packed = 0
+        return max(self.controls.winfo_reqheight(), packed)
+
+    def _controls_content_resized(self, _event=None):
+        """Queue a re-measure of the controls column.
+
+        Deliberately deferred to idle rather than measured on the spot:
+        collapsing a section asks Tk for a new layout but does not perform
+        it, so measuring immediately reads the height the column had a
+        moment ago and concludes it still overflows. Coalesced, so a burst
+        of widget changes costs one measurement.
+        """
+        if self._controls_sync_pending:
+            return
+        self._controls_sync_pending = True
+        try:
+            self.after_idle(self._apply_controls_geometry)
+        except tk.TclError:
+            self._controls_sync_pending = False
+
+    def _apply_controls_geometry(self):
+        """Measure the settled layout and fit the scroll machinery to it."""
+        canvas = self._controls_canvas
+        try:
+            # Safe here in a way it would not be inside a <Configure>
+            # handler: the pending flag stays set for the duration, so the
+            # relayout this provokes cannot schedule us again.
+            self.controls.update_idletasks()
+            height = self._controls_content_height()
+            width = max(canvas.winfo_width(), self.controls.winfo_reqwidth())
+            canvas.configure(scrollregion=(0, 0, width, height))
+            want = self.controls.winfo_reqwidth()
+            if want > 1 and abs(canvas.winfo_reqwidth() - want) > 1:
+                canvas.configure(width=want)
+            self._sync_controls_scrollbar(height)
+        except tk.TclError:
+            pass
+        finally:
+            self._controls_sync_pending = False
+
+    def refresh_controls(self):
+        """Re-measure the controls column after a tool changes it wholesale.
+
+        Growth is picked up automatically, but a Frame that has been emptied
+        never announces it - so a tool that rebuilds its controls should say
+        so here rather than leave a scrollbar pointing at nothing.
+        """
+        self._controls_content_resized()
+
+    def _controls_view_resized(self, event):
+        # Keep the inner frame as wide as the visible column so wrapped
+        # labels and fill="x" buttons lay out against the real width.
+        try:
+            self._controls_canvas.itemconfigure(self._controls_window,
+                                                width=event.width)
+        except tk.TclError:
+            pass
+        self._sync_controls_scrollbar()
+
+    def _sync_controls_scrollbar(self, content=None):
+        """Show the scrollbar only when there is something to scroll to.
+
+        A permanently visible scrollbar on a column that fits is clutter; an
+        absent one on a column that does not fit is the bug this replaces.
+        """
+        try:
+            if content is None:
+                content = self._controls_content_height()
+            visible = self._controls_canvas.winfo_height()
+            overflows = content > visible + 1
+            if overflows and not self._controls_scrollbar_shown:
+                self._controls_scroll.pack(side="right", fill="y", pady=4)
+                self._controls_scrollbar_shown = True
+            elif not overflows and self._controls_scrollbar_shown:
+                self._controls_scroll.pack_forget()
+                self._controls_scrollbar_shown = False
+            if not overflows:
+                # Collapsing a section can leave the view scrolled past the
+                # end, showing blank space below the last control.
+                self._controls_canvas.yview_moveto(0)
+            else:
+                first, last = self._controls_canvas.yview()
+                if last > 1.0:
+                    self._controls_canvas.yview_moveto(
+                        max(0.0, first - (last - 1.0)))
+        except (tk.TclError, ValueError):
+            pass
+
+    def _controls_wheel(self, event):
+        """Wheel scrolls the controls only while the pointer is over them.
+
+        Bound with bind_all because the pointer is usually over a child
+        widget, not the canvas - but it walks up from the event widget first,
+        so the wheel still belongs to the centre pane (matplotlib zoom) and
+        the hood everywhere else.
+        """
+        if not self._controls_scrollbar_shown:
+            return
+        widget = event.widget
+        for _ in range(24):
+            if widget is None:
+                return
+            if widget is self._controls_canvas or widget is self.controls:
+                break
+            widget = getattr(widget, "master", None)
+        else:
+            return
+        notches = int(event.delta / 120) or (1 if event.delta > 0 else -1)
+        try:
+            self._controls_canvas.yview_scroll(-2 * notches, "units")
+        except tk.TclError:
+            pass
+
+    def add_control_section(self, title, *, collapsed=False, parent=None):
+        """A titled, collapsible block in the controls column.
+
+        Returns the frame to put widgets in. Collapsing is how a tool with a
+        long workflow buys vertical space back: reference text and adjustment
+        panels fold away, leaving the controls the student must actually
+        reach. The header always says which way it will go.
+        """
+        holder = ttk.Frame(parent or self.controls)
+        holder.pack(fill="x", pady=(0, 6))
+        try:
+            button = ttk.Button(holder, style="Toolbutton")
+        except tk.TclError:      # theme without Toolbutton - plain is fine
+            button = ttk.Button(holder)
+        try:
+            # Left-aligned so it reads as a section heading rather than as
+            # one more button competing with the tool's actual controls.
+            button.configure(anchor="w")
+        except tk.TclError:
+            pass
+        button.pack(fill="x")
+        body = ttk.Frame(holder)
+        section = {"title": title, "holder": holder, "body": body,
+                   "button": button, "collapsed": bool(collapsed)}
+
+        def render():
+            marker = "[+]" if section["collapsed"] else "[-]"
+            button.configure(text=f"{marker}  {title}")
+            if section["collapsed"]:
+                body.pack_forget()
+            else:
+                body.pack(fill="x", padx=4, pady=(2, 4))
+            self._controls_content_resized()
+
+        def toggle():
+            section["collapsed"] = not section["collapsed"]
+            render()
+
+        section["toggle"] = toggle
+        button.configure(command=toggle)
+        render()
+        self._control_sections.append(section)
+        return body
+
+    def set_control_section(self, title, collapsed):
+        """Fold or unfold a section by title, e.g. as a workflow advances."""
+        for section in self._control_sections:
+            if section["title"] == title and section["collapsed"] != collapsed:
+                section["toggle"]()
+                return True
+        return False
 
     # -- status + hood ------------------------------------------------------
     def set_status(self, text):

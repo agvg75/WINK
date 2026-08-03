@@ -51,7 +51,12 @@ if errorlevel 1 (
 echo.
 echo Step 2 of 2: installing libraries (first time downloads a few hundred MB) ...
 "%ENVDIR%\Scripts\python.exe" -m pip install --upgrade pip
-"%ENVDIR%\Scripts\python.exe" -m pip install numpy pandas scipy matplotlib pillow tifffile imageio imageio-ffmpeg opencv-python tkinterdnd2 scikit-image nd2 czifile readlif
+REM magpylib is PINNED to v5.x on purpose. v5 takes polarization= in tesla with
+REM dimensions in metres, which is what app/stimulus_fields.py passes. v4 took
+REM magnetization= in mT with dimensions in mm - a v4 install does not fail
+REM loudly, it produces field values that are wrong by orders of magnitude and
+REM entirely plausible. Do not relax this pin without re-reading MagnetProvider.
+"%ENVDIR%\Scripts\python.exe" -m pip install numpy pandas scipy matplotlib pillow tifffile imageio imageio-ffmpeg opencv-python tkinterdnd2 scikit-image nd2 czifile readlif "magpylib>=5,<6"
 if errorlevel 1 (
   echo ERROR: something went wrong installing the libraries.
   pause

@@ -173,8 +173,12 @@ class App(CockpitApp):
         ttk.Button(c, text="Choose image...", command=self._choose).pack(fill="x", pady=(0, 6))
         ttk.Button(c, text="Resume session...", command=self._resume_session).pack(fill="x", pady=(0, 6))
 
-        view = ttk.LabelFrame(c, text="View")
-        view.pack(fill="x", pady=(0, 6))
+        # View and brightness fold away by default. Both are reference and
+        # adjustment panels, and between them they cost enough height to push
+        # the fiber-review buttons off the bottom of the window. The controls
+        # column scrolls now, but the buttons a student needs every myocyte
+        # should be visible without scrolling at all.
+        view = self.add_control_section("View", collapsed=True)
         ttk.Label(view, wraplength=205, justify="left", foreground="#555555",
                   text="Scroll the mouse wheel over the image to zoom in/out "
                        "(zooms on the cursor, like Fiji) - useful for placing "
@@ -189,8 +193,8 @@ class App(CockpitApp):
                        "View only - there is no way yet to click a fiber "
                        "and correct its color.").pack(fill="x", padx=4, pady=(0, 4))
 
-        display = ttk.LabelFrame(c, text="Display brightness/contrast (view only)")
-        display.pack(fill="x", pady=(0, 6))
+        display = self.add_control_section(
+            "Brightness/contrast (view only)", collapsed=True)
         self.vmin_label = ttk.Label(display, text="Min: 0")
         self.vmin_label.pack(anchor="w", padx=4)
         self.vmin_scale = ttk.Scale(
@@ -209,8 +213,9 @@ class App(CockpitApp):
         ttk.Button(btn_row, text="Reset", width=8,
                    command=self._reset_display_range).pack(side="right")
 
-        session = ttk.LabelFrame(c, text="Session")
-        session.pack(fill="x", pady=(0, 6))
+        # Session stays open: these are inputs the measurement needs, not
+        # adjustments, so hiding them would hide required work.
+        session = self.add_control_section("Session")
 
         def field(label, key, master=session):
             row = ttk.Frame(master); row.pack(fill="x", pady=2)

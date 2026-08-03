@@ -2,19 +2,20 @@
 
 WHY ANNOTATION AND TRACING ARE SEPARATE
 ----------------------------------------
-Confocal work runs across several stations and there is no guarantee which
-one a given stack gets opened on. If the 3D viewer and the tracing were one
-program, every station that ever touched a stack would need the viewer
-installed - which in practice means a heavyweight Qt/Napari dependency on
-the whole fleet.
+The split was first drawn to keep a heavyweight Qt/Napari viewer off the
+fleet. That viewer was never built - the annotation viewer is Tkinter and
+ships in the base install like everything else - but the split earned its
+keep for a better reason, so it stayed.
 
-Splitting them removes that. A person marks start, end and correction
-anchors ONCE, on an appointed viewer station, and those marks are written
-to a small JSON sidecar next to the stack. Everything after that - tubeness
-filtering, path search, length, radius, volume - is pure computation with
-no GUI at all, so it runs anywhere: the base Tkinter-only install, a
-headless batch job, a different station, or months later when someone wants
-the numbers recomputed with a different sigma.
+Marking is human judgement and slow; tracing is arithmetic and cheap. Tying
+them together would mean every change to a parameter costs a person another
+pass over the same stack. Separated, a person marks start, end and
+correction anchors ONCE and those marks go into a small JSON sidecar next
+to the stack. Everything after that - tubeness filtering, path search,
+length, radius, volume - is pure computation with no GUI at all, so it runs
+anywhere: a headless batch job over a whole directory, a different station,
+or months later when someone wants the numbers recomputed with a different
+sigma and nobody has to look at an image again.
 
 The sidecar holds only coordinates and provenance, never pixels. It sits
 beside the stack, is human-readable, and is small enough to keep in version
