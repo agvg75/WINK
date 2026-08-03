@@ -614,10 +614,18 @@ try:
           "REAL number given (6), skipping the 'unknown' row",
           app.v["myo_number"].get() == "6", app.v["myo_number"].get())
 
-    # --- schematic viewer: opens without crashing (system call mocked) ----
+    # --- schematic viewer: GENERATED, not fetched from disk ---------------
+    # The numbering a student checks against is drawn from the same muscle
+    # size profile the segmentation uses, so it cannot drift from the
+    # numbering the tools actually measure with. It must also never fall
+    # back to asking the student to find an image: that path is how a figure
+    # out of somebody's Downloads folder ends up serving as the reference.
+    import tkinter as tk_mod
+
     opened = []
     os_startfile_orig = getattr(os, "startfile", None)
     os.startfile = lambda p: opened.append(p)
+    before = len(app.winfo_children())
     try:
         app._show_schematic()
     finally:
@@ -625,9 +633,14 @@ try:
             os.startfile = os_startfile_orig
         else:
             del os.startfile
-    check("_show_schematic opens the bundled schematic file without error",
-          len(opened) == 1 and Path(opened[0]).name.startswith("myocyte schematic"),
-          opened)
+    tops = [w for w in app.winfo_children() if isinstance(w, tk_mod.Toplevel)]
+    check("_show_schematic draws the numbering into its own window",
+          len(app.winfo_children()) > before and len(tops) >= 1,
+          f"{len(tops)} toplevel(s)")
+    check("the schematic is generated, never opened from a stored image",
+          opened == [], opened)
+    for _w in tops:
+        _w.destroy()
 
     # --- a detection that finds no usable bands must SAY so, and must not
     # be saveable as a real AUTO measurement without an explicit
