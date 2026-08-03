@@ -51,7 +51,7 @@ if errorlevel 1 (
 echo.
 echo Step 2 of 2: installing libraries (first time downloads a few hundred MB) ...
 "%ENVDIR%\Scripts\python.exe" -m pip install --upgrade pip
-"%ENVDIR%\Scripts\python.exe" -m pip install numpy pandas scipy matplotlib pillow tifffile imageio imageio-ffmpeg opencv-python tkinterdnd2 scikit-image
+"%ENVDIR%\Scripts\python.exe" -m pip install numpy pandas scipy matplotlib pillow tifffile imageio imageio-ffmpeg opencv-python tkinterdnd2 scikit-image nd2 czifile readlif
 if errorlevel 1 (
   echo ERROR: something went wrong installing the libraries.
   pause
