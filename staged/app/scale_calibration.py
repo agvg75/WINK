@@ -31,6 +31,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
+
 # Reference length of an adult C. elegans hermaphrodite, for the sanity check.
 ADULT_WORM_MM = 1.14
 
@@ -156,3 +158,106 @@ def polyline_length_px(points) -> float:
     for (x0, y0), (x1, y1) in zip(points[:-1], points[1:]):
         total += ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
     return total
+
+
+# --- scale-bar auto-detection ----------------------------------------------
+# Many confocal exports burn a scale bar + text label into a corner of the
+# image (e.g. a thin white line reading "36.8 um"). This finds the LINE's
+# pixel length automatically - a person still reads the printed number
+# themselves and types it into "Known length" (this repo has no OCR
+# dependency installed; reading the text itself would need one - see the
+# module note below). What this replaces is clicking the two ends by hand.
+#
+# The bar is found by its own defining property: within its row(s), its
+# bright pixels form ONE long, essentially unbroken run, unlike printed text
+# (each character is short and separated by gaps) or real tissue signal
+# (bright but not perfectly contiguous over tens-to-hundreds of pixels).
+# Validated against three real confocal exports (a thin 1px line easy to
+# miss by eye - see tests/test_scale_calibration.py) rather than assumed.
+SCALE_BAR_CORNERS = ("bottom_left", "bottom_right", "top_left", "top_right")
+
+
+def _corner_region(gray, corner, margin_frac, band_frac):
+    h, w = gray.shape[:2]
+    y_band = int(h * band_frac)
+    x_margin = int(w * margin_frac)
+    if corner == "bottom_left":
+        region, oy, ox = gray[h - y_band:, :x_margin], h - y_band, 0
+    elif corner == "bottom_right":
+        region, oy, ox = gray[h - y_band:, w - x_margin:], h - y_band, w - x_margin
+    elif corner == "top_left":
+        region, oy, ox = gray[:y_band, :x_margin], 0, 0
+    elif corner == "top_right":
+        region, oy, ox = gray[:y_band, w - x_margin:], 0, w - x_margin
+    else:
+        raise ValueError(f"Unknown corner {corner!r}")
+    return region, oy, ox
+
+
+def _longest_run(row_mask):
+    """(run_length, start_index) of the longest contiguous True run."""
+    best = 0; best_start = 0; cur = 0; cur_start = 0
+    for i, v in enumerate(row_mask):
+        if v:
+            if cur == 0:
+                cur_start = i
+            cur += 1
+            if cur > best:
+                best = cur; best_start = cur_start
+        else:
+            cur = 0
+    return best, best_start
+
+
+def detect_scale_bar_px(gray, corners=SCALE_BAR_CORNERS, margin_frac=0.35,
+                        band_frac=0.2, min_length_px=15, min_solidity=0.9,
+                        min_brightness=100.0):
+    """Find a burned-in scale bar's pixel length, searching `corners` in
+    order and returning the first solid match (bottom-left first, matching
+    where this lab's confocal exports put it).
+
+    `min_solidity` (run_length / total_bright_pixels_in_that_row) rejects
+    rows that are bright but not one clean unbroken line - text and real
+    tissue signal both fail this, a printed bar does not.
+
+    Returns a dict with length_px and the bar's endpoints in FULL-IMAGE
+    pixel coordinates, plus which corner and how solid the match was - or
+    None if nothing in any searched corner looks like a real bar. This is a
+    pixel LENGTH only; the real-world value is still read off the image by
+    a person and typed into the known-length field, since no OCR dependency
+    is installed in this environment.
+    """
+    gray = np.asarray(gray)
+    if gray.ndim == 3:
+        gray = gray[..., :3].mean(axis=2)
+    for corner in corners:
+        region, oy, ox = _corner_region(gray, corner, margin_frac, band_frac)
+        if region.size == 0:
+            continue
+        rmax = float(region.max())
+        if rmax < min_brightness:
+            continue
+        mask = region > 0.6 * rmax
+        best = None
+        for y in range(mask.shape[0]):
+            row = mask[y]
+            total = int(row.sum())
+            if total < min_length_px:
+                continue
+            run, start = _longest_run(row)
+            if run < min_length_px:
+                continue
+            solidity = run / total
+            if solidity < min_solidity:
+                continue
+            if best is None or run > best["length_px"]:
+                best = {"length_px": run, "y": y, "x1": start,
+                        "x2": start + run - 1, "solidity": solidity}
+        if best is not None:
+            return {
+                "length_px": float(best["length_px"]),
+                "x1": float(ox + best["x1"]), "y1": float(oy + best["y"]),
+                "x2": float(ox + best["x2"]), "y2": float(oy + best["y"]),
+                "corner": corner, "solidity": float(best["solidity"]),
+            }
+    return None

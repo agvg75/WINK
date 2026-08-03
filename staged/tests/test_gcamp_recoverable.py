@@ -202,6 +202,38 @@ summary = gr.summarize_recoverability(fake)
 check("unverified frames are not counted usable",
       summary["n_usable_frames"] == 1, f"n_usable={summary['n_usable_frames']}")
 
+# 8b. Per-recording coil validation: the branch must earn its use each time.
+straight = worm_mask()
+# A shorter, wider mask at conserved area IS the coil signature by definition,
+# so a synthetic one passes - which is the honest limitation: the signature is
+# not specific to coiling, and a stubbier animal would match it too. That is
+# why the marked pair must be the same animal, and why the validator records
+# which frames were marked.
+shorter_wider = worm_mask(x1=380, half_width=13)
+report = gr.validate_coil_branch(straight, shorter_wider)
+check("coil validation returns a verdict with a reason",
+      isinstance(report, dict) and "validated" in report and report["reason"])
+check("a shorter, wider, area-conserving mask matches the coil signature",
+      report["validated"] is True, report["coiled_status"])
+check("the validator documents that a match is not proof of coiling",
+      "not mean the signature is specific" in gr.validate_coil_branch.__doc__.lower())
+
+# The failure that actually matters: segmentation losing part of the animal.
+# Area then drops instead of being conserved, and the branch must not pass.
+lost_area = clipped_worm(keep_fraction=0.6)
+bad = gr.validate_coil_branch(straight, lost_area)
+check("a frame that LOST area does not validate the coil branch",
+      bad["validated"] is False, bad["coiled_status"])
+check("the refusal names the segmentation as the likely cause",
+      "segmentation" in bad["reason"].lower(), bad["coiled_status"])
+check("validation refuses a missing mask",
+      gr.validate_coil_branch(None, straight)["validated"] is False)
+same = gr.validate_coil_branch(straight, straight)
+check("an identical pair does not validate (a straight frame is not a coil)",
+      same["validated"] is False, same["coiled_status"])
+check("validation explains itself when it refuses",
+      len(same["reason"]) > 40)
+
 # 9. Body/signal separation against REAL frames, if the fixtures are present.
 fixtures = sorted((ROOT / "tests" / "gcamp_fixtures").glob("frame_*.tif"))
 if fixtures:
@@ -230,6 +262,97 @@ if fixtures:
               body.mean() < 0.35, f"{body.mean():.1%} of frame")
 else:
     print("\n  (no real-frame fixtures present - body/signal checks skipped)")
+
+# 10. Adaptive bg_sigma: mask plausibility scoring on synthetic masks with
+# known, honest geometry (elongated vs blobby vs border-hugging vs empty).
+elongated = np.zeros((300, 400), bool)
+elongated[145:155, 40:360] = True   # 320 x 10, aspect 32
+metrics_elongated = gr.mask_plausibility_score(elongated)
+check("an elongated mask scores a real (non-None) plausibility score",
+      metrics_elongated["score"] is not None, metrics_elongated)
+check("an elongated mask reports a high aspect ratio",
+      metrics_elongated["aspect"] > 10, metrics_elongated["aspect"])
+
+blobby = np.zeros((300, 400), bool)
+blobby[100:180, 150:230] = True     # 80 x 80 square, aspect ~1
+metrics_blobby = gr.mask_plausibility_score(blobby)
+check("a square blob at plausible area is rejected for low aspect",
+      metrics_blobby["score"] is None, metrics_blobby)
+
+border_band = np.zeros((300, 400), bool)
+border_band[0:15, :] = True         # hugs one whole edge
+metrics_border = gr.mask_plausibility_score(border_band)
+check("a mask hugging a whole border scores worse than the elongated one "
+      "when both clear the plausibility gate",
+      metrics_border["score"] is None
+      or metrics_border["score"] < metrics_elongated["score"],
+      metrics_border)
+
+empty = np.zeros((300, 400), bool)
+metrics_empty = gr.mask_plausibility_score(empty)
+check("an empty mask has no plausibility score",
+      metrics_empty["score"] is None, metrics_empty)
+
+too_big = np.ones((300, 400), bool)
+metrics_too_big = gr.mask_plausibility_score(too_big)
+check("a mask covering the whole frame is rejected for implausible area",
+      metrics_too_big["score"] is None, metrics_too_big)
+
+# estimate_body_bg_sigma / bg_sigma_for_multiplier: the default and the
+# person's dial must stay separate (a multiplier, not a raw value), and the
+# abstain gate must actually abstain when nothing plausible is found.
+never_plausible = np.zeros((300, 400), np.uint8)  # flat frame: no signal anywhere
+never_plausible_estimate = gr.estimate_body_bg_sigma(never_plausible, return_table=True)
+check("a flat, featureless frame abstains rather than guessing a default",
+      never_plausible_estimate["abstain"] is True
+      and never_plausible_estimate["bg_sigma_default"] is None,
+      never_plausible_estimate)
+check("an abstaining estimate explains why",
+      bool(never_plausible_estimate.get("abstain_reason")))
+check("a flat frame's confidence is at the floor",
+      never_plausible_estimate["confidence"] == 0.0,
+      never_plausible_estimate["confidence"])
+
+check("multiplier 1.0x returns the default unchanged (within the clamp range)",
+      abs(gr.bg_sigma_for_multiplier(50, 1.0) - 50) < 1e-6)
+check("multiplier 2.0x roughly doubles the default",
+      abs(gr.bg_sigma_for_multiplier(30, 2.0) - 60) < 1e-6)
+check("an extreme multiplier is clamped, not applied raw",
+      gr.bg_sigma_for_multiplier(50, 100.0) <= gr.BG_SIGMA_ABSOLUTE_BOUNDS[1])
+check("an extreme low multiplier is clamped to stay a usable positive sigma",
+      gr.bg_sigma_for_multiplier(50, 0.0) >= gr.BG_SIGMA_ABSOLUTE_BOUNDS[0])
+
+if fixtures:
+    for path in fixtures:
+        raw = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        if raw is None:
+            continue
+        if raw.ndim == 3:
+            raw = raw[..., :3].mean(axis=2)
+        raw = np.clip(raw, 0, 255).astype(np.uint8)
+        estimate = gr.estimate_body_bg_sigma(raw, return_table=True)
+        check(f"{path.name}: estimate_body_bg_sigma's table covers the "
+              "declared search grid",
+              len(estimate["table"]) == len(gr.SIGMA_SEARCH_GRID))
+        check(f"{path.name}: estimate_body_bg_sigma either abstains with a "
+              "reason or returns a real default",
+              (estimate["abstain"] and estimate["abstain_reason"])
+              or (not estimate["abstain"] and estimate["bg_sigma_default"] is not None),
+              estimate)
+        if not estimate["abstain"]:
+            chosen_row = next(r for r in estimate["table"]
+                               if r["bg_sigma"] == estimate["bg_sigma_default"])
+            check(f"{path.name}: the chosen default's row has a real score",
+                  chosen_row["score"] is not None, chosen_row)
+            dialed = gr.bg_sigma_for_multiplier(estimate["bg_sigma_default"], 1.3)
+            check(f"{path.name}: dialing 1.3x moves away from the default "
+                  "in the expected direction",
+                  dialed > estimate["bg_sigma_default"]
+                  or dialed == gr.BG_SIGMA_ABSOLUTE_BOUNDS[1],
+                  dialed)
+else:
+    print("\n  (no real-frame fixtures present - "
+          "estimate_body_bg_sigma checks skipped)")
 
 print()
 failed = [n for n, ok, _ in results if not ok]

@@ -236,7 +236,10 @@ REGISTRY = [
          "Physiology - Calcium and cellular activity", "fiji", "ready", "tools/afd_neuron/fiji/AFD_MTP_v7_gap_patch.java"),
 
     # --- Anatomy and morphology ---
-    Tool("Myocyte morphometry (Fiji)", "Measure myocyte shape and actin fibre waviness.",
+    Tool("Myocyte morphometry", "Per-myocyte body-wall muscle morphometry: cell geometry, sarcomere number and spacing across the bands, and actin fibre waviness - with review and hand-correction of ticks and fibres before anything is saved.",
+         "Anatomy and morphology", "python", "ready", "tools/morphology/myocyte_morphometry_tool.py",
+         requires="a raw fluorescence image, the scale bar's printed length for calibration, and a hand-drawn boundary per myocyte"),
+    Tool("Myocyte morphometry (Fiji, legacy)", "The original Fiji-macro version. Superseded by the Python tool above; kept for reproducing older measurements.",
          "Anatomy and morphology", "fiji", "ready", "tools/morphology/Myocyte_Morphometry.ijm"),
     Tool("Nonstriated muscle degeneration", "Measure pharyngeal, uterine, somatointestinal, or anal-depressor structure and force-vector geometry.",
          "Anatomy and morphology", "python", "ready", "tools/morphology/nonstriated_morphology_tool.py",

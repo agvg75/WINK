@@ -119,6 +119,8 @@ class ScaleCalibrationDialog:
         ttk.Combobox(brow, textvariable=self.unit_var, state="readonly",
                      values=["mm", "um"], width=4).pack(side="left")
         if self.frame is not None:
+            ttk.Button(brow, text="Auto-detect",
+                       command=self._auto_scale_bar).pack(side="left", padx=8)
             ttk.Button(brow, text="Draw line on image",
                        command=self._draw_scale_bar).pack(side="left", padx=8)
         else:
@@ -210,6 +212,33 @@ class ScaleCalibrationDialog:
         self._set_current(umpp, "optical_estimate",
                           f"{self.scope_var.get()} | {self.camera_var.get()} | "
                           f"{self.optical_out.get()}")
+
+    def _auto_scale_bar(self):
+        if self.frame is None:
+            return
+        found = sc.detect_scale_bar_px(self.frame)
+        if found is None:
+            self.note_var.set(
+                "No solid scale bar found automatically in a corner of this "
+                "image - use 'Draw line on image' instead. (This looks for "
+                "a solid, unbroken line; it does not read the printed "
+                "number - type that in from what's shown on the image.)")
+            return
+        try:
+            umpp = sc.scalebar_um_per_px(
+                found["length_px"], float(self.known_var.get()), self.unit_var.get())
+            self._set_current(
+                umpp, "two_point_calibration",
+                f"auto-detected bar ({found['corner']}, solidity "
+                f"{found['solidity']:.2f}) {self.known_var.get()} "
+                f"{self.unit_var.get()} / {found['length_px']:.0f} px")
+            self.note_var.set(
+                f"Found a {found['length_px']:.0f} px bar in the "
+                f"{found['corner'].replace('_', ' ')} corner - check that "
+                "Known length/unit above match the number printed on the "
+                "image before trusting this.")
+        except Exception as exc:
+            messagebox.showerror("Scale bar", str(exc), parent=self.win)
 
     def _draw_scale_bar(self):
         try:
@@ -388,6 +417,12 @@ class ScaleCalibrationPanel:
         ttk.Entry(krow, textvariable=self.known_var, width=8).pack(side="left", padx=4)
         ttk.Combobox(krow, textvariable=self.unit_var, state="readonly", values=["mm", "um"], width=4).pack(side="left")
         if self.frame is not None:
+            ttk.Button(bar, text="1. Measure the bar on the image",
+                       command=self._auto_scalebar).pack(fill="x", padx=6, pady=(0, 2))
+            self._use_bar_btn = ttk.Button(
+                bar, text="2. Use this bar (set Known length first)",
+                command=self._use_detected_bar, state="disabled")
+            self._use_bar_btn.pack(fill="x", padx=6, pady=(0, 2))
             ttk.Button(bar, text="Draw scale bar on image ->", command=self._start_scalebar).pack(fill="x", padx=6, pady=(0, 4))
         else:
             mrow = ttk.Frame(bar); mrow.pack(fill="x", padx=6, pady=(0, 4))
@@ -460,6 +495,69 @@ class ScaleCalibrationPanel:
         self._set_current(umpp, "optical_estimate", f"{self.scope_var.get()} | {self.camera_var.get()} | {self.optical_out.get()}")
 
     # -- scale bar on the panel canvas --------------------------------------
+    def _auto_scalebar(self):
+        """STEP 1 of 2: measure the burned-in bar, but do NOT apply a scale.
+
+        This is deliberately split in two. A one-click version silently used
+        whatever was in the Known-length box, which defaults to 1.0 mm -
+        right for plate-scale behavioural rigs (most of WINK) but wrong for
+        a confocal bar printed in um. That produced a real ~20x calibration
+        error twice in the same session: a 904 px bar labelled "49.2 um"
+        read as 1.0 mm gives 1.10619 um/px instead of 0.05442, and every
+        downstream length, area and wave measurement inherits it. The
+        CHECK_CALIBRATION flag caught it after the fact, but only after the
+        rows were written. Requiring an explicit second click, after the
+        printed value has been entered, means the default can never be
+        applied without someone having looked at it.
+        """
+        if self.frame is None:
+            return
+        found = sc.detect_scale_bar_px(self.frame)
+        self._detected_bar = found
+        if found is None:
+            self._use_bar_btn.configure(state="disabled")
+            self.note_var.set(
+                "No solid scale bar found automatically in a corner of this "
+                "image - draw it by hand instead. (This looks for a solid, "
+                "unbroken line; it does not read the printed number.)")
+            return
+        x1, y1, x2, y2 = found["x1"], found["y1"], found["x2"], found["y2"]
+        self._ax.plot([x1, x2], [y1, y2], "-", color="#00e0ff", lw=2)
+        self._ax.plot([x1, x2], [y1, y2], "+", color="#00e0ff", ms=10, mew=2)
+        self._canvas.draw_idle()
+        self._use_bar_btn.configure(state="normal")
+        self.note_var.set(
+            f"Measured a {found['length_px']:.0f} px bar in the "
+            f"{found['corner'].replace('_', ' ')} corner (cyan).  NOW: read "
+            f"the length printed next to it ON THE IMAGE, type it into "
+            f"'Known length' above with the right unit, then press '2. Use "
+            f"this bar'.  No scale has been set yet.  Confocal bars are "
+            f"usually um (e.g. 49.2 um); plate rigs are usually mm.")
+
+    def _use_detected_bar(self):
+        """STEP 2 of 2: apply the measured bar using the value the person
+        actually entered."""
+        found = getattr(self, "_detected_bar", None)
+        if not found:
+            self.note_var.set("Measure the bar first (step 1).")
+            return
+        try:
+            known = float(self.known_var.get())
+            unit = self.unit_var.get()
+            umpp = sc.scalebar_um_per_px(found["length_px"], known, unit)
+            self._set_current(
+                umpp, "two_point_calibration",
+                f"auto-detected bar ({found['corner']}, solidity "
+                f"{found['solidity']:.2f}) {known} {unit} / "
+                f"{found['length_px']:.0f} px")
+            self.note_var.set(
+                f"{found['length_px']:.0f} px = {known} {unit}  ->  "
+                f"{umpp:.5f} um/px.  Confirm the cyan line lies on the real "
+                f"bar and that '{known} {unit}' matches its printed label, "
+                f"then press OK.")
+        except Exception as exc:
+            self.note_var.set(str(exc))
+
     def _start_scalebar(self):
         if self.frame is None:
             return

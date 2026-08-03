@@ -36,11 +36,15 @@ Two stand-ins are provided here since this module runs headless:
     not a substitute for a human confirming the outline before it is
     trusted, and should be labeled as such in any report that uses it.
 
-A note on the interactive UI this is meant to feed into: at the moment the
-user is drawing the calibration outline by hand, a temporary "maximize
-contrast" toggle (a simple percentile stretch, see auto_contrast_preview())
-is worth adding as a display-only aid. It should affect only what the user
-sees while clicking, never the underlying pixel data that gets measured.
+The interactive UI this feeds into is gcamp_recoverable_tool.py: a person
+picks a representative frame, gets an adaptive per-acquisition bg_sigma
+default (estimate_body_bg_sigma) with a confidence/abstain decision, and
+adjusts it with a multiplier dial while watching the body/signal mask
+redraw live. It also includes the "maximize contrast" display-only toggle
+(auto_contrast_preview()) for the drawing/marking step - it affects only
+what the person sees, never the pixels that get measured - and the
+straight/coiled frame marking that licenses validate_coil_branch's coil
+classification for a specific recording.
 """
 
 from dataclasses import dataclass, field
@@ -195,6 +199,184 @@ def segment_body_and_signal(gray_full, bg_sigma=BODY_BG_SIGMA):
     if body.mean() > 0.35:
         return None, None
     return body, body & (flat > body_peak)
+
+
+# ---------------------------------------------------------------------------
+# Adaptive bg_sigma: BODY_BG_SIGMA=50 was validated on one dataset only (see
+# the module docstring's own caveat), and testing it against a second,
+# independent recording (different day, different RNAi condition) showed it
+# does not transfer - body area swung up to 32x within a single acquisition
+# on the new data, meaning the mask was sometimes debris/background rather
+# than the animal. This section replaces the single fixed constant with a
+# per-acquisition search over a coarse sigma grid (a proxy for worm width /
+# local contrast), ranked by how plausible the resulting mask looks as one
+# elongated animal.
+#
+# The default this produces and the person's manual override are kept
+# deliberately SEPARATE, not collapsed into one raw sigma value. A raw sigma
+# slider means "the right value" is a different absolute number on a bright
+# acquisition than on a dark one - the ace-1 recording needed a very
+# different sigma than the egl-19 one it was tuned on - so a slider showing
+# raw pixels is not comparable across recordings and forces a student to
+# hunt from scratch every time. Instead: `estimate_body_bg_sigma` computes a
+# per-acquisition default, and `bg_sigma_for_multiplier` applies a DIAL that
+# is a multiplier on that default (1.0x = trust the estimate, 1.5x = more
+# background subtraction than estimated, etc.) - meaningful regardless of
+# how dark or bright the specific acquisition is.
+#
+# The same computation also drives the abstain gate: confidence comes from
+# whether the winning sigma is backed by a plateau of similarly-plausible
+# neighboring sigmas (real animals tend to segment sensibly across a RANGE
+# of nearby sigmas) or is an isolated spike (more likely a fluke - debris
+# that happened to look elongated at exactly one sigma). Low confidence means
+# abstain, not "fall back to BODY_BG_SIGMA and pretend it's trustworthy."
+# ---------------------------------------------------------------------------
+SIGMA_SEARCH_GRID = tuple(range(20, 90, 5))
+PLAUSIBLE_AREA_FRAC = (0.005, 0.30)   # a worm-sized blob, not noise or the frame
+MIN_PLAUSIBLE_ASPECT = 1.8            # worms are elongated; blobs of noise are not
+MIN_ESTIMATE_CONFIDENCE = 0.25        # below this, abstain rather than guess
+BG_SIGMA_MULTIPLIER_BOUNDS = (0.4, 2.5)
+BG_SIGMA_ABSOLUTE_BOUNDS = (10.0, 150.0)  # GaussianBlur needs a sane, positive sigma
+
+
+def mask_plausibility_score(body, area_frac_range=PLAUSIBLE_AREA_FRAC,
+                             min_aspect=MIN_PLAUSIBLE_ASPECT):
+    """How much does `body` look like ONE elongated animal, not debris, a
+    noise field, or an over-merged blob?
+
+    Always returns the underlying measurements (`area_frac`, `aspect`,
+    `border_touch_frac`). `score` is set to None when the mask fails a hard
+    gate - implausible size, or not elongated enough - and otherwise rewards
+    elongation while penalizing a mask that hugs the frame border, since a
+    real animal only touches the border when it is genuinely exiting the
+    frame, not along a whole edge.
+
+    This ranks CANDIDATE sigmas against each other for the SAME frame. It is
+    not a certificate that a passing mask is correct - a stubbier real worm,
+    or a well-shaped patch of debris, can both score well. Treat a high score
+    as "worth showing to a person," not as ground truth.
+    """
+    body = np.asarray(body, dtype=bool)
+    if body.sum() == 0:
+        return {"area_frac": 0.0, "aspect": None,
+                "border_touch_frac": None, "score": None}
+    area_frac = float(body.mean())
+    body_u8 = body.astype(np.uint8) * 255
+    contours, _ = cv2.findContours(body_u8, cv2.RETR_EXTERNAL,
+                                    cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return {"area_frac": area_frac, "aspect": None,
+                "border_touch_frac": None, "score": None}
+    largest = max(contours, key=cv2.contourArea)
+    (_, _), (rw, rh), _ = cv2.minAreaRect(largest)
+    aspect = float(max(rw, rh) / max(min(rw, rh), 1e-6))
+    border = np.zeros_like(body, dtype=bool)
+    border[0:2, :] = True; border[-2:, :] = True
+    border[:, 0:2] = True; border[:, -2:] = True
+    border_touch_frac = float((body & border).sum() / max(int(body.sum()), 1))
+    score = None
+    if area_frac_range[0] <= area_frac <= area_frac_range[1] and aspect >= min_aspect:
+        score = aspect - 3.0 * border_touch_frac
+    return {"area_frac": area_frac, "aspect": aspect,
+            "border_touch_frac": border_touch_frac, "score": score}
+
+
+def estimate_body_bg_sigma(gray_full, sigma_grid=SIGMA_SEARCH_GRID,
+                            min_confidence=MIN_ESTIMATE_CONFIDENCE,
+                            return_table=False):
+    """Compute a per-acquisition adaptive DEFAULT bg_sigma, with a confidence
+    score and an abstain decision - not a raw value to hand a slider.
+
+    Returns a dict:
+      bg_sigma_default  - the adaptive estimate (int), or None if abstaining
+      confidence        - 0..1, how much a person should trust this default
+      abstain           - True when confidence < min_confidence
+      abstain_reason    - human-readable, only set when abstaining
+      table             - every candidate sigma's measurements, if requested
+
+    Confidence has two parts. `breadth`: what fraction of the search grid
+    produced ANY plausible mask at all (a very dark or low-contrast frame
+    might pass none of them). `support`: whether the winning sigma's
+    immediate neighbors in the grid also scored plausibly - a real animal
+    tends to segment sensibly across a range of nearby sigmas, so a winner
+    with no support from its neighbors is more likely an isolated fluke
+    (debris that happened to look elongated at exactly one sigma) than a
+    real detection. Confidence is not a statement about whether the CHOSEN
+    mask is biologically correct, only about whether the search behaved like
+    it found something real rather than noise.
+
+    Feed `bg_sigma_default` into `bg_sigma_for_multiplier` together with a
+    person's dial position - do not use this value directly as a raw sigma
+    for a slider, see the module-level note above for why.
+    """
+    table = []
+    for sigma in sigma_grid:
+        body, _signal = segment_body_and_signal(gray_full, bg_sigma=sigma)
+        row = {"bg_sigma": int(sigma), "body_px": None,
+               "area_frac": None, "aspect": None,
+               "border_touch_frac": None, "score": None}
+        if body is not None:
+            metrics = mask_plausibility_score(body)
+            row.update(metrics)
+            row["body_px"] = int(body.sum())
+        table.append(row)
+
+    passing = [r for r in table if r["score"] is not None]
+    if not passing:
+        result = {
+            "bg_sigma_default": None, "confidence": 0.0, "abstain": True,
+            "abstain_reason": (
+                "no sigma in the search grid produced a plausible body mask "
+                "on this frame - it is likely too dark or too low-contrast "
+                "to estimate worm width reliably here. Do not fall back to "
+                "a fixed default and trust it; review the frame by eye."),
+        }
+        if return_table:
+            result["table"] = table
+        return result
+
+    best = max(passing, key=lambda r: r["score"])
+    grid = list(sigma_grid)
+    idx = grid.index(best["bg_sigma"])
+    step = grid[1] - grid[0] if len(grid) > 1 else 0
+    neighbor_sigmas = {best["bg_sigma"] - step, best["bg_sigma"] + step}
+    neighbor_rows = [r for r in table if r["bg_sigma"] in neighbor_sigmas]
+    support = (sum(1 for r in neighbor_rows if r["score"] is not None)
+               / max(len(neighbor_rows), 1))
+    breadth = len(passing) / len(table)
+    confidence = float(np.clip(0.5 * support + 0.5 * breadth, 0.0, 1.0))
+    abstain = confidence < min_confidence
+
+    result = {
+        "bg_sigma_default": None if abstain else best["bg_sigma"],
+        "confidence": confidence,
+        "abstain": abstain,
+        "abstain_reason": (
+            None if not abstain else
+            f"the best candidate (sigma={best['bg_sigma']}) is not backed by "
+            f"plausible masks at its neighboring sigmas (confidence "
+            f"{confidence:.2f} < {min_confidence:.2f}) - it looks like an "
+            f"isolated fluke rather than a real detection. Review the frame "
+            f"by eye rather than trusting an automatic default here."),
+    }
+    if return_table:
+        result["table"] = table
+    return result
+
+
+def bg_sigma_for_multiplier(bg_sigma_default, multiplier=1.0):
+    """Apply a person's DIAL (a multiplier on the adaptive per-acquisition
+    default, never a raw pixel value) and clamp to a workable range.
+
+    multiplier=1.0 means "trust the adaptive estimate as-is." Values above
+    or below that nudge away from the computed starting point rather than
+    requiring a student to find an absolute number from scratch each time -
+    see the module-level note on why a raw sigma slider does not transfer
+    across differently-lit acquisitions.
+    """
+    multiplier = float(np.clip(multiplier, *BG_SIGMA_MULTIPLIER_BOUNDS))
+    sigma = float(bg_sigma_default) * multiplier
+    return float(np.clip(sigma, *BG_SIGMA_ABSOLUTE_BOUNDS))
 
 
 def _ordered_skeleton_points(mask):
@@ -522,6 +704,84 @@ COIL_LENGTH_MAX = 0.85   # length must also be meaningfully shorter to call it a
 # placeholder that will fail loudly if this is enabled without one.
 ENABLE_COIL_CLASSIFICATION = False
 UNVERIFIED_COIL_STATUS = "unverified_shape_change"
+
+
+def validate_coil_branch(straight_mask, coiled_mask, calib=None,
+                          length_tol=LENGTH_TOL, area_tol=AREA_TOL):
+    """Check the coil branch against a straight/coiled pair of the SAME animal.
+
+    This is the ground truth the branch has never had, and it cannot be
+    supplied in the abstract: it depends on the animal, the magnification and
+    the segmentation. So it is asked for per recording. The user marks one
+    frame where the animal is clearly extended and one where it is clearly
+    coiled; both are segmented; and the classifier is run against them.
+
+    The branch passes only if BOTH hold:
+      * the straight frame reads full_view against its own calibration, and
+      * the coiled frame is caught by the coil signature rather than landing
+        in degraded, partial_out_of_frame or possible_collision.
+
+    A pass licenses coil classification FOR THAT RECORDING and nothing more.
+    A failure is informative in itself - it usually means the segmentation is
+    not capturing the whole animal, in which case no downstream shape
+    classification can be trusted either.
+
+    WHAT A PASS DOES AND DOES NOT MEAN. It means the signature fires on a frame
+    a person identified as coiled, and does not fire on one they identified as
+    extended. It does NOT mean the signature is specific to coiling: anything
+    genuinely shorter and wider at conserved area matches it - a different,
+    stubbier animal would too. That is why the marked pair must be the SAME
+    animal in the SAME recording, and why the frames chosen are recorded
+    alongside the verdict, so a later reader can check what was actually
+    marked.
+
+    Returns a dict recording what happened, suitable for storing with results.
+    """
+    if straight_mask is None or coiled_mask is None:
+        return {"validated": False, "reason": "a mask was missing",
+                "straight_status": None, "coiled_status": None}
+    if calib is None:
+        calib = mask_length_and_area(straight_mask)
+        calib["source"] = "coil_validation_straight_frame"
+        calib = _with_width(calib, straight_mask)
+        if not np.isnan(calib.get("cut_half_width_px", float("nan"))):
+            coil_len = coil_aware_length(straight_mask, calib["cut_half_width_px"])
+            if coil_len["length_px"] > 0:
+                calib["length_px"] = coil_len["length_px"]
+
+    straight_eval = evaluate_frame(straight_mask, calib, frame_index=-1,
+                                    length_tol=length_tol, area_tol=area_tol,
+                                    enable_coil=True)
+    coiled_eval = evaluate_frame(coiled_mask, calib, frame_index=-2,
+                                  length_tol=length_tol, area_tol=area_tol,
+                                  enable_coil=True)
+
+    straight_ok = straight_eval.status == "full_view"
+    coil_ok = coiled_eval.status == "coiled_self_overlap"
+    if straight_ok and coil_ok:
+        reason = ("the marked straight frame reads full_view and the marked "
+                  "coiled frame is caught by the coil signature")
+    elif not straight_ok:
+        reason = (f"the frame marked STRAIGHT did not read full_view against "
+                  f"its own calibration (got {straight_eval.status}); the "
+                  f"calibration frame itself is suspect, most often because "
+                  f"the segmentation is not capturing the whole animal")
+    else:
+        reason = (f"the frame marked COILED was classified {coiled_eval.status}, "
+                  f"not a coil (length {coiled_eval.length_frac:.2f}, area "
+                  f"{coiled_eval.area_frac:.2f}, width {coiled_eval.width_frac:.2f} "
+                  f"of calibration). If area is far from 1.0 the segmentation is "
+                  f"losing part of the animal, which the coil test depends on")
+    return {"validated": bool(straight_ok and coil_ok), "reason": reason,
+            "straight_status": straight_eval.status,
+            "coiled_status": coiled_eval.status,
+            "coiled_length_frac": coiled_eval.length_frac,
+            "coiled_area_frac": coiled_eval.area_frac,
+            "coiled_width_frac": coiled_eval.width_frac,
+            "thresholds": {"COIL_WIDTH_MULT": COIL_WIDTH_MULT,
+                           "COIL_LENGTH_MAX": COIL_LENGTH_MAX},
+            "calibration_length_px": calib.get("length_px"),
+            "calibration_area_px": calib.get("area_px")}
 
 
 def evaluate_frame(mask, calib, frame_index=-1, length_tol=LENGTH_TOL,
