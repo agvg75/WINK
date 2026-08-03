@@ -29,3 +29,12 @@ Thumbs.db
 staged/resources/*.tif
 staged/resources/*_print_source.*
 staged/docs/*_Definitive_Manual_v*.docx
+
+# Test-run artefacts whose content is deterministic but whose clock is not.
+# Everything else under tests/*/results/ stays tracked on purpose: those
+# outputs ARE the regression signal, and a diff there means behaviour moved.
+# These two only ever differ by a timestamp or a duration, so tracking them
+# guarantees a dirty tree after every test run - which then gets swept into
+# unrelated commits by `git add -A staged/`.
+staged/tests/**/timing_report.json
+staged/tests/**/decision_transparency.json

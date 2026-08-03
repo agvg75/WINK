@@ -1,2 +1,2 @@
-track_id,first_frame,last_frame,raw_x,raw_y,hits,confirmed_persistent,event_candidate,event_time_s,accepted,review_status
-2,30,79,170.05035400390625,95.0228500366211,50,True,True,3.0,True,unreviewed_candidate
+track_id,first_frame,last_frame,raw_x,raw_y,hits,confirmed_persistent,event_candidate,event_time_s,automatic_decision,decision_basis,accepted,review_status,decision_status
+2,30,79,170.05035400390625,95.0228500366211,50,True,True,3.0,persistent_new_egg_candidate,hits=50; minimum_required_hits=4; first_frame=30; last_frame=79; match_radius_um=25,True,unreviewed_candidate,needs_human_review

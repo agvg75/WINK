@@ -1,3 +1,3 @@
-track_id,frames,duration_s,coverage_fraction,activity_fraction,mean_speed_um_s,spine_bend_frequency_hz,centroid_oscillation_frequency_hz,curvature_frequency_hz,spine_valid_fraction,edge_fraction,collision_fraction,crossing_ambiguity_fraction,eligible_for_frequency,needs_review,review_reason
-1,60,2.95,1.0,0.9833333333333333,126.93312336693448,,,,0.1,0.0,0.0,0.0,False,True,short_or_fragmented
-2,60,2.95,1.0,0.9833333333333333,126.18259970375092,,,,0.1,0.0,0.0,0.0,False,True,short_or_fragmented
+track_id,frames,detected_frames,manual_points,duration_s,coverage_fraction,activity_fraction,mean_speed_um_s,spine_bend_frequency_hz,centroid_oscillation_frequency_hz,curvature_frequency_hz,spine_valid_fraction,edge_fraction,collision_fraction,crossing_ambiguity_fraction,eligible_for_frequency,needs_review,review_reason
+1,60,60,0,2.95,1.0,0.9833333333333333,126.93312336693448,,,,0.0,0.0,0.0,0.0,False,True,short_or_fragmented
+2,60,60,0,2.95,1.0,0.9833333333333333,126.18259970375092,,,,0.0,0.0,0.0,0.0,False,True,short_or_fragmented
