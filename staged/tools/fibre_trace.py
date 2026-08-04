@@ -119,8 +119,22 @@ def endpoint_map(traced, shape, um_per_px, sigma_um=1.5):
 # without asking anyone.
 #   midbody  every endpoint counts        80.1% vs 71.8% at a 2 um filter
 #   head     short fragments must be cut  45.8% vs 32.4% with no filter
-# The likely reason: the head field is noisier and carries a damage lesion, so
-# it fragments more, and each fragment contributes two spurious endpoints.
+# WHY the two regions differ is NOT known, and a plausible explanation was
+# tested and refuted rather than left standing:
+#   * "the head field fragments more" - FALSE. Head fibre segments are LONGER
+#     (mean 15.1 um) than midbody (9.2 um).
+#   * "headedness is body taper, since the animal tapers at head and tail and
+#     holds diameter at midbody" (Andres) - NOT SUPPORTED by what could be
+#     measured here: head taper 0.173 um/um against midbody 0.244, the wrong
+#     way round, and within-field correlation between taper and segment length
+#     is weak and inconsistent in sign (+0.14 midbody, -0.11 head).
+# That test is WEAK though and does not settle the taper idea: both fields are
+# 150-185 um crops of a ~1000 um animal, and the width measured is the muscle
+# band inside a hand-chosen crop, so it reflects the framing as much as the
+# animal. Testing it properly needs fields at known positions along one animal,
+# or a low-magnification whole-worm image to measure the taper profile.
+# Until then these values are EMPIRICAL, fitted on one field each, and should
+# not be presented as though the mechanism were understood.
 MIN_SEGMENT_UM = {"midbody": 0.0, "head": 2.0, "posterior": 2.0, None: 0.0}
 
 
