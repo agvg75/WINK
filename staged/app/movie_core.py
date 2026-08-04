@@ -239,8 +239,15 @@ def render(source, out_path, decimate=1, fps=None, progress=None,
     canvas.draw()
     background = canvas.copy_from_bbox(fig.bbox)
 
-    indices = list(range(0, source.n_frames, max(1, int(decimate))))
-    out_fps = float(fps or max(1.0, source.fps))
+    decimate = max(1, int(decimate))
+    indices = list(range(0, source.n_frames, decimate))
+    # Decimation must NOT silently speed the movie up. Keeping the source rate
+    # while dropping frames plays the recording back at `decimate` times real
+    # time, which reads as an animal moving far faster than it did - and the
+    # viewer has no way to tell. Default to real time; an explicit fps still
+    # overrides, and both numbers go into the provenance.
+    real_time_fps = max(1.0, float(source.fps) / decimate)
+    out_fps = float(fps) if fps else real_time_fps
     writer = imageio.get_writer(str(out_path), fps=out_fps,
                                 macro_block_size=None)
     try:
@@ -267,6 +274,9 @@ def render(source, out_path, decimate=1, fps=None, progress=None,
         "n_frames_source": source.n_frames,
         "n_frames_rendered": len(indices),
         "decimate": int(decimate), "output_fps": out_fps,
+        "source_fps": float(source.fps),
+        "real_time_fps": real_time_fps,
+        "playback_speed_x": round(out_fps / real_time_fps, 3),
         "options": {k: v for k, v in options.items()
                     if isinstance(v, (str, int, float, bool, type(None)))},
     }
