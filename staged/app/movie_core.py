@@ -76,6 +76,69 @@ def read_frame(path):
     return np.asarray(Image.open(path))
 
 
+class FrameSource:
+    """Frames from either a folder of images or one multipage stack.
+
+    Both shapes occur in this lab: the RGBCaMP extractor writes a folder per
+    channel, while the DIC tracker is handed a single multipage TIFF. An
+    adapter should not have to care which it was given.
+
+    Multipage files are opened once and seeked, never re-opened per frame -
+    on a network share the difference is minutes.
+    """
+
+    IMAGE_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
+
+    def __init__(self, path, plane=None):
+        from PIL import Image
+        self.path = Path(path)
+        self.plane = plane
+        self._files = None
+        self._stack = None
+        if self.path.is_dir():
+            self._files = sorted(p for p in self.path.iterdir()
+                                 if p.suffix.lower() in self.IMAGE_EXTS)
+            self._n = len(self._files)
+        elif self.path.exists():
+            self._stack = Image.open(self.path)
+            self._n = int(getattr(self._stack, "n_frames", 1))
+        else:
+            self._n = 0
+
+    def __len__(self):
+        return self._n
+
+    def __bool__(self):
+        return self._n > 0
+
+    def get(self, index):
+        """Frame ``index`` as a 2-D array, or None if out of range."""
+        if index < 0 or index >= self._n:
+            return None
+        if self._files is not None:
+            arr = read_frame(self._files[index])
+        else:
+            self._stack.seek(int(index))
+            arr = np.asarray(self._stack)
+        if arr.ndim == 3:
+            arr = arr[..., self.plane if self.plane is not None else 0]
+        return arr
+
+    def limits(self, n_sample=12, pct=(50.0, 100.0)):
+        """Display limits sampled across the whole sequence. See
+        :func:`sampled_limits` for why the percentiles are lopsided."""
+        if not self._n:
+            return 0.0, 1.0
+        idx = np.unique(np.linspace(0, self._n - 1,
+                                    min(int(n_sample), self._n)).astype(int))
+        pooled = np.concatenate([np.asarray(self.get(int(i)), dtype=float).ravel()
+                                 for i in idx])
+        lo, hi = np.percentile(pooled, pct[0]), np.percentile(pooled, pct[1])
+        if hi <= lo:
+            hi = float(lo) + 1.0
+        return float(lo), float(hi)
+
+
 def sampled_limits(files, plane=None, n_sample=12, pct=(50.0, 100.0)):
     """Display limits for an image sequence, sampled across the WHOLE recording.
 
