@@ -54,6 +54,12 @@ MovieInputError = mc.MovieInputError
 
 REQUIRED = {"frame", "time_s", "x", "y", "track_id"}
 
+# A fragmented run can produce thousands of tracks - one real pilot here has
+# 1981 for a plate that should hold a couple of dozen. One timeline row each
+# would be a figure hundreds of inches tall, so the panel shows the longest
+# and SAYS how many it left out rather than silently truncating.
+MAX_BOUT_ROWS = 20
+
 
 class Run:
     """One population-tracking results folder, plus the recording it came from."""
@@ -225,10 +231,15 @@ def build_figure(rec, smooth_s=0.5, trail_s=2.0, width_in=13.0, dpi=110):
 
     left, right = 0.075, 0.975
     usable = width_in * (right - left)
-    w = float(rec.meta.get("source_frame_width") or 0) or 1.0
-    h = float(rec.meta.get("source_frame_height") or 0) or 1.0
+    w = float(rec.meta.get("source_frame_width") or 0)
+    h = float(rec.meta.get("source_frame_height") or 0)
+    if w <= 0 or h <= 0:
+        # No frame dimensions recorded. Assume 4:3 rather than 1:1, which would
+        # otherwise claim a square panel of empty white on a run with no images.
+        w, h = 4.0, 3.0
     plate_row = min(usable * (h / w), 5.0)
-    rows = [plate_row, 1.2, max(0.9, 0.28 * len(rec.track_ids) + 0.6), 0.9]
+    shown_ids = _bout_rows_shown(rec)
+    rows = [plate_row, 1.2, max(0.9, 0.26 * len(shown_ids) + 0.7), 0.9]
     height_in = sum(rows) + 1.6
 
     fig = plt.figure(figsize=(width_in, height_in), dpi=dpi)
@@ -281,6 +292,19 @@ def build_figure(rec, smooth_s=0.5, trail_s=2.0, width_in=13.0, dpi=110):
         scale_note = "\n(declared 1.000 um/px - often an unset default)"
     ax_speed.set_ylabel("speed\n(%s%s)%s" % (speed_units, scale_note, note),
                         fontsize=7.5)
+    # Robust limits. Tracking failures produce speeds orders of magnitude above
+    # anything an animal does - one real run peaks near 100,000 um/s - and an
+    # autoscaled axis then flattens every real trace onto the baseline. Clip the
+    # VIEW, never the data, and say that the view is clipped.
+    pooled = np.concatenate([v[np.isfinite(v)] for v in speeds.values()])         if speeds else np.array([0.0])
+    if pooled.size:
+        hi = float(np.percentile(np.abs(pooled), 99.0))
+        peak = float(np.nanmax(np.abs(pooled)))
+        if hi > 0 and peak > hi * 1.5:
+            ax_speed.set_ylim(-0.05 * hi, hi * 1.15)
+            ax_speed.text(0.995, 0.94, "view clipped at the 99th percentile "
+                          "(peak %.0f)" % peak, transform=ax_speed.transAxes,
+                          ha="right", va="top", fontsize=6.5, color="#C1440E")
     ax_speed.set_xlim(float(times[0]), float(times[-1]))
     ax_speed.tick_params(labelsize=8)
     dyn["speed_cursor"] = ax_speed.axvline(float(times[0]), color="#111111",
@@ -336,6 +360,16 @@ def build_figure(rec, smooth_s=0.5, trail_s=2.0, width_in=13.0, dpi=110):
     return fig, dyn, ctx
 
 
+def _bout_rows_shown(rec):
+    """The tracks the modality panel will show: the longest-lived, capped."""
+    ids = list(rec.track_ids)
+    if len(ids) <= MAX_BOUT_ROWS:
+        return ids
+    counts = rec.tracks.groupby("track_id")["frame"].nunique()
+    ranked = counts.sort_values(ascending=False).index.astype(int).tolist()
+    return sorted(ranked[:MAX_BOUT_ROWS])
+
+
 def _draw_bouts(ax, rec, times):
     """One row per animal, coloured by proposed modality, alpha by confidence.
 
@@ -343,7 +377,8 @@ def _draw_bouts(ax, rec, times):
     faint rather than as firmly as a confident one - and 'uncertain' has its
     own near-white colour so it cannot be mistaken for a decision.
     """
-    ids = rec.track_ids
+    ids = _bout_rows_shown(rec)
+    omitted = len(rec.track_ids) - len(ids)
     ax.set_yticks(range(len(ids)))
     ax.set_yticklabels(["%d" % t for t in ids], fontsize=7)
     ax.set_ylabel("modality\nby animal", fontsize=7.5)
@@ -351,6 +386,13 @@ def _draw_bouts(ax, rec, times):
     ax.set_xlim(float(times[0]), float(times[-1]))
     ax.tick_params(labelsize=8)
     ax.invert_yaxis()
+    if omitted:
+        ax.set_ylabel("modality\nby animal\n(%d longest of %d)"
+                      % (len(ids), len(rec.track_ids)), fontsize=7.5)
+        ax.text(0.005, 0.02, "%d shorter tracks not shown - a run this "
+                "fragmented usually means tracking, not behaviour"
+                % omitted, transform=ax.transAxes, fontsize=6.5,
+                color="#C1440E")
 
     if rec.bouts is None or not len(rec.bouts):
         ax.text(0.5, 0.5, "no modality bouts in this run",

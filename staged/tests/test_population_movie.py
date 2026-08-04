@@ -94,6 +94,33 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
           dyn["plate_note"].get_text())
     plt.close(fig)
 
+# --- a fragmented run must stay renderable -------------------------------
+# A real pilot here produced 1981 tracks for a plate holding a few dozen
+# animals. One timeline row each would be a figure hundreds of inches tall.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    tmp = Path(td) / "results"
+    shutil.copytree(FIXTURE, tmp)
+    base = pd.read_csv(FIXTURE / "detections_and_tracks.csv")
+    many = pd.concat([base.assign(track_id=base["track_id"] + 2 * k)
+                      for k in range(150)], ignore_index=True)
+    many.to_csv(tmp / "detections_and_tracks.csv", index=False)
+    rec3 = pm.load(tmp)
+    check("a fragmented run loads", len(rec3.track_ids) == 300,
+          len(rec3.track_ids))
+    shown = pm._bout_rows_shown(rec3)
+    check("the modality panel caps its rows rather than growing without bound",
+          len(shown) == pm.MAX_BOUT_ROWS, len(shown))
+    fig, dyn, ctx = pm.build_figure(rec3)
+    height = fig.get_size_inches()[1]
+    check("the figure stays a sane height with hundreds of tracks",
+          height < 25, f"{height:.1f} in")
+    label = ctx["axes"][2].get_ylabel()
+    check("...and says how many tracks it left out rather than truncating "
+          "silently", "of 300" in label, label.replace(chr(10), " "))
+    plt.close(fig)
+    rec3.close()
+
+
 # --- refusals -------------------------------------------------------------
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     tmp = Path(td)
