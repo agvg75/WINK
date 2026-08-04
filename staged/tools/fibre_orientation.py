@@ -440,6 +440,120 @@ def trace_seams(evidence, n_seams=6, min_separation_px=12, max_slope=1):
     return [seams[i] for i in order], [scores[i] for i in order]
 
 
+def trace_seam_guided(evidence, y_init, prior_um=4.0, um_per_px=1.0,
+                      max_slope=2, x0=0, x1=None):
+    """Trace ONE seam, pulled toward an expected position by a shape prior.
+
+    The unguided tracer could only report boundaries where evidence was strong
+    on its own, which is why it recovered the three full-width row seams and
+    none of the shorter connectors. A prior changes the question from "is there
+    a boundary here" to "given a boundary is expected near here, where exactly
+    does it sit" - so weak evidence displaces a boundary slightly instead of
+    deleting it. This is Andres's template idea: lay the shape down, then
+    stretch it to the signal.
+
+    `x0`/`x1` bound the span, so a SHORT oblique connector is expressible.
+    Forcing every path to run the full width is what made those undetectable
+    at any parameter setting.
+    """
+    E = np.asarray(evidence, dtype=float)
+    H, W = E.shape
+    x1 = W if x1 is None else int(x1)
+    x0 = int(x0)
+    span = slice(x0, x1)
+    y_init = np.broadcast_to(np.asarray(y_init, dtype=float), (W,))[span]
+    n = x1 - x0
+    if n < 2:
+        raise ValueError(f"Seam span must cover at least 2 columns, got {n}.")
+
+    rows = np.arange(H)[:, None]
+    # Prior cost grows with distance from the expected line, in micrometres so
+    # the strength means the same thing across magnifications.
+    prior = np.abs(rows - y_init[None, :]) * um_per_px / max(prior_um, 1e-6)
+    work = E[:, span] - prior
+
+    cost = np.full((H, n), -np.inf)
+    back = np.zeros((H, n), dtype=int)
+    cost[:, 0] = work[:, 0]
+    offs = list(range(-max_slope, max_slope + 1))
+    for x in range(1, n):
+        best = np.full(H, -np.inf)
+        bidx = np.zeros(H, dtype=int)
+        for o in offs:
+            shifted = np.full(H, -np.inf)
+            if o < 0:
+                shifted[-o:] = cost[:H + o, x - 1]
+            elif o > 0:
+                shifted[:H - o] = cost[o:, x - 1]
+            else:
+                shifted = cost[:, x - 1]
+            better = shifted > best
+            best = np.where(better, shifted, best)
+            bidx = np.where(better, o, bidx)
+        cost[:, x] = work[:, x] + best
+        back[:, x] = bidx
+
+    path = np.zeros(n, dtype=int)
+    path[-1] = int(np.argmax(cost[:, -1]))
+    for x in range(n - 1, 0, -1):
+        path[x - 1] = np.clip(path[x] + back[path[x], x], 0, H - 1)
+    score = float(E[path, np.arange(x0, x1)].mean())
+    return path, score
+
+
+def fit_template(evidence, um_per_px, n_seams=3, connectors_per_gap=3,
+                 prior_um=4.0, connector_um=30.0, max_slope=2,
+                 margin_frac=0.06):
+    """Fit a rhomboid tiling template: full-width seams plus oblique connectors.
+
+    The marks show the tiling has TWO element types - long near-straight row
+    seams spanning the field, and short strongly-oblique connectors dividing
+    cells within a row. A detector carrying only the first kind finds only the
+    first kind, however it is tuned.
+
+    Everything here is seeded from STATISTICS (how many, how far apart), never
+    from any particular set of marks, so a fit can be scored against marks
+    without scoring its own initialisation.
+    """
+    E = np.asarray(evidence, dtype=float)
+    H, W = E.shape
+    lo, hi = int(H * margin_frac), int(H * (1 - margin_frac))
+    starts = np.linspace(lo, hi, int(n_seams) + 2)[1:-1]
+
+    seams = []
+    for y0 in starts:
+        path, score = trace_seam_guided(E, np.full(W, y0), prior_um=prior_um,
+                                        um_per_px=um_per_px, max_slope=max_slope)
+        seams.append({"y": path, "x0": 0, "x1": W, "score": score,
+                      "kind": "row_seam"})
+    seams.sort(key=lambda s: s["y"].mean())
+
+    # Connectors live BETWEEN consecutive seams and span only part of the width.
+    conn_px = max(int(connector_um / um_per_px), 8)
+    connectors = []
+    bounds = [np.zeros(W)] + [s["y"] for s in seams] + [np.full(W, H - 1.0)]
+    for gi in range(len(bounds) - 1):
+        upper, lower = bounds[gi], bounds[gi + 1]
+        mid = (np.asarray(upper, float) + np.asarray(lower, float)) / 2.0
+        if np.mean(lower - upper) < 4:
+            continue
+        for ci in range(int(connectors_per_gap)):
+            cx = int((ci + 0.5) * W / connectors_per_gap)
+            a, b = max(cx - conn_px // 2, 0), min(cx + conn_px // 2, W)
+            if b - a < 8:
+                continue
+            path, score = trace_seam_guided(
+                E, mid, prior_um=prior_um * 2.5, um_per_px=um_per_px,
+                max_slope=max_slope + 2, x0=a, x1=b)
+            connectors.append({"y": path, "x0": a, "x1": b, "score": score,
+                               "kind": "connector", "gap": gi})
+
+    return {"seams": seams, "connectors": connectors,
+            "elements": seams + connectors,
+            "note": ("row seams span the field; connectors are short and "
+                     "oblique. Both are proposals for a human.")}
+
+
 def _windowed_mean_angle(mean_angle, lo, hi):
     """Circular mean of undirected angles over a slice, NaNs ignored."""
     seg = mean_angle[lo:hi]
