@@ -45,6 +45,20 @@ TOOL_VERSION = "1.0"
 
 # Order matters: "anterior to vulva" is a MIDBODY field and would otherwise be
 # caught by the head pattern's "anterior".
+# Resolution used for DETECTION, per region. Measured against the hand-marked
+# fields - recall, then time on a cropped field:
+#     scale   midbody              head
+#     1.00    80.1%  23.3s         45.8%   7.5s
+#     0.75    74.3%   9.4s         46.9%   4.5s
+#     0.50    69.0%   4.8s         56.0%   1.7s
+#     0.35    68.0%   2.2s         59.7%   1.0s
+# Midbody loses 11 points at half scale; head GAINS 14, because downsampling
+# averages away the speckle that fragments its fibres - the same noise the
+# 2 um minimum-segment filter compensates for there. So this is the fourth
+# parameter that wants opposite values by region, and a single default would
+# be wrong for one of them whichever way it went.
+DETECT_SCALE = {"midbody": 1.0, "head": 0.5, "posterior": 0.5, None: 0.75}
+
 REGION_PATTERNS = (
     ("midbody", r"anterior to vulva|midbody|vulva|medial|\bmid\b"),
     ("head", r"\bhead\b|\banterior\b|pharyn"),
@@ -75,7 +89,8 @@ def infer_region(*names):
 
 
 def analyse(stack, series_name="", file_name="", region=None, z_half=8,
-            n_seams=8, use_vertices=True):
+            n_seams=8, use_vertices=True, auto_rotate=True,
+            detect_scale=None, progress=None):
     """Run the detector on a loaded ConfocalStack. Returns a result dict.
 
     Raises ValueError with a reason a human can act on when the stack carries
@@ -96,6 +111,7 @@ def analyse(stack, series_name="", file_name="", region=None, z_half=8,
                 f"coherence={c['coherence']:.3f} - {c.get('rejected_because')}"
                 for c in report["channels"]))
 
+    say = progress or (lambda _frac, _msg: None)
     if region is None:
         region = infer_region(file_name, series_name)
     dz, dy, dx = stack.voxel_size_um
@@ -103,17 +119,63 @@ def analyse(stack, series_name="", file_name="", region=None, z_half=8,
     z0 = max(nz // 2 - z_half, 0)
     z1 = min(nz // 2 + z_half, nz)
     vol = stack.channel(channel)[z0:z1].astype(float)
+
+    # Work in the ANIMAL's frame. Everything below is stated "along the body
+    # axis" - the seam tracer walks image columns one pixel of y at a time -
+    # so a worm mounted diagonally makes it walk across background and return
+    # confident nonsense. Rotating first is not cosmetic; it is the assumption
+    # the rest of the code has always made, finally made true.
+    frame = {"rotated": False, "reason": "auto-rotation not requested"}
+    transform = None
+    if auto_rotate:
+        import animal_frame as afr
+        try:
+            vol, transform, frame = afr.align(vol)
+            # Trim the padding rotation added. Without this a seam spanning the
+            # full width crosses empty canvas and maps to coordinates outside
+            # the source image - and it is also the crop this tool otherwise
+            # lacks, so the analysis runs on the animal, not the whole field.
+            vol, transform = afr.trim_to_tissue(vol, transform,
+                                                um_per_px=stack.voxel_size_um[2])
+            frame["trimmed_to"] = transform.get("cropped_shape")
+        except afr.FrameError as exc:
+            frame = {"rotated": False, "reason": f"not rotated: {exc}"}
+            transform = None
+
+    # DETECTION RESOLUTION. The ridge filter is ~70% of the wall clock and
+    # scales with pixel count, so this is the difference between four minutes
+    # and one. It is not free accuracy-wise, and which way it costs depends on
+    # the region - see DETECT_SCALE.
+    if detect_scale is None:
+        detect_scale = DETECT_SCALE.get(region, DETECT_SCALE[None])
+    detect_scale = float(detect_scale)
+    scale_note = ""
+    if abs(detect_scale - 1.0) > 1e-6:
+        from scipy import ndimage as ndi
+        say(0.25, f"downsampling to {detect_scale:.2f} for detection")
+        vol = np.stack([ndi.zoom(p, detect_scale, order=1) for p in vol])
+        dx = dx / detect_scale
+        dy = dy / detect_scale
+        scale_note = (f"detected at {detect_scale:.2f} scale; positions are "
+                      f"reported at full resolution")
+        if transform is not None:
+            transform = dict(transform, detect_scale=detect_scale)
+
     proj = vol.max(axis=0)
     H, W = proj.shape
 
+    say(0.35, "measuring fibre orientation")
     angles, coherence = fo.orientation_volume(vol, sigma=1.5, rho=6.0)
+    say(0.5, "tracing individual fibres (the slow part)")
     ev = ft.boundary_evidence(proj, angles, coherence, dx, region=region)
+    say(0.8, "tracing boundaries")
     seams, scores = fo.trace_seams(
         ev["combined"], n_seams=n_seams,
         min_separation_px=max(int(2.5 / dx), 3), max_slope=1)
 
     vertices, pairs, linked = np.empty((0, 2)), [], []
     if use_vertices:
+        say(0.85, "finding myocyte ends")
         vote, _ = ft.convergence_vote(angles, coherence, dx, reach_um=25.0)
         m = int(6.0 / dx)
         if m > 0:
@@ -144,6 +206,8 @@ def analyse(stack, series_name="", file_name="", region=None, z_half=8,
         "voxel_size_um": (dz, dy, dx), "z_range": (z0, z1), "n_z": nz,
         "seams": seams, "seam_scores": scores,
         "vertices": vertices, "pairs": pairs, "linked": linked,
+        "frame": frame, "transform": transform,
+        "detect_scale": detect_scale, "scale_note": scale_note,
         "min_segment_um": ev.get("min_segment_um"),
         "n_endpoints": ev.get("n_endpoints"),
     }
@@ -165,6 +229,8 @@ def provenance(result, source, series_index, series_name):
         "n_seams": len(result["seams"]),
         "n_vertices": int(len(result["vertices"])),
         "n_vertex_linked": len(result["linked"]),
+        "frame": {k: v for k, v in (result.get("frame") or {}).items()},
+        "analysed_in_animal_frame": bool((result.get("frame") or {}).get("rotated")),
         "cue_combiner": result["evidence"].get("combiner"),
         "these_are_proposals": True,
         "measured_anything": False,
@@ -188,19 +254,42 @@ def write_outputs(out_dir, base, result, prov):
     proj = result["projection"]
     H, W = proj.shape
 
+    # Positions are written in BOTH frames. The rotated frame is where the
+    # analysis happened; the original is where the file's own coordinates live,
+    # and a boundary that cannot be pointed at in the source image is not much
+    # use to anyone checking it.
+    tf = result.get("transform")
+    afr = None
+    if tf is not None:
+        import animal_frame as afr
+
+    def to_source(ys, xs):
+        if tf is None or afr is None:
+            return list(zip(ys, xs))
+        pts = afr.points_to_original(np.stack([ys, xs], axis=1), tf)
+        return [(p[0], p[1]) for p in pts]
+
     csv_path = out_dir / f"{base}_boundary_proposals.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["path_id", "kind", "x_px", "y_px", "x_um", "y_um", "score"])
+        w.writerow(["path_id", "kind", "x_px", "y_px", "x_um", "y_um",
+                    "source_x_px", "source_y_px", "score"])
         for i, (p, sc) in enumerate(zip(result["seams"], result["seam_scores"])):
+            xs = np.arange(W)
+            src = to_source(np.asarray(p, dtype=float), xs.astype(float))
             for x in range(W):
+                sy, sx = src[x]
                 w.writerow([f"seam_{i}", "free", x, int(p[x]),
-                            f"{x * dx:.4f}", f"{p[x] * dy:.4f}", f"{sc:.5f}"])
+                            f"{x * dx:.4f}", f"{p[x] * dy:.4f}",
+                            f"{sx:.2f}", f"{sy:.2f}", f"{sc:.5f}"])
         for j, seg in enumerate(result["linked"]):
+            xs = np.arange(seg["x0"], seg["x1"], dtype=float)
+            src = to_source(np.asarray(seg["y"], dtype=float), xs)
             for k, x in enumerate(range(seg["x0"], seg["x1"])):
+                sy, sx = src[k]
                 w.writerow([f"linked_{j}", "vertex_linked", x, int(seg["y"][k]),
                             f"{x * dx:.4f}", f"{seg['y'][k] * dy:.4f}",
-                            f"{seg['score']:.5f}"])
+                            f"{sx:.2f}", f"{sy:.2f}", f"{seg['score']:.5f}"])
 
     vtx_path = out_dir / f"{base}_vertices.csv"
     with vtx_path.open("w", newline="", encoding="utf-8") as fh:
@@ -332,10 +421,15 @@ def run_gui():
             ttk.Checkbutton(opts, text="also link vertex pairs",
                             variable=self.vert_var).grid(row=1, column=0,
                                                          columnspan=2, sticky="w")
-            ttk.Button(left, text="Propose boundaries", command=self.run
-                       ).pack(fill="x", pady=(2, 4))
-            ttk.Button(left, text="Save proposals...", command=self.save
-                       ).pack(fill="x")
+            self.run_btn = ttk.Button(left, text="Propose boundaries",
+                                      command=self.run)
+            self.run_btn.pack(fill="x", pady=(2, 4))
+            # Created here but only packed while working, so an idle window
+            # does not carry a permanently empty progress bar.
+            self.progress = ttk.Progressbar(left, mode="determinate", maximum=100)
+            self.save_btn = ttk.Button(left, text="Save proposals and review...",
+                                       command=self.save)
+            self.save_btn.pack(fill="x")
 
             self.info = tk.Text(left, width=54, height=13, wrap="word")
             self.info.pack(fill="both", expand=True, pady=6)
@@ -406,28 +500,102 @@ def run_gui():
                 messagebox.showerror("Could not load", str(exc))
                 return
             region = None if self.region_var.get() == "auto" else self.region_var.get()
+            self._run_in_background(info, region)
+
+        def _run_in_background(self, info, region):
+            """Detection takes minutes; it must not run on the UI thread.
+
+            Previously it did, so the window stopped repainting and Windows
+            marked it 'Not Responding' - indistinguishable from a crash, and
+            the honest answer to "is it still working?" was unavailable to the
+            person asking it. The worker only ever posts messages back through
+            a queue; Tk is touched from the main thread alone, because calling
+            into it from a worker fails intermittently rather than reliably.
+            """
+            import queue
+            import threading
+
+            self.progress_q = queue.Queue()
+            self.cancelled = threading.Event()
+            self._show_busy(True)
+
+            def report(frac, msg):
+                self.progress_q.put(("progress", frac, msg))
+
+            def work():
+                try:
+                    res = analyse(self.stack, series_name=info.name,
+                                  file_name=self.path.name, region=region,
+                                  use_vertices=self.vert_var.get(),
+                                  progress=report)
+                    self.progress_q.put(("done", res, None))
+                except ValueError as exc:
+                    self.progress_q.put(("refused", None, str(exc)))
+                except Exception:
+                    self.progress_q.put(("error", None, traceback.format_exc()))
+
+            threading.Thread(target=work, daemon=True).start()
+            self.after(80, self._poll_progress)
+
+        def _show_busy(self, busy):
+            state = "disabled" if busy else "normal"
+            for w in (self.run_btn, self.save_btn):
+                try:
+                    w.configure(state=state)
+                except Exception:
+                    pass
+            if busy:
+                self.progress.configure(value=0)
+                self.progress.pack(fill="x", pady=(2, 4))
+            else:
+                self.progress.pack_forget()
+
+        def _poll_progress(self):
+            import queue
             try:
-                self.result = analyse(self.stack, series_name=info.name,
-                                      file_name=self.path.name, region=region,
-                                      use_vertices=self.vert_var.get())
-                # a new run means a new review: keeping the old one would let
-                # decisions about one set of proposals be attributed to another
-                self.state = None
-                self.selected = None
-                self.drag = None
-            except ValueError as exc:
-                messagebox.showwarning("Refused", str(exc))
-                self._say(str(exc))
-                return
-            except Exception:
-                messagebox.showerror("Failed", traceback.format_exc())
-                return
+                while True:
+                    kind, a, b = self.progress_q.get_nowait()
+                    if kind == "progress":
+                        self.progress.configure(value=max(2, int(a * 100)))
+                        self._say(f"Working... {int(a * 100)}%\n\n{b}\n\n"
+                                  f"Detection takes from a few seconds to a "
+                                  f"few minutes depending on field size and "
+                                  f"region. The window stays responsive.")
+                    elif kind == "done":
+                        self.result = a
+                        self.state = None
+                        self.selected = None
+                        self.drag = None
+                        self._show_busy(False)
+                        self._finish_run()
+                        return
+                    elif kind == "refused":
+                        self._show_busy(False)
+                        messagebox.showwarning("Refused", b)
+                        self._say(b)
+                        return
+                    else:
+                        self._show_busy(False)
+                        messagebox.showerror("Failed", b)
+                        return
+            except queue.Empty:
+                pass
+            self.after(80, self._poll_progress)
+
+        def _finish_run(self):
             r = self.result
             warn = "\n".join(f"! {w}" for w in self.stack.preflight_warnings())
+            fr = r.get("frame") or {}
             self._say(
+                f"frame: {fr.get('reason', 'n/a')}"
+                + (f"  (axis {fr.get('axis_angle_deg')} deg, "
+                   f"elongation {fr.get('elongation')})" if fr.get("axis_angle_deg")
+                   is not None else "") + "\n"
                 f"region: {r['region'] or 'UNKNOWN - name matched nothing'}\n"
                 f"actin channel: ch{r['channel']}\n"
                 f"z planes used: {r['z_range'][0]}-{r['z_range'][1]} of {r['n_z']}\n"
+                f"detection scale: {r.get('detect_scale', 1.0):.2f}"
+                + (f"  ({r['scale_note']})" if r.get("scale_note") else "") + "\n"
                 f"fibre endpoints: {r['n_endpoints']}  "
                 f"(min segment {r['min_segment_um']} um)\n"
                 f"proposals: {len(r['seams'])} free paths, "
