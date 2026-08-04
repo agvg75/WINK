@@ -35,6 +35,23 @@ import numpy as np
 # so the z extent is NOT the animal's extent and nothing here may assume it is.
 REGIONS = ("head", "midbody", "posterior")
 
+# Discriminative power of each cue, measured against Andres Vidal-Gadea's
+# unassisted hand marks on 230831_pezo_phalloidin_crawl.lif series 0 -
+# P(cue elevated at a marked boundary), where 0.5 carries no information.
+# Used to weight the cue combination. IN-SAMPLE on a single marked field:
+# treat as a hypothesis, not a calibration, until a second field tests it.
+CUE_POWER = {
+    "valley": 0.915,       # d2I/dy2 - boundaries are dim seams
+    "alignment": 0.710,    # fibre continuity breaks at a seam
+    "thickness": 0.686,    # axial WIDTH steps between myocytes (Andres)
+}
+# For the record, operators that were tested and are NOT usable:
+#   depth value 0.141, depth step 0.392, thickness value 0.422 - all below
+#   chance. It is the change in relative width that carries signal, never
+#   where the sheet sits in z.
+CUE_POWER_REJECTED = {"depth_value": 0.141, "depth_step": 0.392,
+                      "thickness_value": 0.422, "gradient_dIdy": 0.788}
+
 
 def structure_tensor_2d(plane, sigma=2.0, rho=4.0):
     """Dominant fibre angle and coherence for one plane.
@@ -325,7 +342,8 @@ def boundary_evidence(angles, coherence, image, um_per_px, **kw):
 
 
 def longitudinal_evidence(image, angles, coherence, um_per_px,
-                          row_um=10.0, striation_um=1.5):
+                          row_um=10.0, striation_um=1.5,
+                          volume=None, voxel_size_um=None):
     """Evidence for a LONGITUDINAL myocyte seam at each pixel.
 
     Andres's hand marks settled the geometry: 99% of boundary ink runs within
@@ -347,17 +365,22 @@ def longitudinal_evidence(image, angles, coherence, um_per_px,
     s_small = max(striation_um / um_per_px, 0.8)
     s_row = max(row_um / um_per_px, s_small * 2)
 
-    # Band-pass, then step across y. Smooth ALONG x much harder than across y:
-    # a seam is coherent over a long run in x and thin in y, so anisotropic
-    # smoothing raises it above texture without blurring the thing being found.
-    banded = ndi.gaussian_filter(img, s_small) - ndi.gaussian_filter(img, s_row)
-    dy = ndi.gaussian_filter1d(banded, s_small, axis=0, order=1)
+    # A myocyte boundary is a DIM SEAM, not a brightness ramp. Scored against
+    # hand marks: the second derivative across y reaches 0.915, while the
+    # gradient magnitude this used to compute reaches only 0.788 - the worst of
+    # every intensity operator tried. A gradient peaks on the FLANKS of a dark
+    # line and is exactly zero at its centre, so it straddled the boundary
+    # instead of landing on it. Curvature answers "is this a valley", which is
+    # the actual question.
+    smooth = ndi.gaussian_filter(img, s_small)
+    valley = ndi.gaussian_filter1d(smooth, s_small * 2, axis=0, order=2)
     # Elongate along x, but only mildly. Smoothing hard in x flattens the
     # evidence into horizontal bands, and the traced path then cannot follow a
     # boundary that slants - which is most of them, since myocytes are
     # rhomboid. The anisotropy has to be enough to suppress texture and no
     # more.
-    bright = ndi.gaussian_filter(np.abs(dy), (s_small, s_row * 0.75))
+    bright = ndi.gaussian_filter(valley, (s_small, s_row * 0.5))
+    banded = smooth - ndi.gaussian_filter(img, s_row)
 
     # Alignment trough, likewise mildly elongated along x.
     coh2d = np.nanmean(np.asarray(coherence, dtype=float), axis=0) \
@@ -370,9 +393,56 @@ def longitudinal_evidence(image, angles, coherence, um_per_px,
     # almost everywhere and the path search then runs on noise rather than on
     # evidence. Seam tracing needs a graded field, not a sparse one.
     a, b = _norm(bright, 5, 99), _norm(trough, 5, 99)
-    return {"brightness_step_y": bright, "alignment_trough": trough,
-            "brightness_norm": a, "alignment_norm": b,
-            "combined": np.sqrt(a * b), "banded": banded}
+    cues = {"valley": a, "alignment": b}
+
+    # THIRD cue, from the depth axis - Andres's observation that it is not the
+    # depth of the signal that matters but its relative WIDTH, changing from
+    # one myocyte to the next. So the informative quantity is the STEP in axial
+    # thickness, not thickness itself. Scored against hand marks: thickness
+    # step 0.686, thickness value 0.422, depth value 0.141, depth step 0.392 -
+    # only the step is above chance, and only for thickness.
+    if volume is not None and voxel_size_um is not None:
+        vz, vy, vx = [float(v) for v in voxel_size_um]
+        vol = np.asarray(volume, dtype=float)
+        sm3 = ndi.gaussian_filter(vol, (0.8, 2.0 / vy, 2.0 / vx))
+        zs = np.arange(vol.shape[0])[:, None, None]
+        w = np.clip(sm3 - np.percentile(sm3, 60), 0, None)
+        wsum = w.sum(axis=0)
+        ok = wsum > 1e-6
+        zc = np.where(ok, (w * zs).sum(axis=0) / np.maximum(wsum, 1e-9), np.nan) * vz
+        var = np.where(ok, (w * (zs * vz - zc) ** 2).sum(axis=0)
+                       / np.maximum(wsum, 1e-9), np.nan)
+        thick = np.sqrt(np.clip(var, 0, None))
+        thick[~np.isfinite(thick)] = np.nanmedian(thick)
+        th_s = ndi.gaussian_filter(thick, 3.0 / vx)
+        tgy, tgx = np.gradient(th_s, vy, vx)
+        step = ndi.gaussian_filter(np.hypot(tgy, tgx), 2.0 / vx)
+        cues["thickness"] = _norm(step, 5, 99)
+
+    # WEIGHTED geometric mean, weights proportional to each cue's measured
+    # discriminative power minus chance. A flat geometric mean is a plain AND,
+    # and a mediocre cue then drags evidence down everywhere it is weak -
+    # including at real boundaries the strong cues already found. Measured
+    # end-to-end: flat three-cue recall 48.4%, weighted 63.7%, and OR-style
+    # max worst of all at 34.3%. So the AND structure is right and only the
+    # weighting was missing.
+    #
+    # THESE WEIGHTS ARE IN-SAMPLE. They come from scoring cues against the one
+    # marked field that exists, so 63.7% is optimistic and the weights are a
+    # hypothesis until a second marked field tests them.
+    weights = np.array([max(CUE_POWER.get(name, 0.6) - 0.5, 0.01)
+                        for name in cues])
+    weights = weights / weights.sum()
+    stacked = np.stack(list(cues.values()))
+    combined = np.exp((np.log(np.clip(stacked, 1e-6, None))
+                       * weights[:, None, None]).sum(axis=0))
+    out = {"brightness_step_y": bright, "alignment_trough": trough,
+           "brightness_norm": a, "alignment_norm": b,
+           "combined": combined, "banded": banded, "cues": cues,
+           "combiner": f"geometric mean of {len(cues)} cues: {list(cues)}"}
+    if "thickness" in cues:
+        out["thickness_norm"] = cues["thickness"]
+    return out
 
 
 def trace_seams(evidence, n_seams=6, min_separation_px=12, max_slope=1):
