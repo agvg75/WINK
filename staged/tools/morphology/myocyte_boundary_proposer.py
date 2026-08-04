@@ -237,6 +237,49 @@ def write_outputs(out_dir, base, result, prov):
             "provenance": prov_path}
 
 
+def write_review(out_dir, base, state):
+    """Write the reviewed boundaries, the correction log, and the measurements.
+
+    Three files rather than one, because they mean different things. The
+    measurements are what a human approved; the review JSON is the full state
+    including rejections; the correction log is the record of how far the
+    detector was off, which is TUNING data - agreement with a proposal a
+    reviewer was shown is not independent validation of it.
+    """
+    import csv
+    import json
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    review_path = out_dir / f"{base}_review.json"
+    review_path.write_text(json.dumps(state.to_dict(), indent=2),
+                           encoding="utf-8")
+
+    rows = state.measure()
+    meas_path = out_dir / f"{base}_reviewed_boundaries.csv"
+    with meas_path.open("w", newline="", encoding="utf-8") as fh:
+        if rows:
+            w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+            w.writeheader()
+            w.writerows(rows)
+        else:
+            fh.write("no boundaries survived review\n")
+
+    log_path = out_dir / f"{base}_corrections.csv"
+    with log_path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["n", "intent", "description", "timestamp"])
+        for n, e in enumerate(state.correction_log, 1):
+            w.writerow([n, e["intent"], e["description"], e["timestamp"]])
+
+    prov_path = out_dir / f"{base}_review_provenance.json"
+    prov_path.write_text(json.dumps(state.to_provenance(), indent=2),
+                         encoding="utf-8")
+    return {"review": review_path, "measurements": meas_path,
+            "corrections": log_path, "review_provenance": prov_path}
+
+
 # --------------------------------------------------------------------------- #
 # Tk interface
 # --------------------------------------------------------------------------- #
@@ -255,6 +298,9 @@ def run_gui():
             self.series = []
             self.stack = None
             self.result = None
+            self.state = None          # review state; None until proposals exist
+            self.selected = None
+            self.drag = None
             self._build()
 
         def _build(self):
@@ -364,6 +410,11 @@ def run_gui():
                 self.result = analyse(self.stack, series_name=info.name,
                                       file_name=self.path.name, region=region,
                                       use_vertices=self.vert_var.get())
+                # a new run means a new review: keeping the old one would let
+                # decisions about one set of proposals be attributed to another
+                self.state = None
+                self.selected = None
+                self.drag = None
             except ValueError as exc:
                 messagebox.showwarning("Refused", str(exc))
                 self._say(str(exc))
@@ -386,12 +437,52 @@ def run_gui():
                 + (f"\n{warn}" if warn else ""))
             self._draw()
 
+        def _start_review(self):
+            """Seed the review state from the proposals, thinned to control points.
+
+            The traced paths carry one point per image column - two thousand of
+            them - which nobody can edit. They are thinned to control points a
+            human can actually grab. The full-resolution path is NOT what gets
+            reviewed, because a boundary a reviewer cannot move is a boundary
+            they will accept by default.
+            """
+            import myocyte_review_state as mrs
+
+            r = self.result
+            dz, dy, dx = r["voxel_size_um"]
+            H, W = r["projection"].shape
+            step = max(W // 24, 1)
+            proposals = []
+            for i, p in enumerate(r["seams"]):
+                xs = list(range(0, W, step))
+                if xs[-1] != W - 1:
+                    xs.append(W - 1)
+                proposals.append((f"seam_{i}", [(x, float(p[x])) for x in xs]))
+            for j, seg in enumerate(r["linked"]):
+                xs = list(range(seg["x0"], seg["x1"], step)) or [seg["x0"]]
+                if xs[-1] != seg["x1"] - 1:
+                    xs.append(seg["x1"] - 1)
+                proposals.append((f"linked_{j}",
+                                  [(x, float(seg["y"][x - seg["x0"]])) for x in xs]))
+            self.state = mrs.MyocyteReviewState(
+                (H, W), dx, self.path, self._series_name(), r["region"],
+                f"{TOOL_NAME} {TOOL_VERSION}")
+            self.state.add_proposals(proposals)
+            self.selected = None
+            self.drag = None
+
+        def _series_name(self):
+            sel = self.series_list.curselection()
+            return self.series[sel[0]].name if sel else ""
+
         def _draw(self):
             import matplotlib
             matplotlib.use("TkAgg")
             from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
             from matplotlib.figure import Figure
 
+            if getattr(self, "state", None) is None:
+                self._start_review()
             for w in self.canvas_frame.winfo_children():
                 w.destroy()
             r = self.result
@@ -399,27 +490,185 @@ def run_gui():
             proj = r["projection"]
             H, W = proj.shape
             fig = Figure(figsize=(8, 6), dpi=100)
-            ax = fig.add_subplot(111)
+            self.ax = fig.add_subplot(111)
+            self.fig = fig
+            self._render()
+            self.canvas = FigureCanvasTkAgg(fig, master=self.canvas_frame)
+            self.canvas.mpl_connect("button_press_event", self._on_press)
+            self.canvas.mpl_connect("motion_notify_event", self._on_motion)
+            self.canvas.mpl_connect("button_release_event", self._on_release)
+            self.canvas.mpl_connect("key_press_event", self._on_key)
+            self.canvas.draw()
+            w = self.canvas.get_tk_widget()
+            w.pack(fill="both", expand=True)
+            w.focus_set()
+
+        STATUS_COLOUR = {"proposed": "#4DD0E1", "edited": "#FFD166",
+                         "accepted": "#7CFC00", "rejected": "#FF5E5B"}
+
+        def _render(self):
+            r = self.result
+            dz, dy, dx = r["voxel_size_um"]
+            proj = r["projection"]
+            H, W = proj.shape
+            ax = self.ax
+            ax.clear()
             ax.imshow(proj, cmap="gray", vmax=np.percentile(proj, 99.5),
                       extent=[0, W * dx, H * dy, 0], aspect="auto")
-            xs = np.arange(W)
-            for p in r["seams"]:
-                ax.plot(xs * dx, p * dy, lw=1.1, color="#4DD0E1")
-            for seg in r["linked"]:
-                ax.plot(np.arange(seg["x0"], seg["x1"]) * dx, seg["y"] * dy,
-                        lw=1.1, color="#7CFC00")
-            if len(r["vertices"]):
-                v = np.asarray(r["vertices"])
-                ax.plot(v[:, 1] * dx, v[:, 0] * dy, "x", ms=6, color="#FF3B3B",
-                        mew=1.4)
-            ax.set_title("PROPOSALS - cyan free, green vertex-linked, "
-                         "red x vertices", fontsize=9, loc="left")
+            for b in self.state.boundaries.values():
+                pts = np.asarray(b.points, dtype=float)
+                col = self.STATUS_COLOUR.get(b.status, "#FFFFFF")
+                sel = (b.boundary_id == self.selected)
+                ls = "--" if b.status == "rejected" else "-"
+                ax.plot(pts[:, 0] * dx, pts[:, 1] * dy, ls, lw=2.2 if sel else 1.2,
+                        color=col, alpha=0.55 if b.status == "rejected" else 1.0)
+                if sel:
+                    ax.plot(pts[:, 0] * dx, pts[:, 1] * dy, "o", ms=5,
+                            mfc="none", mec=col, mew=1.4)
+            s = self.state.summary()
+            ax.set_title(
+                f"{s['by_status'].get('proposed', 0)} unjudged   "
+                f"{s['by_status'].get('accepted', 0)} accepted   "
+                f"{s['by_status'].get('edited', 0)} edited   "
+                f"{s['by_status'].get('rejected', 0)} rejected"
+                + (f"   |  selected: {self.selected}" if self.selected else
+                   "   |  click a boundary to select"),
+                fontsize=9, loc="left")
             ax.set_xlabel("um", fontsize=8)
             ax.tick_params(labelsize=7)
-            fig.tight_layout()
-            self.canvas = FigureCanvasTkAgg(fig, master=self.canvas_frame)
-            self.canvas.draw()
-            self.canvas.get_tk_widget().pack(fill="both", expand=True)
+            self.fig.tight_layout()
+
+        def _nearest(self, ex, ey):
+            """(boundary_id, point_index, distance_um) nearest to a click."""
+            dz, dy, dx = self.result["voxel_size_um"]
+            best = (None, -1, 1e9)
+            for b in self.state.boundaries.values():
+                pts = np.asarray(b.points, dtype=float)
+                d = np.hypot(pts[:, 0] * dx - ex, pts[:, 1] * dy - ey)
+                i = int(np.argmin(d))
+                if d[i] < best[2]:
+                    best = (b.boundary_id, i, float(d[i]))
+            return best
+
+        def _on_press(self, event):
+            if event.inaxes is not self.ax or event.xdata is None:
+                return
+            bid, idx, dist = self._nearest(event.xdata, event.ydata)
+            if bid is None or dist > 6.0:
+                self.selected = None
+                self._render(); self.canvas.draw_idle()
+                return
+            self.selected = bid
+            if event.button == 1 and dist <= 2.5:
+                self.drag = (bid, idx)
+            self._render(); self.canvas.draw_idle()
+
+        def _on_motion(self, event):
+            if not self.drag or event.inaxes is not self.ax or event.xdata is None:
+                return
+            bid, idx = self.drag
+            dz, dy, dx = self.result["voxel_size_um"]
+            b = self.state.boundaries[bid]
+            b.points[idx] = (b.points[idx][0], float(event.ydata / dy))
+            self._render(); self.canvas.draw_idle()
+
+        def _on_release(self, event):
+            """Commit the drag AS AN INTENT, so it reaches the correction log.
+
+            The drag itself moved the point directly for responsiveness; if it
+            stopped there the edit would never be logged and the review would
+            claim a human approved something no record could show them doing.
+            """
+            import myocyte_review_state as mrs
+
+            if not self.drag:
+                return
+            bid, idx = self.drag
+            self.drag = None
+            b = self.state.boundaries[bid]
+            x, y = b.points[idx]
+            orig = b.proposed_points[idx] if b.proposed_points else None
+            b.points[idx] = orig if orig else (x, y)   # rewind, then apply
+            try:
+                self.state.apply_intent(mrs.MovePoint(boundary_id=bid, index=idx,
+                                                      x=x, y=y))
+            except mrs.ReviewError as exc:
+                messagebox.showwarning("Refused", str(exc))
+            self._render(); self.canvas.draw_idle()
+            self._refresh_info()
+
+        def _on_key(self, event):
+            import myocyte_review_state as mrs
+
+            if not self.selected:
+                return
+            bid = self.selected
+            try:
+                if event.key in ("a", "A"):
+                    self.state.apply_intent(mrs.AcceptBoundary(boundary_id=bid))
+                elif event.key in ("r", "R"):
+                    self._reject(bid)
+                elif event.key in ("i", "I") and event.xdata is not None:
+                    dz, dy, dx = self.result["voxel_size_um"]
+                    _, idx, _ = self._nearest(event.xdata, event.ydata)
+                    self.state.apply_intent(mrs.InsertPoint(
+                        boundary_id=bid, index=idx + 1,
+                        x=float(event.xdata / dx), y=float(event.ydata / dy)))
+                elif event.key in ("x", "X") and event.xdata is not None:
+                    _, idx, _ = self._nearest(event.xdata, event.ydata)
+                    self.state.apply_intent(mrs.RemovePoint(boundary_id=bid,
+                                                            index=idx))
+            except mrs.ReviewError as exc:
+                messagebox.showwarning("Refused", str(exc))
+            self._render(); self.canvas.draw_idle()
+            self._refresh_info()
+
+        def _reject(self, bid):
+            import myocyte_review_state as mrs
+
+            win = tk.Toplevel(self)
+            win.title("Why is this boundary wrong?")
+            ttk.Label(win, text="Reasons are counted across students, so they\n"
+                                "come from a fixed list rather than free text.",
+                      padding=8).pack()
+            var = tk.StringVar(value=mrs.REJECT_REASONS[0])
+            for reason in mrs.REJECT_REASONS:
+                ttk.Radiobutton(win, text=reason.replace("_", " "),
+                                variable=var, value=reason).pack(anchor="w",
+                                                                 padx=14)
+
+            def go():
+                try:
+                    self.state.apply_intent(mrs.RejectBoundary(
+                        boundary_id=bid, reason=var.get()))
+                except mrs.ReviewError as exc:
+                    messagebox.showwarning("Refused", str(exc))
+                win.destroy()
+                self._render(); self.canvas.draw_idle()
+                self._refresh_info()
+
+            ttk.Button(win, text="Reject", command=go).pack(pady=8)
+            win.transient(self)
+            win.grab_set()
+
+        def _refresh_info(self):
+            s = self.state.summary()
+            self._say(
+                f"region: {self.result['region'] or 'UNKNOWN'}   "
+                f"ch{self.result['channel']}\n\n"
+                f"REVIEW\n"
+                f"  unjudged {s['by_status'].get('proposed', 0)}   "
+                f"accepted {s['by_status'].get('accepted', 0)}   "
+                f"edited {s['by_status'].get('edited', 0)}   "
+                f"rejected {s['by_status'].get('rejected', 0)}\n"
+                f"  {s['n_intents']} recorded changes\n\n"
+                f"CLICK a boundary to select it, DRAG a point to move it.\n"
+                f"  A  accept as proposed\n"
+                f"  R  reject (asks why)\n"
+                f"  I  insert a point at the cursor\n"
+                f"  X  remove the nearest point\n\n"
+                f"Every change is logged. Corrections are anchored by the\n"
+                f"proposal, so they are tuning data - not clean ground truth.")
 
         def save(self):
             if not self.result:
@@ -434,13 +683,20 @@ def run_gui():
             prov = provenance(self.result, self.path, info.index, info.name)
             try:
                 written = write_outputs(d, base, self.result, prov)
+                if getattr(self, "state", None) is not None:
+                    written.update(write_review(d, base, self.state))
             except Exception:
                 messagebox.showerror("Could not save", traceback.format_exc())
                 return
+            s = self.state.summary() if getattr(self, "state", None) else {}
+            unjudged = s.get("by_status", {}).get("proposed", 0)
+            tail = ("\n\nEvery boundary was judged." if not unjudged else
+                    f"\n\nWARNING: {unjudged} boundaries were never judged. "
+                    f"They are saved as 'proposed' and must NOT be measured "
+                    f"as though a human had approved them.")
             messagebox.showinfo(
                 "Saved",
-                "\n".join(str(v) for v in written.values())
-                + "\n\nThe CSV holds PROPOSALS. Nothing was measured.")
+                "\n".join(str(v) for v in written.values()) + tail)
 
     App().mainloop()
 
