@@ -33,6 +33,33 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "app"))
 from population_swimming import analyze, SPINE_METHODS
 
+# Result tables are read through read_table. Under pandas 3 a numeric column
+# holding one stray non-numeric cell reads as StringDtype, and numpy then
+# refuses np.isfinite on it - aborting an analysis with an error that names
+# numpy internals rather than the column at fault. The import is guarded
+# because these modules are launched several different ways and sys.path is
+# not identical in all of them; a hard import would turn a latent dtype
+# problem into a tool that will not start.
+try:
+    from table_io import read_table as _read_table
+except Exception:                                    # pragma: no cover
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "app"))
+        from table_io import read_table as _read_table
+    except Exception:
+        _read_table = None
+
+
+def read_table(path, **kwargs):
+    """pandas.read_csv with the pandas-3 dtype trap handled where available."""
+    import pandas as _pd
+    if _read_table is not None:
+        return _read_table(path, **kwargs)
+    return _pd.read_csv(path, **kwargs)
+
+
 
 def _run(source, out_dir, method, args):
     started = time.perf_counter()
@@ -50,7 +77,7 @@ def _run(source, out_dir, method, args):
 
 def _spine_stats(results: Path):
     """Per-track spine coverage and curvature from one run."""
-    tracks = pd.read_csv(results / "detections_and_tracks.csv")
+    tracks = read_table(results / "detections_and_tracks.csv")
     rows = []
     for tid, g in tracks.groupby("track_id"):
         valid = g.spine_valid.astype(bool) if "spine_valid" in g else pd.Series(False, index=g.index)
@@ -95,8 +122,8 @@ def main():
     sa, sb = _spine_stats(runs[a]), _spine_stats(runs[b])
     merged = sa.merge(sb, on="track_id", how="outer", suffixes=(f"_{a}", f"_{b}"))
 
-    fa = pd.read_csv(runs[a] / "track_summary.csv")[["track_id", "spine_bend_frequency_hz"]]
-    fb = pd.read_csv(runs[b] / "track_summary.csv")[["track_id", "spine_bend_frequency_hz"]]
+    fa = read_table(runs[a] / "track_summary.csv")[["track_id", "spine_bend_frequency_hz"]]
+    fb = read_table(runs[b] / "track_summary.csv")[["track_id", "spine_bend_frequency_hz"]]
     merged = merged.merge(fa.rename(columns={"spine_bend_frequency_hz": f"bend_hz_{a}"}),
                           on="track_id", how="left")
     merged = merged.merge(fb.rename(columns={"spine_bend_frequency_hz": f"bend_hz_{b}"}),

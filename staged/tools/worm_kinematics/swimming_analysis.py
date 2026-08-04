@@ -13,6 +13,33 @@ import pandas as pd
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"app"))
 from acquisition import AcquisitionMetadata
 
+# Result tables are read through read_table. Under pandas 3 a numeric column
+# holding one stray non-numeric cell reads as StringDtype, and numpy then
+# refuses np.isfinite on it - aborting an analysis with an error that names
+# numpy internals rather than the column at fault. The import is guarded
+# because these modules are launched several different ways and sys.path is
+# not identical in all of them; a hard import would turn a latent dtype
+# problem into a tool that will not start.
+try:
+    from table_io import read_table as _read_table
+except Exception:                                    # pragma: no cover
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "app"))
+        from table_io import read_table as _read_table
+    except Exception:
+        _read_table = None
+
+
+def read_table(path, **kwargs):
+    """pandas.read_csv with the pandas-3 dtype trap handled where available."""
+    import pandas as _pd
+    if _read_table is not None:
+        return _read_table(path, **kwargs)
+    return _pd.read_csv(path, **kwargs)
+
+
 REQUIRED = {"worm_id", "frame", "time_s", "segment", "seg_curv_deg",
             "body_length_px", "fps", "needs_help"}
 
@@ -38,7 +65,7 @@ def analyze_csv(csv_path, output_dir=None, amplitude_threshold_deg=8.0,
                 length_floor_fraction=0.80, max_gap_frames=1,
                 start_frame=None, end_frame=None):
     path = Path(csv_path)
-    df = pd.read_csv(path)
+    df = read_table(path)
     missing = REQUIRED - set(df.columns)
     if missing:
         raise ValueError("Swimming analysis requires columns: " + ", ".join(sorted(missing)))

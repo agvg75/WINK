@@ -33,6 +33,33 @@ import worm_rgbcamp_analysis as wr
 import worm_channels as wc
 import worm_kinetics as wk
 
+# Result tables are read through read_table. Under pandas 3 a numeric column
+# holding one stray non-numeric cell reads as StringDtype, and numpy then
+# refuses np.isfinite on it - aborting an analysis with an error that names
+# numpy internals rather than the column at fault. The import is guarded
+# because these modules are launched several different ways and sys.path is
+# not identical in all of them; a hard import would turn a latent dtype
+# problem into a tool that will not start.
+try:
+    from table_io import read_table as _read_table
+except Exception:                                    # pragma: no cover
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "app"))
+        from table_io import read_table as _read_table
+    except Exception:
+        _read_table = None
+
+
+def read_table(path, **kwargs):
+    """pandas.read_csv with the pandas-3 dtype trap handled where available."""
+    import pandas as _pd
+    if _read_table is not None:
+        return _read_table(path, **kwargs)
+    return _pd.read_csv(path, **kwargs)
+
+
 MANIFEST_COLS = ("filename", "genotype", "age_day", "rnai_target",
                  "magnetic_condition", "animal_id", "quality")
 
@@ -159,7 +186,7 @@ def load_manifest(csv_dir: Path) -> Optional[pd.DataFrame]:
     for cand in ("metadata.csv", "manifest.csv"):
         p = Path(csv_dir) / cand
         if p.exists():
-            m = pd.read_csv(p)
+            m = read_table(p)
             missing = [c for c in ("filename",) if c not in m.columns]
             if missing:
                 warnings.warn(f"manifest {p.name} lacks required column(s) {missing}; ignoring")

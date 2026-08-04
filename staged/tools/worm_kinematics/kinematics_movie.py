@@ -37,6 +37,33 @@ for p in (str(ROOT / "app"), str(HERE)):
 
 import movie_core as mc                     # noqa: E402
 
+# Result tables are read through read_table. Under pandas 3 a numeric column
+# holding one stray non-numeric cell reads as StringDtype, and numpy then
+# refuses np.isfinite on it - aborting an analysis with an error that names
+# numpy internals rather than the column at fault. The import is guarded
+# because these modules are launched several different ways and sys.path is
+# not identical in all of them; a hard import would turn a latent dtype
+# problem into a tool that will not start.
+try:
+    from table_io import read_table as _read_table
+except Exception:                                    # pragma: no cover
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "app"))
+        from table_io import read_table as _read_table
+    except Exception:
+        _read_table = None
+
+
+def read_table(path, **kwargs):
+    """pandas.read_csv with the pandas-3 dtype trap handled where available."""
+    import pandas as _pd
+    if _read_table is not None:
+        return _read_table(path, **kwargs)
+    return _pd.read_csv(path, **kwargs)
+
+
 TOOL_NAME = "Kinematics results movie"
 TOOL_VERSION = "0.1.0"
 MovieInputError = mc.MovieInputError
@@ -55,7 +82,7 @@ class Recording:
         self.csv_path = Path(csv_path)
         if not self.csv_path.exists():
             raise MovieInputError(f"No kinematics CSV at {self.csv_path}.")
-        self.df = pd.read_csv(self.csv_path, encoding="utf-8-sig")
+        self.df = read_table(self.csv_path, encoding="utf-8-sig")
         self.base = self.csv_path.with_suffix("").name
 
         missing = sorted(REQUIRED - set(self.df.columns))

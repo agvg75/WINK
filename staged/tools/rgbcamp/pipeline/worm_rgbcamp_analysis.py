@@ -59,6 +59,33 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+# Result tables are read through read_table. Under pandas 3 a numeric column
+# holding one stray non-numeric cell reads as StringDtype, and numpy then
+# refuses np.isfinite on it - aborting an analysis with an error that names
+# numpy internals rather than the column at fault. The import is guarded
+# because these modules are launched several different ways and sys.path is
+# not identical in all of them; a hard import would turn a latent dtype
+# problem into a tool that will not start.
+try:
+    from table_io import read_table as _read_table
+except Exception:                                    # pragma: no cover
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "app"))
+        from table_io import read_table as _read_table
+    except Exception:
+        _read_table = None
+
+
+def read_table(path, **kwargs):
+    """pandas.read_csv with the pandas-3 dtype trap handled where available."""
+    import pandas as _pd
+    if _read_table is not None:
+        return _read_table(path, **kwargs)
+    return _pd.read_csv(path, **kwargs)
+
+
 
 CHANNELS = ("blue", "green", "red")
 PRIMARY_CHANNEL = "green"   # cytoplasmic GCaMP
@@ -102,7 +129,7 @@ def load_extracted(
     genotype_map maps worm_id or condition -> genotype label ('WT'/'dystrophic').
     If None, the `condition` column is used verbatim as the genotype.
     """
-    df = pd.read_csv(path)
+    df = read_table(path)
     _check_schema(df)
 
     # integer flag columns -> boolean where it reads cleaner, keep ints for flags
@@ -449,4 +476,3 @@ def analyse_recording(
     return RecordingResult(stem=meta["file_stem"], meta=meta, df=filt,
                            qc_report=report, worm_summary=summ,
                            coupling=coup, warnings=warns)
-

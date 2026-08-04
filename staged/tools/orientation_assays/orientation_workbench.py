@@ -29,6 +29,33 @@ from stimulus_fields import (
     ThermalRadialProvider)
 from thermotaxis import analyze_thermotaxis
 
+# Result tables are read through read_table. Under pandas 3 a numeric column
+# holding one stray non-numeric cell reads as StringDtype, and numpy then
+# refuses np.isfinite on it - aborting an analysis with an error that names
+# numpy internals rather than the column at fault. The import is guarded
+# because these modules are launched several different ways and sys.path is
+# not identical in all of them; a hard import would turn a latent dtype
+# problem into a tool that will not start.
+try:
+    from table_io import read_table as _read_table
+except Exception:                                    # pragma: no cover
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "app"))
+        from table_io import read_table as _read_table
+    except Exception:
+        _read_table = None
+
+
+def read_table(path, **kwargs):
+    """pandas.read_csv with the pandas-3 dtype trap handled where available."""
+    import pandas as _pd
+    if _read_table is not None:
+        return _read_table(path, **kwargs)
+    return _pd.read_csv(path, **kwargs)
+
+
 TRACK_COLUMNS = {
     "plate_id", "time_s", "x_mm", "y_mm", "heading_deg"}
 VERSIONS = {"magnetotaxis": "0.2.0", "thermotaxis": "0.1.0",
@@ -89,7 +116,7 @@ def configuration_template(assay):
 
 
 def load_tracks(path):
-    table = pd.read_csv(path)
+    table = read_table(path)
     missing = sorted(TRACK_COLUMNS - set(table.columns))
     if missing:
         raise ValueError("Track CSV is missing: " + ", ".join(missing))

@@ -16,6 +16,33 @@ from segmentation_review import find_accepted_config,segment_frame
 from decision_transparency import write_decision_manifest,vote_policy_summary
 from process_ui import ProcessLog,ReviewWorkbench,collect_image_points,standardize_matplotlib_window,apply_wink_theme,CockpitApp
 
+# Result tables are read through read_table. Under pandas 3 a numeric column
+# holding one stray non-numeric cell reads as StringDtype, and numpy then
+# refuses np.isfinite on it - aborting an analysis with an error that names
+# numpy internals rather than the column at fault. The import is guarded
+# because these modules are launched several different ways and sys.path is
+# not identical in all of them; a hard import would turn a latent dtype
+# problem into a tool that will not start.
+try:
+    from table_io import read_table as _read_table
+except Exception:                                    # pragma: no cover
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "app"))
+        from table_io import read_table as _read_table
+    except Exception:
+        _read_table = None
+
+
+def read_table(path, **kwargs):
+    """pandas.read_csv with the pandas-3 dtype trap handled where available."""
+    import pandas as _pd
+    if _read_table is not None:
+        return _read_table(path, **kwargs)
+    return _pd.read_csv(path, **kwargs)
+
+
 class App(CockpitApp):
  def __init__(self):
   super().__init__("Endpoint Egg Counting",geometry="1260x820",process_title="Egg counting")
@@ -779,7 +806,7 @@ class App(CockpitApp):
   if prior is None or not prior.exists():
    return d,d[["x","y"]].to_numpy().tolist() if len(d) else [],[False]*len(d),["proposed"]*len(d),0
   try:
-   old=pd.read_csv(prior)
+   old=read_table(prior)
   except Exception:
    return d,d[["x","y"]].to_numpy().tolist() if len(d) else [],[False]*len(d),["proposed"]*len(d),0
   if not len(old) or "x" not in old or "y" not in old:
