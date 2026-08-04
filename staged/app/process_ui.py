@@ -404,16 +404,33 @@ def install_error_reporting(root, title="Action failed", log=None, status=None):
     ``log`` and ``status`` are optional one-argument callables.
     """
     import traceback
+    from pathlib import Path
     from tkinter import messagebox
+
+    here = str(Path(__file__).resolve().parents[1]).replace("\\", "/").lower()
 
     def handler(exc_type, value, tb):
         detail = f"{exc_type.__name__}: {value}"
         try:
             frames = traceback.extract_tb(tb)
             if frames:
-                last = frames[-1]
-                name = str(last.filename).replace("\\", "/").rsplit("/", 1)[-1]
-                detail += f"  [{name}:{last.lineno} in {last.name}]"
+                # Report the deepest frame in OUR code, not simply the last
+                # one. When a numpy or pandas call raises, the last frame is
+                # inside that library - "arraylike.py:402 in array_ufunc" -
+                # which names the messenger and not the caller. A real report
+                # of exactly that kind cost most of an afternoon in guesses
+                # about which of our lines was responsible.
+                ours = [f for f in frames
+                        if str(f.filename).replace("\\", "/").lower().startswith(here)]
+                pick = ours[-1] if ours else frames[-1]
+                name = str(pick.filename).replace("\\", "/").rsplit("/", 1)[-1]
+                detail += f"  [{name}:{pick.lineno} in {pick.name}]"
+                if pick.line:
+                    detail += f"\n    {pick.line.strip()}"
+                if ours and frames[-1] is not pick:
+                    lib = str(frames[-1].filename).replace("\\", "/").rsplit("/", 1)[-1]
+                    detail += (f"\n    (raised inside {lib}:{frames[-1].lineno} "
+                               f"in {frames[-1].name})")
         except Exception:
             pass
         for sink in (log, status):

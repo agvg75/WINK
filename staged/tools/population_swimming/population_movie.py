@@ -39,6 +39,11 @@ for p in (str(ROOT / "app"), str(HERE)):
         sys.path.insert(0, p)
 
 import movie_core as mc                       # noqa: E402
+# Result tables are read through read_table: under pandas 3 a numeric column
+# holding one stray non-numeric cell reads as StringDtype, and numpy then
+# refuses np.isfinite on it. Imported AFTER the sys.path block above, which is
+# what makes app/ importable at all.
+from table_io import read_table               # noqa: E402
 
 try:
     from process_ui import track_colour        # noqa: E402
@@ -73,7 +78,7 @@ class Run:
                 f"Point this at a population-tracking RESULTS folder - the one "
                 f"holding track_summary.csv and analysis_metadata.json - not at "
                 f"the recording.")
-        self.tracks = pd.read_csv(tracks_csv)
+        self.tracks = read_table(tracks_csv)
         self.base = self.results_dir.name
 
         missing = sorted(REQUIRED - set(self.tracks.columns))
@@ -121,7 +126,7 @@ class Run:
         if not path.exists():
             return None
         try:
-            return pd.read_csv(path)
+            return read_table(path)
         except Exception:
             return None
 

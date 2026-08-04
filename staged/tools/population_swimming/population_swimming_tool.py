@@ -18,6 +18,11 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"app"))
 # tests/test_worm_area_probe.py recomputes the legacy formulas inline and
 # asserts the probe reproduces them exactly, so the two cannot silently drift.
 import worm_area_probe as wap
+# Every result table is read through this. Under pandas 3 a numeric column
+# holding one stray non-numeric cell reads as StringDtype, and numpy then
+# refuses np.isfinite on it - which aborted this tool's track review with an
+# error naming numpy internals rather than the column at fault.
+from table_io import read_table
 from population_swimming import (analyze,list_frames,read_gray,summarize_tracks,
                                  recompute_from_detections,
                                  SPINE_METHODS,SPINE_METHOD_DEFAULT,
@@ -822,12 +827,12 @@ class App(CockpitApp):
         out=Path(out)
         track_path=out/"reviewed_detections_and_tracks.csv"
         summary_path=out/"track_summary_after_stitching.csv"
-        tracks=pd.read_csv(track_path if track_path.exists() else out/"detections_and_tracks.csv")
-        if summary_path.exists():summary=pd.read_csv(summary_path)
+        tracks=read_table(track_path if track_path.exists() else out/"detections_and_tracks.csv")
+        if summary_path.exists():summary=read_table(summary_path)
         accepted={int(r.track_id):not bool(r.needs_review) for _,r in summary.iterrows()}
         reviewed_path=out/"reviewed_track_summary.csv"
         if reviewed_path.exists():
-            prior=pd.read_csv(reviewed_path)
+            prior=read_table(reviewed_path)
             accepted.update({int(r.track_id):bool(r.accepted) for _,r in prior.iterrows()})
         metadata=json.loads((Path(out)/"analysis_metadata.json").read_text(encoding="utf-8"))
         accepted.update({int(track_id):True
@@ -1551,7 +1556,7 @@ class App(CockpitApp):
             if roi_path.exists():self.roi_records=json.loads(roi_path.read_text(encoding="utf-8")).get("rois",[])
             self.roi_label.config(text=f"{len(self.roi_records)} ROI(s)")
             summary_path=out/"track_summary_after_stitching.csv"
-            summary=pd.read_csv(summary_path if summary_path.exists() else out/"track_summary.csv")
+            summary=read_table(summary_path if summary_path.exists() else out/"track_summary.csv")
             self.review(summary,out)
         except Exception as exc:messagebox.showerror("Resume review",str(exc))
 
@@ -1664,7 +1669,7 @@ class App(CockpitApp):
 
     def review_modalities(self,out,accepted_tracks,tracks,on_done=None):
         path=out/"modality_bouts_for_review.csv"
-        bouts=pd.read_csv(path)
+        bouts=read_table(path)
         if bouts.empty:
             if on_done:on_done()
             return
