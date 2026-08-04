@@ -12,7 +12,11 @@ against the Tkinter viewer that shipped instead.
 
 ## 0. Purpose
 
-Measure the physical volume of a body-wall muscle layer from a confocal stack.
+Measure the physical volume of body-wall muscle regions from a confocal stack,
+and produce the mask that marking them implies.
+
+**Several regions per stack**, not one: a stack yields multiple named regions,
+each with its own volume row. The student names them.
 
 The layer is a gently concave sheet, not a solid block, so volume is taken
 between two surfaces: an upper and a lower boundary marked through the stack.
@@ -101,7 +105,10 @@ lengths, wrong volume — not "file not found".
 For each marked z plane, the two boundary point sets define an upper and lower
 surface. Volume is the integral between them over the marked extent:
 
-- interpolate each surface across the lateral extent it was marked over
+- interpolate each surface between marked planes and across the lateral extent
+  it was marked over. Interpolation is core, not a fallback: marking is sparse
+  by design (§3.2), so interpolation quality determines the result and the
+  method used must be named on the output rather than left implicit
 - volume element = (upper − lower) thickness × voxel area, summed
 - convert with `voxel_size_um` from the loader's metadata, never from a value
   entered here
@@ -109,22 +116,58 @@ surface. Volume is the integral between them over the marked extent:
 ### 3.2 What it must refuse rather than approximate
 
 - **Extrapolation beyond the marked extent.** Volume is reported for the region
-  actually bounded. If a surface was marked on three planes of a forty-plane
-  stack, say so and report the bounded sub-volume; do not integrate over the
-  whole stack because the shape looked simple.
+  actually bounded, never beyond the outermost marked plane.
+
+  Note this is the NORMAL case, not a warning. Marking is deliberately sparse:
+  the student marks the inflection points of the structure and the module
+  interpolates between them, which is what keeps the work proportionate to the
+  shape rather than to the number of planes. So "measured over the marked
+  extent" is a routine statement on every result, not an exception report.
+  What must still be refused is integrating OUTSIDE that extent because the
+  shape looked simple.
 - **Surfaces that cross.** If the lower boundary rises above the upper at any
   sampled point, that is a marking error or a fold, not a negative volume.
   Refuse and name where.
 - **A single surface.** Both are required; one surface is not a slab.
 
-### 3.3 Concavity exclusions
+### 3.3 Exclusions
 
-The layer is gently concave, and the slab assumption fails where it is not.
-Excluded regions are recorded as **structured data, not a note**: polygon, z,
-and a reason from a fixed vocabulary plus free text. Excluded volume is reported
-separately from included volume so the fraction excluded is visible — a result
-that quietly integrated over 40% of the field is not comparable with one that
-did not.
+Exclusions here are **anatomical, not defect-driven**. A worm is a cylinder and
+the muscle occupies one layer of it, but a stack images the whole cylinder — so
+structures above and below the muscle layer are imported into the field and
+contaminate it. Excluding them is normal practice, not an admission that
+something went wrong.
+
+Fixed vocabulary, from how the marking is actually used:
+
+| reason | what it excludes |
+|---|---|
+| `out_of_layer_above` | structure above the muscle layer |
+| `out_of_layer_below` | structure below it |
+| `pharynx` | the pharynx and the structures around it, at the centre of the worm |
+| `neuron` | neurons, which sit between muscle and pharynx |
+| `other_structure` | anything else identifiable, with free text |
+| `unclear` | the student cannot tell — always available |
+
+`unclear` is not optional. A person required to choose a reason will supply one,
+and invented reasons are worse than none because they look like data.
+
+Exclusions are recorded as structured data — polygon, z, reason, optional note —
+never as a free-text remark. Excluded volume is reported separately from
+included volume so the fraction excluded is visible: a result that quietly
+integrated over 40% of the field is not comparable with one that did not.
+
+### 3.4 The mask is a first-class output, not a by-product
+
+Marking the muscle layer is also how the neurons underneath become resolvable —
+removing the muscle is what reveals what is sandwiched between it and the
+pharynx. So the boundaries define a **mask**, and that mask is useful to tools
+that have nothing to do with volume.
+
+Export it (§4). Specifically, it is the natural input to
+`tools/neurite_viewer.py` / `neurite_trace_runner.py`: a stack with muscle
+excluded is the stack in which a neurite can actually be followed. Do not bury
+this inside the volume computation.
 
 ---
 
@@ -135,9 +178,13 @@ Beside the stack, sharing its stem:
 - `<stack>_muscle_volume.csv` — one row per measured region: included volume
   (µm³), excluded volume, fraction excluded, z range, number of marked planes,
   channel, `voxel_size_um`, and the identity fields.
+- `<stack>_muscle_mask.tif` — the mask implied by the boundaries, per region,
+  with exclusions applied. A first-class output (§3.4): a stack with muscle
+  removed is the stack in which the neurons beneath can be resolved, so this
+  feeds `neurite_viewer.py` / `neurite_trace_runner.py` directly.
 - `<stack>_muscle_volume_provenance.json` — sidecar path and hash, loader
   version, `voxel_size_um` and where it came from (file metadata vs declared),
-  station, timestamp, and the exclusion vocabulary used.
+  interpolation method, station, timestamp, and the exclusion vocabulary used.
 
 **`voxel_size_um` provenance is not optional.** Volume scales as the cube of
 lateral scale and linearly in z; a wrong or defaulted voxel size is wrong by a
@@ -154,9 +201,18 @@ Two entries, matching the neurite pattern:
 - **Measure marked muscle volume** — headless. `requires` a stack and its
   sidecar; runs on any station.
 
-`validation_level`: `computational_regression` until measured against something
-independent. It should not claim `technical_validation` on synthetic slabs
-alone.
+`validation_level`: **`computational_regression`, and it stays there for now.**
+
+No hand-measured muscle volumes exist to compare against, because no tool has
+been able to produce them - this is the first. So the tests can show the
+arithmetic is correct on shapes of known volume, which is worth having, but
+nothing yet shows the METHOD returns true volumes for real muscle. Those are
+different claims and only the first is currently supported.
+
+That is an honest ceiling rather than a gap to be closed by more code. It lifts
+when measurements accumulate and can be compared against something independent -
+a second method, a second scorer, or a phantom of known size. Until then the
+label should not be argued upward.
 
 ---
 
@@ -187,17 +243,34 @@ Then, in the spirit of everything else this month:
 
 ---
 
-## 8. Open questions for Andres before Codex starts
+## 8. Answered before the build (2026-08-04)
 
-1. **Which muscle, and one region or several per stack?** The CSV shape depends
-   on whether a stack yields one volume or several named regions.
-2. **Exclusion vocabulary** — what are the real reasons a region gets excluded?
-   Fixed list plus "unclear", following the pBoc spec's reasoning that a forced
-   choice produces invented causes.
-3. **Marking density** — is marking every Nth plane acceptable, or must a
-   surface be marked on every plane it spans? This decides whether §3.2's
-   "bounded extent" rule is the normal case or the exception.
-4. **Is there existing hand-measured volume data** to validate against? Without
-   it this stays `computational_regression` indefinitely.
-5. **Does the earlier separately-speced version exist in your files?** If so its
-   decisions should be reconciled with this rather than silently replaced.
+1. ~~One region or several~~ — **several per stack**, each named by the student,
+   one CSV row each (§0).
+2. ~~Exclusion vocabulary~~ — **answered, and it reframed the section**.
+   Exclusions are anatomical rather than defect-driven: a worm is a cylinder,
+   the muscle occupies one layer, and a stack images the whole cylinder, so
+   structure above and below is imported and contaminates the field. Vocabulary
+   in §3.3, plus `unclear`.
+3. ~~Marking density~~ — **sparse and plastic**: the student marks inflection
+   points of the structure and the module interpolates between them, keeping
+   the work proportionate to the shape rather than to the plane count. This
+   makes bounded-extent the normal case (§3.2) and interpolation a core
+   component rather than a fallback (§3.1).
+4. ~~Hand-measured volumes to validate against~~ — **none exist**, because no
+   tool has been able to produce them; this is the first. Validation ceiling is
+   stated in §5 rather than left implied.
+5. ~~Earlier separately-speced version~~ — **none exists.** The confocal spec's
+   reference to one "already speced separately" is stale. Nothing to reconcile.
+
+## 9. Still open
+
+- **Region naming.** Free text, or a fixed list like the myocyte Myo01-24
+  scheme? Free text is flexible and unaggregatable; a fixed list is the reverse.
+  Not blocking - it can start free-text and tighten once the real names are
+  known from use.
+- **Interpolation between marked planes.** Linear is the obvious default and the
+  honest one. Anything smoother invents curvature between the points a student
+  actually judged, which for a structure marked AT its inflection points is
+  exactly the information they were being careful about. Recommend linear, name
+  it on the output, and revisit only if real stacks show it failing.
