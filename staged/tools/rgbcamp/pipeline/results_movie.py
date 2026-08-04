@@ -34,6 +34,7 @@ for p in (str(ROOT / "app"), str(HERE)):
         sys.path.insert(0, p)
 
 import myocyte_schematic as msch          # noqa: E402
+import movie_core as mc                   # noqa: E402
 
 TOOL_NAME = "RGBCaMP results movie"
 TOOL_VERSION = "0.1.0"
@@ -41,8 +42,7 @@ MYOCYTE_SEGMENTS = 24
 CHANNELS = ("red", "green", "blue")
 
 
-class MovieInputError(RuntimeError):
-    """Raised with a message that names the consequence, not the errno."""
+MovieInputError = mc.MovieInputError
 
 
 # --------------------------------------------------------------------------- #
@@ -249,16 +249,18 @@ def load(csv_path, image_dir=None):
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
-def _read_frame(path):
-    from PIL import Image
-    return np.asarray(Image.open(path))
+# Generic display arithmetic lives in app/movie_core.py so every results
+# movie shares one implementation. Re-exported here under the names this
+# module already used.
+_read_frame = mc.read_frame
+smooth_window_frames = mc.smooth_window_frames
+moving_average = mc.moving_average
 
-
-# The channel TIFFs are RGB with the signal in the plane matching the channel:
-# ch00 carries blue in B, ch01 green in G, ch02 red in R, and the other two
-# planes are identically zero. Reading a fixed plane silently returns an
-# all-zero image for two channels out of three, which looks exactly like a
-# recording with no signal in them.
+# The channel TIFFs are RGB with the signal in the plane matching the
+# channel: ch00 carries blue in B, ch01 green in G, ch02 red in R, and the
+# other two planes are identically zero. Reading a fixed plane silently
+# returns an all-zero image for two channels out of three, which looks
+# exactly like a recording with no signal in them.
 CHANNEL_PLANE = {"blue": 2, "green": 1, "red": 0}
 
 
@@ -270,54 +272,8 @@ def channel_plane(frame, name):
 
 
 def _channel_limits(files, name, n_sample=12, pct=(50.0, 100.0)):
-    """Display limits for one channel, sampled across the whole recording.
-
-    Sampled rather than autoscaled per frame so brightness is comparable frame
-    to frame - a per-frame rescale would make a dim frame look as bright as a
-    lit one, which for a calcium channel destroys the signal being looked at.
-
-    The percentiles are deliberately lopsided. An animal occupies a few percent
-    of the frame, so even a 99.8th percentile of ALL pixels is still plate
-    background: symmetric limits rendered the weaker channels completely black.
-    The median is the background level and the top fraction is the animal.
-    """
-    if not files:
-        return 0.0, 1.0
-    idx = np.unique(np.linspace(0, len(files) - 1,
-                                min(n_sample, len(files))).astype(int))
-    vals = []
-    for i in idx:
-        vals.append(np.asarray(channel_plane(_read_frame(files[int(i)]), name),
-                               dtype=float).ravel())
-    pooled = np.concatenate(vals)
-    lo, hi = np.percentile(pooled, pct[0]), np.percentile(pooled, pct[1])
-    if hi <= lo:
-        hi = lo + 1.0
-    return float(lo), float(hi)
-
-
-def smooth_window_frames(seconds, fps):
-    """Odd frame count for a smoothing window given in seconds."""
-    n = int(round(float(seconds) * float(fps)))
-    if n < 2:
-        return 0
-    return n + 1 if n % 2 == 0 else n
-
-
-def moving_average(values, window):
-    """NaN-aware centred moving average. Gaps stay gaps: a window with no
-    finite samples returns NaN rather than borrowing from further away, so a
-    smoothed trace never draws across a stretch where nothing was measured."""
-    v = np.asarray(values, dtype=float)
-    if window < 2:
-        return v
-    finite = np.isfinite(v).astype(float)
-    filled = np.where(np.isfinite(v), v, 0.0)
-    kernel = np.ones(int(window), dtype=float)
-    num = np.convolve(filled, kernel, mode="same")
-    den = np.convolve(finite, kernel, mode="same")
-    out = np.divide(num, den, out=np.full_like(num, np.nan), where=den > 0)
-    return out
+    return mc.sampled_limits(files, plane=CHANNEL_PLANE.get(name, 0),
+                             n_sample=n_sample, pct=pct)
 
 
 def build_figure(rec, normalisation="percentile", smooth_s=0.6,
@@ -588,96 +544,72 @@ def _dynamic_artists(dyn):
     return [a for a in out if a is not None]
 
 
+class _RGBCaMPSource(mc.MovieSource):
+    """Adapts one Recording to the shared engine in app/movie_core.py.
+
+    Everything assay-specific stays here - the panels, the muscle diagram, the
+    band overlay. Nothing here touches ffmpeg, blitting or the provenance
+    plumbing; that is the core's job and every results movie shares it.
+    """
+
+    def __init__(self, rec, normalisation="percentile", smooth_s=0.6):
+        self.rec = rec
+        self.base = rec.base
+        self.n_frames = rec.n_frames
+        self.fps = rec.fps
+        self.normalisation = normalisation
+        self.smooth_s = smooth_s
+
+    def build_figure(self, **_):
+        return build_figure(self.rec, normalisation=self.normalisation,
+                            smooth_s=self.smooth_s)
+
+    def update(self, fig, dyn, ctx, index):
+        _update(self.rec, fig, dyn, ctx, index)
+
+    def dynamic_artists(self, dyn):
+        return _dynamic_artists(dyn)
+
+    def frame_label(self, index):
+        return "frame %d  (t=%.1fs)" % (self.rec.frames[index],
+                                        index / max(self.fps, 1e-9))
+
+    def provenance(self, ctx, options):
+        rec = self.rec
+        return {
+            "source_csv": str(rec.csv_path),
+            "geometry_sidecar": str(rec.geometry_path),
+            "image_dir": str(rec.image_dir) if rec.image_dir else None,
+            "n_seg": rec.n_seg, "band_names": rec.band_names,
+            "normalisation": self.normalisation,
+            "channel_ranges": {k: list(v) for k, v in ctx["ranges"].items()},
+            "smoothing_seconds": float(self.smooth_s),
+            "smoothing_frames": mc.smooth_window_frames(self.smooth_s, rec.fps),
+            "channels_shown": sorted(rec.channel_files),
+            "um_per_px_declared": rec.um_per_px,
+            "velocity_units": "um/s" if rec.um_per_px > 0 else "px/s",
+            "src8bit": rec.src8bit,
+            "provenance": ctx["prov"],
+        }
+
+
 def render(rec, out_path, normalisation="percentile", smooth_s=0.6,
            decimate=1, fps=None, progress=None):
     """Write the movie and its provenance JSON. Returns (path, provenance)."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import imageio.v2 as imageio
-
-    out_path = Path(out_path)
-    fig, dyn, ctx = build_figure(rec, normalisation=normalisation,
-                                 smooth_s=smooth_s)
-    canvas = fig.canvas
-    canvas.draw()
-    background = canvas.copy_from_bbox(fig.bbox)
-
-    indices = list(range(0, rec.n_frames, max(1, int(decimate))))
-    out_fps = float(fps or max(1.0, rec.fps))
-    writer = imageio.get_writer(str(out_path), fps=out_fps,
-                                macro_block_size=None)
-    try:
-        for n, i in enumerate(indices):
-            _update(rec, fig, dyn, ctx, i)
-            canvas.restore_region(background)
-            for artist in _dynamic_artists(dyn):
-                fig.draw_artist(artist)
-            canvas.blit(fig.bbox)
-            frame = np.asarray(canvas.buffer_rgba())[..., :3]
-            # libx264 rejects odd dimensions, and the figure size is derived
-            # from content aspect so it lands on one whenever it likes. Trim
-            # rather than rescale: a rescale would resample every pixel.
-            frame = frame[:frame.shape[0] // 2 * 2, :frame.shape[1] // 2 * 2]
-            writer.append_data(frame)
-            if progress and (n % 20 == 0 or n == len(indices) - 1):
-                progress(n + 1, len(indices))
-    finally:
-        writer.close()
-        plt.close(fig)
-
-    prov = {
-        "tool": TOOL_NAME, "tool_version": TOOL_VERSION,
-        "source_csv": str(rec.csv_path),
-        "geometry_sidecar": str(rec.geometry_path),
-        "image_dir": str(rec.image_dir) if rec.image_dir else None,
-        "n_frames_source": rec.n_frames, "n_frames_rendered": len(indices),
-        "decimate": int(decimate), "output_fps": out_fps,
-        "n_seg": rec.n_seg, "band_names": rec.band_names,
-        "normalisation": normalisation,
-        "smoothing_seconds": float(smooth_s),
-        "smoothing_frames": smooth_window_frames(smooth_s, rec.fps),
-        "channels_shown": sorted(rec.channel_files),
-        "channel_ranges": {k: list(v) for k, v in ctx["ranges"].items()},
-        "um_per_px_declared": rec.um_per_px,
-        "velocity_units": "um/s" if rec.um_per_px > 0 else "px/s",
-        "src8bit": rec.src8bit,
-        "provenance": ctx["prov"],
-    }
-    prov_path = out_path.with_name(out_path.stem + "_provenance.json")
-    prov_path.write_text(json.dumps(prov, indent=2), encoding="utf-8")
-    return out_path, prov
+    source = _RGBCaMPSource(rec, normalisation=normalisation,
+                            smooth_s=smooth_s)
+    return mc.render(source, out_path, decimate=decimate, fps=fps,
+                     progress=progress, tool_name=TOOL_NAME,
+                     tool_version=TOOL_VERSION)
 
 
 def preview(rec, out_path, normalisation="percentile", smooth_s=0.6, n=4):
-    """Contact sheet of representative frames.
-
-    Choosing a normalisation from four stills beats rendering a whole movie
-    twice, which is the loop this exists to avoid.
-    """
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+    """Contact sheet of representative frames: brightest, dimmest, median."""
+    source = _RGBCaMPSource(rec, normalisation=normalisation,
+                            smooth_s=smooth_s)
     values, _ = rec.channel_values(normalisation=normalisation)
     per_frame = np.nanmean(values.reshape(rec.n_frames, -1), axis=1)
     ordered = np.argsort(np.nan_to_num(per_frame, nan=-1.0))
     picks = sorted({0, int(ordered[0]), int(ordered[len(ordered) // 2]),
                     int(ordered[-1])})[:n]
-
-    fig, dyn, ctx = build_figure(rec, normalisation=normalisation,
-                                 smooth_s=smooth_s)
-    sheet, axes = plt.subplots(len(picks), 1, figsize=(11, 3.2 * len(picks)))
-    axes = np.atleast_1d(axes)
-    for ax, i in zip(axes, picks):
-        _update(rec, fig, dyn, ctx, i)
-        fig.canvas.draw()
-        ax.imshow(np.asarray(fig.canvas.buffer_rgba())[..., :3])
-        ax.set_title("frame %d  (t=%.1fs)" % (rec.frames[i], ctx["times"][i]),
-                     fontsize=9, loc="left")
-        ax.axis("off")
-    sheet.tight_layout()
-    sheet.savefig(str(out_path), dpi=120, facecolor="white")
-    plt.close(fig)
-    plt.close(sheet)
-    return Path(out_path)
+    return mc.preview(source, out_path, picks=picks, n=n)
