@@ -225,6 +225,16 @@ REGISTRY = [
          "Physiology - Calcium and cellular activity", "python", "ready", "tools/rgbcamp/pipeline/run_one_launcher.py"),
     Tool("RGBCaMP browser", "Browse one RGBCaMP recording's results.",
          "Physiology - Calcium and cellular activity", "python", "ready", "tools/rgbcamp/pipeline/results_browser_launcher.py"),
+    Tool("RGBCaMP results movie",
+         "Render one recording as a movie: the worm with its measurement bands, a "
+         "muscle diagram tinted per myocyte per channel, velocity, and a curvature "
+         "kymograph, all on one time cursor. Renders what the CSV and the geometry "
+         "sidecar already contain and measures nothing itself.",
+         "Physiology - Calcium and cellular activity", "python", "ready",
+         "tools/rgbcamp/pipeline/results_movie_launcher.py",
+         requires="an exported recording CSV, its _geometry.json sidecar (extractor "
+                  "must have 'Export geometry sidecar' ticked), 24 segments per side, "
+                  "and the image folder for the worm panel"),
     Tool("Neuron tracker", "Track an anterior sensory neuron after validating scale/exposure; image sequences use bounded parallel loading.",
          "Physiology - Calcium and cellular activity", "python", "ready", "tools/afd_neuron/run_neuron_tracker.py"),
     Tool("Single-channel GCaMP (body / cell / orientation) (Experimental)",
