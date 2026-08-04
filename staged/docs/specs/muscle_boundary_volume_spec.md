@@ -209,7 +209,32 @@ arithmetic is correct on shapes of known volume, which is worth having, but
 nothing yet shows the METHOD returns true volumes for real muscle. Those are
 different claims and only the first is currently supported.
 
-That is an honest ceiling rather than a gap to be closed by more code. It lifts
+**How the ceiling actually lifts, which is not by waiting.** A 3D muscle volume
+cannot realistically be measured by hand, so there is no prior ground truth and
+there never could have been: the tool has to exist before anything can be
+curated. Human stays in the loop, and validation is built from use rather than
+found beforehand.
+
+That gives this module a window it can lose silently. **Every mark made today is
+uncontaminated**, because the student marks from scratch with nothing proposed.
+The moment auto-detection arrives - and the pharynx is exactly the stereotyped
+structure to start with - marking becomes *correcting a proposal*, which
+`calibration_ground_truth_pipeline_spec.md` §1 classifies as anchored: tuning
+data, not ground truth. The clean set has to be gathered BEFORE the helpful
+suggestion is added, not after.
+
+Two things follow, both available now:
+
+- **Record whether anything was proposed.** The intent log captures every action
+  already; it needs one field per region distinguishing marked-from-scratch from
+  adjusted-from-proposal, so the two can never be pooled by accident later.
+- **Independent double marking.** Two students mark the same stack with no
+  proposal shown to either. Their agreement is the ceiling on how well ANY
+  method can be scored here, it is uncontaminated by construction, and it needs
+  no new capability - only the discipline of doing it while marking is still
+  unassisted.
+
+The ceiling therefore lifts
 when measurements accumulate and can be compared against something independent -
 a second method, a second scorer, or a phantom of known size. Until then the
 label should not be argued upward.
