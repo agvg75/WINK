@@ -225,3 +225,154 @@ def render_surface_movie(regions, shape_zcyx, voxel_size_um, rows, out_path,
                           n_frames=n_frames)
     return mc.render(source, out_path, progress=progress,
                      tool_name=TOOL_NAME, tool_version=TOOL_VERSION)
+
+
+# --------------------------------------------------------------------------- #
+# Review evidence: every region, side by side
+# --------------------------------------------------------------------------- #
+def projection_figure(region, shape_zcyx, voxel_size_um, row=None, volume=None):
+    """XZ and YZ projections of one region with its boundaries drawn.
+
+    This is the evidence a human inspects. At scale - hundreds of regions on one
+    sheet - a boundary that grabbed the pharynx instead of the muscle is obvious
+    in a way it never is reviewing one stack at a time. Mass inspection is the
+    right tool for gross failures.
+
+    What it is NOT: independent measurement. Confirming a boundary that looks
+    plausible is still anchored by the proposal, and confirmation bias operates
+    exactly on 'looks plausible'. Error detection and ground truth are different
+    jobs; this does the first.
+    """
+    import matplotlib.pyplot as plt
+
+    nz, _, ny, nx = [int(v) for v in shape_zcyx]
+    vz, vy, vx = [float(v) for v in voxel_size_um]
+    fig, (ax_xz, ax_yz) = plt.subplots(1, 2, figsize=(9.0, 3.4), dpi=110)
+    fig.patch.set_facecolor("white")
+
+    upper = mb._interpolate_between_planes(
+        mb._surface_curve(region, "upper", nx), nx)
+    lower = mb._interpolate_between_planes(
+        mb._surface_curve(region, "lower", nx), nx)
+    zs = sorted(set(upper) & set(lower))
+    marked = set(region.marked_planes("upper")) | set(region.marked_planes("lower"))
+
+    # XZ: the sheet seen along y. Depth is where the slab model lives or dies.
+    for z in zs:
+        good = np.isfinite(upper[z]) & np.isfinite(lower[z])
+        if not good.any():
+            continue
+        cols = np.where(good)[0]
+        style = dict(lw=1.6, alpha=0.95) if z in marked else dict(lw=0.7, alpha=0.4)
+        ax_xz.plot(cols * vx, np.full(cols.size, z * vz),
+                   color="#2C7BB6" if z in marked else "#9BC4E2", **style)
+    ax_xz.set_xlabel("x (um)", fontsize=8)
+    ax_xz.set_ylabel("z (um)", fontsize=8)
+    ax_xz.set_title("depth extent  (bold = marked, faint = interpolated)",
+                    fontsize=8, loc="left", color="#3E4F58")
+    ax_xz.invert_yaxis()
+
+    # YZ: thickness along the sheet, which is what the volume integrates.
+    for z in zs:
+        good = np.isfinite(upper[z]) & np.isfinite(lower[z])
+        if not good.any():
+            continue
+        cols = np.where(good)[0]
+        ax_yz.fill_between(cols * vx, lower[z][cols] * vy, upper[z][cols] * vy,
+                           color="#2C7BB6",
+                           alpha=0.55 if z in marked else 0.12, lw=0)
+    for e in region.exclusions:
+        poly = np.asarray(e.polygon, dtype=float)
+        if len(poly) >= 3:
+            ax_yz.plot(np.append(poly[:, 0], poly[0, 0]) * vx,
+                       np.append(poly[:, 1], poly[0, 1]) * vy,
+                       lw=1.2, color="#C1440E")
+    ax_yz.set_xlabel("x (um)", fontsize=8)
+    ax_yz.set_ylabel("y (um)", fontsize=8)
+    ax_yz.set_title("slab thickness, exclusions in orange", fontsize=8,
+                    loc="left", color="#3E4F58")
+    ax_yz.invert_yaxis()
+
+    for ax in (ax_xz, ax_yz):
+        ax.tick_params(labelsize=7)
+
+    head = region.name
+    if row:
+        head += ("   %.0f um3   %.0f%% excluded   %d/%d planes marked"
+                 % (row["volume_um3"], 100 * row["excluded_fraction"],
+                    row["n_planes_marked_upper"], row["n_planes_measured"]))
+    fig.suptitle(head, fontsize=9.5, x=0.01, ha="left", color="#22303A")
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    return fig
+
+
+def write_projections(out_dir, base, regions, shape_zcyx, voxel_size_um, rows):
+    """One evidence image per region, plus a contact sheet of all of them."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    by_name = {r["region"]: r for r in rows}
+    paths = {}
+    for region in regions:
+        fig = projection_figure(region, shape_zcyx, voxel_size_um,
+                                by_name.get(region.name))
+        p = out_dir / f"{base}_projection_{region.name}.png"
+        fig.savefig(p, dpi=110, facecolor="white")
+        plt.close(fig)
+        paths[region.name] = p
+
+    sheet = None
+    if paths:
+        n = len(paths)
+        cols = min(3, n)
+        rows_n = (n + cols - 1) // cols
+        sheet_fig, axes = plt.subplots(rows_n, cols,
+                                       figsize=(5.0 * cols, 2.1 * rows_n))
+        axes = np.atleast_1d(axes).ravel()
+        for ax, (name, p) in zip(axes, sorted(paths.items())):
+            ax.imshow(plt.imread(p))
+            ax.axis("off")
+        for ax in axes[len(paths):]:
+            ax.axis("off")
+        sheet_fig.tight_layout()
+        sheet = out_dir / f"{base}_projection_sheet.png"
+        sheet_fig.savefig(sheet, dpi=110, facecolor="white")
+        plt.close(sheet_fig)
+    return paths, sheet
+
+
+# --------------------------------------------------------------------------- #
+# Batch audit contract
+# --------------------------------------------------------------------------- #
+def audit_items(rows, evidence, stratum_keys=None, module_version=TOOL_VERSION):
+    """Emit app/batch_audit.py's per-item contract so this module can be sampled.
+
+    CONFIDENCE HERE MEANS MARKING DENSITY: the fraction of measured planes a
+    human actually judged. A region measured from 2 marked planes across 40 is
+    mostly interpolation, and that is the honest thing to rank on - it is not a
+    claim about correctness, and it is UNCALIBRATED until audits accumulate and
+    the calibration pipeline can check whether 0.9 really means 90% acceptable.
+    Until then it orders items for review; it does not license skipping any.
+    """
+    items = []
+    for r in rows:
+        measured = max(int(r.get("n_planes_measured", 1)), 1)
+        marked = max(int(r.get("n_planes_marked_upper", 0)),
+                     int(r.get("n_planes_marked_lower", 0)))
+        confidence = min(1.0, marked / float(measured))
+        items.append({
+            "item_id": r["region"],
+            "confidence": round(confidence, 4),
+            "confidence_meaning": "fraction of measured planes marked by a human",
+            "confidence_calibrated": False,
+            "abstained": False,
+            "abstain_reason": None,
+            "stratum_keys": dict(stratum_keys or {}, region=r["region"]),
+            "evidence_path": str(evidence.get(r["region"], "")) or None,
+            "module_name": TOOL_NAME,
+            "module_version": module_version,
+        })
+    return items
