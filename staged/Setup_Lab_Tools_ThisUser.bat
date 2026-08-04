@@ -24,14 +24,42 @@ echo.
 
 echo === Lab Tools per-user setup, %DATE% %TIME% === > "%LOG%"
 
-rem --- find a Python to build the environment with ---
+rem --- find a Python that this user can actually RUN ------------------------
+rem Finding python on PATH is not enough. On a shared computer someone may have
+rem installed Python "for this user only" under THEIR profile; it stays on the
+rem machine PATH, so it is found, and then fails with "Access is denied"
+rem because another account cannot execute files inside a different user's
+rem folder. Each candidate is therefore executed, not merely located.
 set "PYEXE="
-where py >nul 2>&1 && set "PYEXE=py -3"
-if not defined PYEXE (
-  where python >nul 2>&1 && set "PYEXE=python"
+set "PYBAD="
+for %%C in ("py -3" "python" "python3") do (
+  if not defined PYEXE (
+    %%~C -c "import sys" >nul 2>>"%LOG%"
+    if not errorlevel 1 (
+      set "PYEXE=%%~C"
+    ) else (
+      where %%~C >nul 2>&1 && set "PYBAD=%%~C"
+    )
+  )
 )
+
 if not defined PYEXE (
-  echo No Python found. >> "%LOG%"
+  if defined PYBAD (
+    for /f "delims=" %%P in ('where %PYBAD% 2^>nul') do set "PYWHERE=%%P"
+    echo Found %PYBAD% at !PYWHERE! but it would not run. >> "%LOG%"
+    call :fail "Python is on this computer but YOU cannot run it." ^
+      "  found at: !PYWHERE!" ^
+      "If that path is inside ANOTHER person's C:\Users\<name> folder," ^
+      "it was installed 'for this user only' under their account, and" ^
+      "Windows will not let you execute it - that is the 'Access is" ^
+      "denied' message." ^
+      "" ^
+      "FIX: install Python 3 from https://www.python.org/downloads/" ^
+      "under YOUR OWN login. Tick 'Add python.exe to PATH' on the first" ^
+      "screen. The default 'Install for me only' is fine and needs no" ^
+      "administrator. Then run this file again."
+    exit /b 1
+  )
   call :fail "No Python is installed on this computer." ^
     "Install Python 3 from https://www.python.org/downloads/ and TICK" ^
     "'Add python.exe to PATH' on the FIRST screen of the installer." ^
@@ -40,15 +68,21 @@ if not defined PYEXE (
 )
 echo Using Python: %PYEXE%
 echo Using Python: %PYEXE% >> "%LOG%"
+for /f "delims=" %%P in ('where %PYEXE% 2^>nul') do echo   at %%P >> "%LOG%"
 echo.
 
 echo Step 1 of 2: creating your environment ...
 %PYEXE% -m venv "%ENVDIR%" >> "%LOG%" 2>&1
 if errorlevel 1 (
   call :fail "Could not create the environment at" "  %ENVDIR%" ^
-    "That folder is inside your own profile, so this is unlikely to be" ^
-    "a permissions problem - check free disk space and that Python" ^
-    "installed correctly."
+    "The most common cause is that the Python being used lives inside" ^
+    "ANOTHER user's folder, so Windows refuses to run it - look for" ^
+    "'Access is denied' in the log, naming a path under C:\Users\ that" ^
+    "is not yours." ^
+    "" ^
+    "FIX: install Python 3 from https://www.python.org/downloads/ under" ^
+    "YOUR OWN login, ticking 'Add python.exe to PATH'. Otherwise check" ^
+    "free disk space."
   exit /b 1
 )
 
