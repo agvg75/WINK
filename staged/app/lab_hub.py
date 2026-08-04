@@ -273,6 +273,20 @@ REGISTRY = [
          requires="a raw fluorescence image, the scale bar's printed length for calibration, and a hand-drawn boundary per myocyte"),
     Tool("Myocyte morphometry (Fiji, legacy)", "The original Fiji-macro version. Superseded by the Python tool above; kept for reproducing older measurements.",
          "Anatomy and morphology", "fiji", "ready", "tools/morphology/Myocyte_Morphometry.ijm"),
+    Tool("Myocyte boundary proposer (Experimental)",
+         "Propose body-wall myocyte boundaries in a confocal stack so morphometry "
+         "becomes correcting rather than drawing. Finds boundaries from traced "
+         "individual actin fibres - where fibres terminate, and where many "
+         "converge on a cell's end - not from brightness, because both sides of a "
+         "myocyte border are bright. Every line is a proposal for a human to "
+         "judge; it measures nothing and decides no boundary. Refuses outright on "
+         "a stack with no aligned fibrous signal rather than reporting whatever "
+         "channel has the most texture.",
+         "Anatomy and morphology", "python", "ready",
+         "tools/morphology/myocyte_boundary_proposer.py",
+         requires="a multi-plane confocal stack with a phalloidin (actin) channel "
+                  "and its voxel size; region is read from the file and series names",
+         validation_level="computational_regression"),
     Tool("Nonstriated muscle degeneration", "Measure pharyngeal, uterine, somatointestinal, or anal-depressor structure and force-vector geometry.",
          "Anatomy and morphology", "python", "ready", "tools/morphology/nonstriated_morphology_tool.py",
          requires="raw fluorescence image, scale calibration, tissue ROI, and body orientation"),
