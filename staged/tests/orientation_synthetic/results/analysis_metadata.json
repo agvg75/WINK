@@ -32,5 +32,9 @@
   "mean_preference_index": NaN,
   "preferred_primary_measure": "pixel_occupancy",
   "blob_counts": "descriptive_only_fragmentation_sensitive",
-  "persistence_iou_cutoff": 0.8
+  "persistence_iou_cutoff": 0.8,
+  "area_gate_min_px": 2,
+  "area_gate_max_px": 150,
+  "objects_detected_total": 0,
+  "area_gate_warning": "No objects were detected at all, so the area gates were never exercised and every count below is zero for a reason unrelated to behaviour."
 }

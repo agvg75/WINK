@@ -23,6 +23,52 @@ def circle(shape,center,r):
     y,x=np.ogrid[:shape[0],:shape[1]]
     return (x-center[0])**2+(y-center[1])**2<=r*r
 
+def area_gate_diagnostics(areas,min_area,max_area):
+    """What the area gates actually admitted, and whether they look wrong.
+
+    The gates are in SOURCE pixels and this module exposes them nowhere, so a
+    recording at a different magnification is silently emptied or silently
+    flooded and the result still looks like a result. Recording the gates and
+    the distribution they were applied to is the minimum needed to tell those
+    apart afterwards; the warning names the likely cause rather than leaving it
+    to be inferred from a preference index computed over nothing.
+    """
+    out={"area_gate_min_px":int(min_area),"area_gate_max_px":int(max_area),
+         "objects_detected_total":int(len(areas))}
+    if not areas:
+        out["area_gate_warning"]=("No objects were detected at all, so the area "
+                                  "gates were never exercised and every count "
+                                  "below is zero for a reason unrelated to "
+                                  "behaviour.")
+        return out
+    a=np.asarray(areas,dtype=float)
+    inside=(a>=min_area)&(a<=max_area)
+    frac=float(inside.mean())
+    out.update(objects_within_gates=int(inside.sum()),
+               objects_within_gates_fraction=round(frac,4),
+               object_area_median_px=float(np.median(a)),
+               object_area_p05_px=float(np.percentile(a,5)),
+               object_area_p95_px=float(np.percentile(a,95)))
+    reasons=[]
+    median=float(np.median(a))
+    if frac < 0.25:
+        reasons.append("the gates admitted only %.1f%% of detected objects" % (100*frac))
+    if median > max_area:
+        reasons.append("the median detected object is %.0f px, above the "
+                       "maximum of %d - the animals are probably larger than "
+                       "these gates expect" % (median, max_area))
+    elif median < min_area:
+        reasons.append("the median detected object is %.0f px, below the "
+                       "minimum of %d - the animals are probably smaller than "
+                       "these gates expect" % (median, min_area))
+    if reasons:
+        out["area_gate_warning"]=("; ".join(reasons)
+                                  + ". Area gates are in SOURCE pixels, so a "
+                                    "recording at a different magnification "
+                                    "needs different values.")
+    return out
+
+
 def analyze(source,plate_id,fps,um_per_px,stimulus,control,release,roi_radius_px,
             output_dir=None,arrival_count=1,min_area=2,max_area=150,persistence_cutoff=.8,
             n_worms_on_plate=None,progress=None):
@@ -37,6 +83,12 @@ def analyze(source,plate_id,fps,um_per_px,stimulus,control,release,roi_radius_px
     reviewed_diff=replace(reviewed,feature="gray") if reviewed else None
     sm=circle(bg.shape,stimulus,roi_radius_px); cm=circle(bg.shape,control,roi_radius_px)
     prev=np.zeros_like(bg,bool); times=[]; angle_weights=[]; angle_values=[]; radial_values=[]
+    # Every detected component's area, BEFORE gating. The gates are in source
+    # pixels, so values that suit one magnification silently discard the animals
+    # at another - and this module exposes them nowhere, so nobody can tell.
+    # Collecting the distribution lets the run say afterwards whether its own
+    # gates admitted anything sensible.
+    all_component_areas=[]
     for fi in range(n):
         im,_=gray8(mov.get_frame(fi),limits); d=cv2.GaussianBlur(cv2.absdiff(im,bg),(3,3),0)
         if reviewed_diff:m=np.uint8(segment_frame(d,fi,reviewed_diff))*255
@@ -46,6 +98,7 @@ def analyze(source,plate_id,fps,um_per_px,stimulus,control,release,roi_radius_px
         nc,lab,stats,cents=cv2.connectedComponentsWithStats(m)
         for k in range(1,nc):
             area=stats[k,cv2.CC_STAT_AREA]
+            all_component_areas.append(int(area))
             if not min_area<=area<=max_area:continue
             obj=lab==k; inter=np.logical_and(obj,prev).sum(); union=np.logical_or(obj,prev).sum(); iou=float(inter/union) if union else 0
             persistence.append(iou)
@@ -75,6 +128,7 @@ def analyze(source,plate_id,fps,um_per_px,stimulus,control,release,roi_radius_px
         roi_radius_px=float(roi_radius_px),arrival_time_s=None if arrival.empty else float(arrival.iloc[0]),
         mean_preference_index=float(pref.mean()),preferred_primary_measure="pixel_occupancy",
         blob_counts="descriptive_only_fragmentation_sensitive",persistence_iou_cutoff=persistence_cutoff)
+    plate.update(area_gate_diagnostics(all_component_areas,min_area,max_area))
     out=Path(output_dir) if output_dir else Path(source).parent/f"{Path(source).stem}_{plate_id}_orientation_results";out.mkdir(parents=True,exist_ok=True)
     tc.to_csv(out/"plate_timecourse.csv",index=False);pd.DataFrame([plate]).to_csv(out/"plate_resultant.csv",index=False)
     bins=np.arange(0,361,15);pd.DataFrame({"angle_bin_start_deg":bins[:-1],"worm_pixel_count":np.histogram(angle_values,bins)[0]}).to_csv(out/"angular_distribution.csv",index=False)
