@@ -36,10 +36,19 @@ FIJI_EXE_CANDIDATES = [
 # Tools to place in the AGVGLab submenu. Each: menu label -> (filename, search
 # dirs relative to the Lab tools folder, kind). ImageJ wants an underscore in a
 # menu file name; these already have one.
+#
+# Paths are relative to this file (staged/fiji/). The historical entries
+# pointed at a RGBCaMP_Tracker/ layout that the reorganisation replaced, so
+# this installer found NOTHING and quietly created an empty menu folder - the
+# copies already in Fiji were put there some other way and had gone stale. Keep
+# the old locations in the search list so an older checkout still resolves.
 TOOLS = [
-    ("Myocyte Morphometry", "Myocyte_Morphometry.ijm", ["."], "macro"),
+    ("Myocyte Morphometry", "Myocyte_Morphometry.ijm",
+     ["../tools/morphology", "."], "macro"),
     ("RGBCaMP Extractor", "WormRGBCaMPMap_v1.java",
-     ["RGBCaMP_Tracker", "RGBCaMP_Tracker/pipeline", "RGBCaMP_Tracker/src", "."], "plugin"),
+     ["../tools/rgbcamp/fiji",
+      "RGBCaMP_Tracker", "RGBCaMP_Tracker/pipeline", "RGBCaMP_Tracker/src", "."],
+     "plugin"),
     # Kinematics extractor is a patch to be applied and built first, so it is
     # not listed here yet. Add it once it is a standalone plugin.
 ]
