@@ -32,6 +32,23 @@ import numpy as np
 import pandas as pd
 from scipy import signal
 
+# wave_propagation() lives in worm_kinetics.py. These functions were written to
+# be pasted in beside it, where it is already in scope - so imported as a
+# standalone module they raised NameError on the first call to
+# posterior_dampening(). run_one_kinematics.py papers over that by assigning
+# _fd.wave_propagation before grafting the functions onto wk, which works but
+# makes the module silently dependent on its caller: any other importer gets the
+# NameError instead.
+#
+# Resolving it here makes the module stand on its own and turns that graft into
+# a convenience rather than a requirement. Both usages still work: when this
+# file IS pasted into worm_kinetics.py the import fails harmlessly and the local
+# definition is used.
+try:                                    # standalone module
+    from worm_kinetics import wave_propagation
+except Exception:                       # pasted into worm_kinetics.py
+    pass
+
 
 # --------------------------------------------------------------------------- #
 # Foraging (head swing) — needs the per-frame head_bend_deg column
