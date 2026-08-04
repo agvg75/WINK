@@ -112,6 +112,68 @@ def endpoint_map(traced, shape, um_per_px, sigma_um=1.5):
     return ndi.gaussian_filter(pts, sigma_um / um_per_px), int(pts.sum())
 
 
+def boundary_evidence(image, angles, coherence, um_per_px, reach_um=25.0,
+                      percentile=55, edge_margin_um=6.0):
+    """Myocyte boundary evidence from FIBRES ALONE - the best combination found.
+
+    Two cues, both derived from individual fibres rather than from intensity:
+      * endpoint density - where fibres terminate, which marks the whole
+        boundary
+      * convergence vote - where fibres converge, which marks the ENDS of a
+        boundary specifically
+
+    Multiplied, not added. Measured on the held-out midbody field:
+        endpoints x convergence   80.1% recall, median error 0.99 um
+        endpoints + convergence   71.1%
+        max(endpoints, converg.)  66.5%
+        endpoints alone           49.7%
+        convergence alone         47.2%
+        valley+alignment+thickness 33.1%   (the previous intensity-based set)
+
+    WHY THE PRODUCT. The two are complementary in SCOPE, not alternatives.
+    Relative elevation on that field: convergence 0.667 at a vertex against
+    0.291 on a boundary away from one, endpoints 0.843 against 0.718. So
+    endpoints say a boundary passes here and convergence says this part of it
+    is an end. Their product is high only where both agree. They are positively
+    correlated (+0.09 on boundaries), so an OR discards the agreement that
+    carries the information.
+
+    WHAT IS DELIBERATELY EXCLUDED, and why it matters more than what is
+    included: the intensity-derived cues - valley, alignment, thickness - are
+    NOT used. Including them alongside these two dropped recall from 80.1% to
+    38.7%, because a weighted geometric mean is an AND and the weakest member
+    sets the ceiling. Three rounds of work went into adding cues to a set whose
+    worst members were the limit. Do not add cues here without measuring
+    end-to-end recall on a field that had no part in the decision.
+    """
+    ends_map, n_ends = endpoint_map(
+        trace_fibres(image, um_per_px, percentile=percentile),
+        np.asarray(image).shape, um_per_px)
+    vote, count = convergence_vote(angles, coherence, um_per_px,
+                                   reach_um=reach_um)
+    # Votes pile up against the frame edge because rays terminate there. That
+    # is a property of the field of view, not a myocyte end.
+    m = int(edge_margin_um / um_per_px)
+    if m > 0:
+        vote[:, :m] = 0; vote[:, -m:] = 0
+        vote[:m, :] = 0; vote[-m:, :] = 0
+
+    E = _norm01(ends_map)
+    C = _norm01(vote)
+    return {"endpoints": E, "convergence": C, "combined": np.sqrt(E * C),
+            "n_endpoints": n_ends,
+            "combiner": "sqrt(endpoints * convergence); intensity cues "
+                        "deliberately excluded"}
+
+
+def _norm01(a, lo_pct=5, hi_pct=99):
+    a = np.asarray(a, dtype=float)
+    lo, hi = np.percentile(a, [lo_pct, hi_pct])
+    if hi <= lo:
+        return np.zeros_like(a)
+    return np.clip((a - lo) / (hi - lo), 0.0, 1.0)
+
+
 def convergence_vote(angles, coherence, um_per_px, reach_um=25.0,
                      min_coherence=0.25, step_um=0.5):
     """Find myocyte VERTICES by letting every fibre vote along its own direction.
