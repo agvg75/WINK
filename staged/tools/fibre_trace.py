@@ -112,6 +112,136 @@ def endpoint_map(traced, shape, um_per_px, sigma_um=1.5):
     return ndi.gaussian_filter(pts, sigma_um / um_per_px), int(pts.sum())
 
 
+def convergence_vote(angles, coherence, um_per_px, reach_um=25.0,
+                     min_coherence=0.25, step_um=0.5):
+    """Find myocyte VERTICES by letting every fibre vote along its own direction.
+
+    Andres's observation, and the reason this beats counting terminations:
+    actin fibres begin deviating from parallel toward the insertion point well
+    BEFORE they reach it, often a long way before. So the vertex is inferable
+    from the direction field far away from it - which means it can be found
+    even when the insertion itself is not resolved, and endpoint density cannot
+    do that because it needs the termination to be visible.
+
+    Each coherent pixel casts votes along its fibre bearing, forwards and
+    backwards. Direction is accumulated as well as count, because a straight
+    fibre votes along its whole length and would otherwise light up as a ridge:
+    what marks a vertex is votes arriving from MANY DIFFERENT bearings.
+    Parallel fibres all vote on the same bearing and cancel; converging ones
+    accumulate.
+
+    Returns (vote_map, count_map). The vote map is count weighted by directional
+    spread, so it peaks at convergence points rather than along fibres.
+    """
+    from scipy import ndimage as ndi
+
+    ang = np.asarray(angles, dtype=float)
+    coh = np.asarray(coherence, dtype=float)
+    if ang.ndim == 3:
+        w = np.where(coh >= min_coherence, coh, 0.0)
+        d = np.deg2rad(ang * 2.0)
+        C = (np.cos(d) * w).sum(axis=0)
+        S = (np.sin(d) * w).sum(axis=0)
+        Wt = w.sum(axis=0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            theta = (np.arctan2(S, C) / 2.0)
+        strength = np.where(Wt > 0, np.hypot(C, S) / np.maximum(Wt, 1e-9), 0.0)
+        strength = np.where(Wt > 0, strength, 0.0)
+    else:
+        theta = np.deg2rad(ang)
+        strength = np.where(coh >= min_coherence, coh, 0.0)
+
+    H, W = theta.shape
+    ys, xs = np.nonzero(strength > 0)
+    if ys.size == 0:
+        return np.zeros((H, W)), np.zeros((H, W))
+    th = theta[ys, xs]
+    wt = strength[ys, xs]
+    dy_dir, dx_dir = np.sin(th), np.cos(th)
+
+    count = np.zeros((H, W))
+    cd = np.zeros((H, W))
+    sd = np.zeros((H, W))
+    reach = int(reach_um / um_per_px)
+    step = max(int(step_um / um_per_px), 1)
+    # Skip s = 0: a pixel voting for itself would just reproduce the fibre.
+    for s in list(range(-reach, 0, step)) + list(range(step, reach + 1, step)):
+        ty = np.rint(ys + s * dy_dir).astype(int)
+        tx = np.rint(xs + s * dx_dir).astype(int)
+        ok = (ty >= 0) & (ty < H) & (tx >= 0) & (tx < W)
+        if not ok.any():
+            continue
+        idx = (ty[ok], tx[ok])
+        np.add.at(count, idx, wt[ok])
+        np.add.at(cd, idx, wt[ok] * np.cos(2 * th[ok]))
+        np.add.at(sd, idx, wt[ok] * np.sin(2 * th[ok]))
+
+    smooth = 2.0 / um_per_px
+    count_s = ndi.gaussian_filter(count, smooth)
+    cd_s = ndi.gaussian_filter(cd, smooth)
+    sd_s = ndi.gaussian_filter(sd, smooth)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        alignment = np.hypot(cd_s, sd_s) / np.maximum(count_s, 1e-9)
+    spread = np.clip(1.0 - alignment, 0.0, 1.0)
+    return count_s * spread, count_s
+
+
+def find_vertices(vote_map, um_per_px, min_separation_um=8.0, max_vertices=40):
+    """Peaks of the convergence vote - candidate myocyte ends."""
+    from skimage.feature import peak_local_max
+
+    pk = peak_local_max(np.asarray(vote_map, dtype=float),
+                        min_distance=max(int(min_separation_um / um_per_px), 3),
+                        num_peaks=int(max_vertices), exclude_border=False)
+    scores = np.asarray(vote_map)[pk[:, 0], pk[:, 1]] if len(pk) else np.array([])
+    order = np.argsort(-scores)
+    return pk[order], scores[order]
+
+
+def pair_vertices(vertices, scores, angles, coherence, um_per_px,
+                  min_length_um=15.0, max_length_um=90.0, max_offset_um=12.0):
+    """Pair vertices that FACE each other, as the two ends of one myocyte.
+
+    Andres: for most of this lab's work the myocytes are fully contained in the
+    image, so both ends are present and facing each other. That is a strong
+    structural constraint rather than an observation to rediscover - a lone
+    vertex is suspect, while a facing pair is evidence for one cell.
+
+    Pairs are required to lie roughly along the body axis and to be separated
+    by a plausible myocyte length, and each vertex is used at most once.
+    """
+    verts = np.asarray(vertices, dtype=float)
+    if verts.ndim != 2 or verts.shape[0] < 2:
+        return []
+    n = verts.shape[0]
+    lo = min_length_um / um_per_px
+    hi = max_length_um / um_per_px
+    off = max_offset_um / um_per_px
+
+    cands = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            dy = verts[j, 0] - verts[i, 0]
+            dx = verts[j, 1] - verts[i, 1]
+            dist = float(np.hypot(dy, dx))
+            if not (lo <= dist <= hi):
+                continue
+            if abs(dy) > off:            # must face along the body axis
+                continue
+            cands.append((float(scores[i] + scores[j]), i, j, dist))
+
+    cands.sort(reverse=True)
+    used, pairs = set(), []
+    for sc, i, j, dist in cands:
+        if i in used or j in used:
+            continue
+        used.add(i); used.add(j)
+        pairs.append({"a": tuple(verts[i].astype(int)),
+                      "b": tuple(verts[j].astype(int)),
+                      "length_um": dist * um_per_px, "score": sc})
+    return pairs
+
+
 def convergence_map(traced, shape, um_per_px, radius_um=3.0):
     """Where many fibres CONVERGE on one spot - the myocyte-end cue.
 
