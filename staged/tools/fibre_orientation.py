@@ -94,6 +94,77 @@ def orientation_volume(stack, sigma=2.0, rho=4.0, mask=None):
     return angles, coherence
 
 
+def pick_actin_channel(stack, sigma=1.5, rho=6.0, min_coherence=0.35,
+                       min_bright_fraction=0.005):
+    """Which channel holds the actin, or None if none of them does.
+
+    Returning None is the point. An argmax always names a winner, and on an
+    unstained acquisition that winner is whatever channel happens to have the
+    most texture - in this lab's no-phalloidin controls that is the TRANSMITTED
+    LIGHT channel, and the pipeline then reports gut texture as muscle
+    architecture with no outward sign anything went wrong. Verified against
+    230518_pezo-1.lif: the stained series has p99=73 in the phalloidin channel,
+    the controls have p99=0.0 and 1.0.
+
+    Note these controls are not blank images - the lab does not mount and image
+    a worm without some signal to justify it, so a reporter is usually present
+    in another channel. The test therefore cannot be 'is anything bright'; it
+    has to be 'is there aligned fibrous signal', which is what coherence over
+    genuinely bright voxels measures.
+
+    Returns (channel_index, report). channel_index is None when no channel
+    qualifies, and report carries the per-channel numbers either way so a
+    refusal can be inspected rather than merely obeyed.
+    """
+    n_c = stack.shape[1] if stack.ndim == 4 else 1
+    zmid = stack.shape[0] // 2
+    per_channel, best, best_score = [], None, 0.0
+    for c in range(n_c):
+        plane = (stack[zmid, c] if stack.ndim == 4 else stack[zmid]).astype(float)
+        p99 = float(np.percentile(plane, 99))
+        bright = plane > max(p99 * 0.5, 1.0)
+        frac = float(bright.mean())
+        # A fluorescence channel is mostly BACKGROUND - dark everywhere the
+        # label is not. A transmitted-light / DIC channel has no dark
+        # background at all, and it is textured enough to score respectable
+        # coherence, so without this test it wins the unstained controls and
+        # gut texture gets reported as muscle. Measured: this lab's DIC channel
+        # sits at background_ratio ~0.65 in both stained and unstained series,
+        # the phalloidin channel at ~0.02. That is a structural difference
+        # between imaging modes, not a threshold tuned to one dataset.
+        ratio = float(np.median(plane) / p99) if p99 > 0 else 1.0
+        transmitted = ratio > 0.25
+        if transmitted or frac < min_bright_fraction or p99 <= 1.0:
+            per_channel.append({
+                "channel": c, "p99": p99, "bright_fraction": frac,
+                "background_ratio": ratio, "coherence": 0.0,
+                "qualifies": False,
+                "rejected_because": ("looks like transmitted light, not "
+                                     "fluorescence" if transmitted else
+                                     "too little signal above background")})
+            continue
+        _, coh = structure_tensor_2d(plane, sigma=sigma, rho=rho)
+        score = float(coh[bright].mean())
+        qualifies = score >= min_coherence
+        per_channel.append({"channel": c, "p99": p99, "bright_fraction": frac,
+                            "background_ratio": ratio, "coherence": score,
+                            "qualifies": qualifies,
+                            "rejected_because": None if qualifies else
+                            "signal present but not aligned into fibres"})
+        if qualifies and score > best_score:
+            best, best_score = c, score
+
+    report = {"channels": per_channel, "chosen": best,
+              "min_coherence": min_coherence}
+    if best is None:
+        report["refusal"] = (
+            "No channel carries aligned fibrous signal (best coherence over "
+            "bright voxels was below {:.2f}). Measuring anyway would report "
+            "whatever channel has the most texture - typically transmitted "
+            "light - as muscle architecture.".format(min_coherence))
+    return best, report
+
+
 def _angular_difference(a, b):
     """Smallest angle between two undirected orientations, in degrees."""
     d = np.abs(a - b) % 180.0
@@ -127,6 +198,130 @@ def divider_profile(angles, coherence, axis_is_x=True, min_coherence=0.15):
         mean_angle = (np.degrees(np.arctan2(sy, sx)) / 2.0) % 180.0
     mean_angle = np.where(support > 0, mean_angle, np.nan)
     return mean_angle, support
+
+
+def orientation_step_map(angles, coherence, window_x=60, window_y=40,
+                         min_coherence=0.15):
+    """2-D map of how much the fibre direction turns across each location.
+
+    The 1-D version collapses the image onto the body axis, which averages
+    together structures that are simply different - cuticle, one quadrant, the
+    next - and destroys the signal. Myocytes are RHOMBOID and tile in two
+    dimensions, so the boundary is a slanted curve and the evidence for it has
+    to stay 2-D.
+
+    Compares the coherence-weighted mean orientation in a box to the left of
+    each pixel against a box to its right, using doubled angles so undirected
+    fibres average correctly.
+    """
+    from scipy import ndimage as ndi
+
+    angles = np.asarray(angles, dtype=float)
+    coherence = np.asarray(coherence, dtype=float)
+    if angles.ndim == 3:                       # collapse depth first
+        w = np.where(coherence >= min_coherence, coherence, 0.0)
+        d = np.deg2rad(angles * 2.0)
+        C = (np.cos(d) * w).sum(axis=0)
+        S = (np.sin(d) * w).sum(axis=0)
+        W = w.sum(axis=0)
+    else:
+        w = np.where(coherence >= min_coherence, coherence, 0.0)
+        d = np.deg2rad(angles * 2.0)
+        C, S, W = np.cos(d) * w, np.sin(d) * w, w
+
+    box = (window_y, window_x)
+    Cb = ndi.uniform_filter(C, box)
+    Sb = ndi.uniform_filter(S, box)
+    Wb = ndi.uniform_filter(W, box)
+
+    half = max(window_x // 2, 1)
+    def shift(a, k):
+        return np.roll(a, k, axis=1)
+
+    out = np.zeros(C.shape, dtype=float)
+    left = (shift(Cb, half), shift(Sb, half), shift(Wb, half))
+    right = (shift(Cb, -half), shift(Sb, -half), shift(Wb, -half))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        al = (np.degrees(np.arctan2(left[1], left[0])) / 2.0) % 180.0
+        ar = (np.degrees(np.arctan2(right[1], right[0])) / 2.0) % 180.0
+        out = _angular_difference(al, ar)
+    # Where either side had no aligned signal the comparison is meaningless.
+    support = np.minimum(left[2], right[2])
+    out = np.where(support > 0, out, 0.0)
+    out[:, :half] = 0.0
+    out[:, -half:] = 0.0
+    return out, support
+
+
+def brightness_step_map(image, um_per_px, cell_um=30.0, striation_um=2.0):
+    """2-D map of where per-cell staining brightness steps.
+
+    Phalloidin penetrates each myocyte individually, so each cell carries its
+    own brightness - varying smoothly inside the cell and stepping at the
+    neighbour. Three scales are superimposed and only the middle one is
+    biology, so this is a BAND-pass: blur out the sarcomere striations, then
+    subtract the illumination and depth falloff, which is much stronger than
+    the per-cell steps and would otherwise dominate any gradient.
+    """
+    from scipy import ndimage as ndi
+
+    img = np.asarray(image, dtype=float)
+    s_small = max(striation_um / um_per_px, 0.8)
+    s_large = max(cell_um * 1.5 / um_per_px, s_small * 3)
+    banded = ndi.gaussian_filter(img, s_small) - ndi.gaussian_filter(img, s_large)
+    gy, gx = np.gradient(banded)
+    grad = ndi.gaussian_filter(np.hypot(gy, gx), s_small)
+    return grad, banded
+
+
+def _norm(a, lo_pct=50, hi_pct=99):
+    a = np.asarray(a, dtype=float)
+    lo, hi = np.percentile(a, [lo_pct, hi_pct])
+    if hi <= lo:
+        return np.zeros_like(a)
+    return np.clip((a - lo) / (hi - lo), 0.0, 1.0)
+
+
+def boundary_evidence(angles, coherence, image, um_per_px, **kw):
+    """Combine two INDEPENDENT cues into myocyte-boundary evidence.
+
+    Andres's framing, and the same shape as the pBoC three-detector design:
+    fibre orientation tends to break between myocytes, AND each cell has a
+    mostly unique brightness signature. Either alone is weak. The two
+    COINCIDING is the strong indicator.
+
+    The independence is not an assumption here, it is a property that is
+    tested: the structure tensor's angle derives from gradient DIRECTION, which
+    is invariant to intensity scaling, so a pure brightness step produces no
+    angle turn - see the adversarial case in tests/test_fibre_orientation.py.
+    That is what licenses treating agreement as evidence rather than as two
+    views of the same measurement.
+
+    Combined with a GEOMETRIC mean, so evidence collapses if either cue is
+    absent. An arithmetic mean would let one loud cue carry a boundary on its
+    own, which is exactly the failure this design exists to prevent.
+
+    Returns a dict keeping the cues SEPARATE as well as combined - so a human
+    can see which cue fired where, and disagreement stays visible instead of
+    being averaged into a single confident-looking number.
+    """
+    turn, support = orientation_step_map(angles, coherence,
+                                         window_x=kw.get("window_x", 60),
+                                         window_y=kw.get("window_y", 40))
+    grad, banded = brightness_step_map(image, um_per_px,
+                                       cell_um=kw.get("cell_um", 30.0))
+    a = _norm(turn)
+    b = _norm(grad)
+    return {
+        "orientation_step": turn,
+        "brightness_step": grad,
+        "brightness_banded": banded,
+        "orientation_norm": a,
+        "brightness_norm": b,
+        "combined": np.sqrt(a * b),
+        "combiner": "geometric mean - both cues required",
+        "support": support,
+    }
 
 
 def _windowed_mean_angle(mean_angle, lo, hi):
