@@ -112,8 +112,21 @@ def endpoint_map(traced, shape, um_per_px, sigma_um=1.5):
     return ndi.gaussian_filter(pts, sigma_um / um_per_px), int(pts.sum())
 
 
+# Minimum fibre-segment length before its endpoints are counted, per region.
+# Head and midbody want OPPOSITE settings, and this is the third independent
+# parameter where that is true - so the region split is structural, not a
+# nuisance. Region is recorded in the lab's file names, so a pipeline can pick
+# without asking anyone.
+#   midbody  every endpoint counts        80.1% vs 71.8% at a 2 um filter
+#   head     short fragments must be cut  45.8% vs 32.4% with no filter
+# The likely reason: the head field is noisier and carries a damage lesion, so
+# it fragments more, and each fragment contributes two spurious endpoints.
+MIN_SEGMENT_UM = {"midbody": 0.0, "head": 2.0, "posterior": 2.0, None: 0.0}
+
+
 def boundary_evidence(image, angles, coherence, um_per_px, reach_um=25.0,
-                      percentile=55, edge_margin_um=6.0):
+                      percentile=55, edge_margin_um=6.0, region=None,
+                      min_segment_um=None):
     """Myocyte boundary evidence from FIBRES ALONE - the best combination found.
 
     Two cues, both derived from individual fibres rather than from intensity:
@@ -146,9 +159,19 @@ def boundary_evidence(image, angles, coherence, um_per_px, reach_um=25.0,
     worst members were the limit. Do not add cues here without measuring
     end-to-end recall on a field that had no part in the decision.
     """
-    ends_map, n_ends = endpoint_map(
-        trace_fibres(image, um_per_px, percentile=percentile),
-        np.asarray(image).shape, um_per_px)
+    from scipy import ndimage as ndi
+
+    if min_segment_um is None:
+        min_segment_um = MIN_SEGMENT_UM.get(region, 0.0)
+    traced = trace_fibres(image, um_per_px, percentile=percentile)
+    shape = np.asarray(image).shape
+    pts = np.zeros(shape, dtype=float)
+    for (sy, sx), (ey, ex) in zip(traced["segments"], traced["endpoints"]):
+        if len(sy) * um_per_px < min_segment_um:
+            continue
+        pts[ey, ex] += 1.0
+    n_ends = int(pts.sum())
+    ends_map = ndi.gaussian_filter(pts, 1.5 / um_per_px)
     vote, count = convergence_vote(angles, coherence, um_per_px,
                                    reach_um=reach_um)
     # Votes pile up against the frame edge because rays terminate there. That
@@ -161,7 +184,8 @@ def boundary_evidence(image, angles, coherence, um_per_px, reach_um=25.0,
     E = _norm01(ends_map)
     C = _norm01(vote)
     return {"endpoints": E, "convergence": C, "combined": np.sqrt(E * C),
-            "n_endpoints": n_ends,
+            "n_endpoints": n_ends, "min_segment_um": float(min_segment_um),
+            "region": region,
             "combiner": "sqrt(endpoints * convergence); intensity cues "
                         "deliberately excluded"}
 
