@@ -199,9 +199,27 @@ own decision to justify, not one inherited from here.
 
 Follow existing WINK conventions:
 
+**As planned:**
+
 `tools/confocal_loader.py` (new, shared by both consumers)
 `tools/neurite_tracer.py` and `tools/neurite_tracer_tool.py` (new, template on `nonstriated_morphology.py` / `nonstriated_morphology_tool.py` split between logic and Hub facing tool wrapper)
 `tools/muscle_boundary_volume.py` (existing spec, modify import to use `confocal_loader`)
+
+**As actually built (2026-08-03).** The plan above is left as written because it
+records the intended shape, but two of these names never existed and looking for
+them wastes time:
+
+- `tools/confocal_loader.py` — built as planned.
+- `tools/neurite_tracer_tool.py` — **never existed.** Rejecting Napari (§2.3)
+  split the work three ways instead of two: `tools/neurite_tracer.py` is the
+  algorithm core, `tools/neurite_viewer.py` is the Tkinter orthogonal-slice
+  annotator that writes a sidecar, and `tools/neurite_trace_runner.py` traces
+  headlessly from that sidecar. The two-file logic/wrapper template did not
+  survive separating annotation from tracing, because the halves run on
+  different machines at different times.
+- `tools/muscle_boundary_volume.py` — **still unbuilt**, and its own spec is not
+  in `docs/specs/`. This is the remaining Phase 2 work; the loader it is meant
+  to import already exists and is in use.
 
 ---
 
