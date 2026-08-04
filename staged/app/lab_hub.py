@@ -100,6 +100,17 @@ REGISTRY = [
          "Motor output - Locomotion", "python", "ready", "tools/worm_kinematics/run_one_kinematics_launcher.py"),
     Tool("Kinematics browser", "Browse one recording's kinematics results and figures.",
          "Motor output - Locomotion", "python", "ready", "tools/worm_kinematics/kinematics_browser_launcher.py"),
+    Tool("Population results movie",
+         "Render one population-tracking run as a movie: the plate with every "
+         "animal's spine and trail, per-animal speed, proposed modality as a "
+         "bout timeline, and how many animals were actually tracked frame by "
+         "frame. Surfaces the run's own tracking-quality columns rather than "
+         "averaging them away, and measures nothing itself.",
+         "Motor output - Locomotion", "python", "ready",
+         "tools/population_swimming/population_movie_launcher.py",
+         requires="a population-tracking results folder (detections_and_tracks.csv, "
+                  "analysis_metadata.json) and, for the plate panel, the recording "
+                  "it was tracked on"),
     Tool("Kinematics results movie",
          "Render one tracked recording as a movie: the frame with its midline, "
          "head and tail overlaid, head-bend, centroid speed and a curvature "
