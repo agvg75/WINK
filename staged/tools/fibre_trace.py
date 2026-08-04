@@ -248,6 +248,92 @@ def convergence_vote(angles, coherence, um_per_px, reach_um=25.0,
     return count_s * spread, count_s
 
 
+def convergence_vote_curved(angles, coherence, um_per_px, reach_um=25.0,
+                            min_coherence=0.25, step_um=0.5, subsample=2):
+    """Convergence vote that FOLLOWS the fibre instead of firing a straight ray.
+
+    The straight-ray version smears its peaks, and the reason is geometric: if
+    fibres are already curving toward the insertion - which is Andres's whole
+    observation, that they deviate from parallel well before reaching it - then
+    a tangent fired from any point lands somewhere short of where the fibre
+    actually goes. Every pixel misses in a slightly different direction, so a
+    real convergence spreads into a broad warm region rather than a peak.
+
+    Here each vote walks the orientation field one step at a time, re-reading
+    the local direction as it goes, so a curving fibre is followed around its
+    curve. Orientation is undirected, so at each step the sense is resolved by
+    taking whichever of the two directions continues the current heading.
+    """
+    from scipy import ndimage as ndi
+
+    ang = np.asarray(angles, dtype=float)
+    coh = np.asarray(coherence, dtype=float)
+    if ang.ndim == 3:
+        w = np.where(coh >= min_coherence, coh, 0.0)
+        d = np.deg2rad(ang * 2.0)
+        C = (np.cos(d) * w).sum(axis=0)
+        S = (np.sin(d) * w).sum(axis=0)
+        Wt = w.sum(axis=0)
+        theta = np.arctan2(S, C) / 2.0
+        strength = np.where(Wt > 0, np.hypot(C, S) / np.maximum(Wt, 1e-9), 0.0)
+    else:
+        theta = np.deg2rad(ang)
+        strength = np.where(coh >= min_coherence, coh, 0.0)
+
+    H, W = theta.shape
+    ys, xs = np.nonzero(strength > 0)
+    if ys.size == 0:
+        return np.zeros((H, W)), np.zeros((H, W))
+    if subsample > 1:
+        keep = ((ys % subsample == 0) & (xs % subsample == 0))
+        ys, xs = ys[keep], xs[keep]
+    wt0 = strength[ys, xs]
+
+    count = np.zeros((H, W))
+    cd = np.zeros((H, W))
+    sd = np.zeros((H, W))
+    step = max(step_um / um_per_px, 0.5)
+    n_steps = int(reach_um / um_per_px / step)
+
+    for sense in (+1.0, -1.0):
+        py = ys.astype(float).copy()
+        px = xs.astype(float).copy()
+        th0 = theta[ys, xs]
+        hy = sense * np.sin(th0)
+        hx = sense * np.cos(th0)
+        alive = np.ones(py.shape, dtype=bool)
+        for _ in range(n_steps):
+            iy = np.clip(np.rint(py).astype(int), 0, H - 1)
+            ix = np.clip(np.rint(px).astype(int), 0, W - 1)
+            t = theta[iy, ix]
+            dy_, dx_ = np.sin(t), np.cos(t)
+            # undirected: keep the sense that continues the current heading
+            flip = (dy_ * hy + dx_ * hx) < 0
+            dy_ = np.where(flip, -dy_, dy_)
+            dx_ = np.where(flip, -dx_, dx_)
+            hy, hx = dy_, dx_
+            py = py + step * dy_
+            px = px + step * dx_
+            alive &= (py >= 0) & (py < H) & (px >= 0) & (px < W)
+            if not alive.any():
+                break
+            iy = np.clip(np.rint(py).astype(int), 0, H - 1)[alive]
+            ix = np.clip(np.rint(px).astype(int), 0, W - 1)[alive]
+            wv = wt0[alive]
+            hh = np.arctan2(hy[alive], hx[alive])
+            np.add.at(count, (iy, ix), wv)
+            np.add.at(cd, (iy, ix), wv * np.cos(2 * hh))
+            np.add.at(sd, (iy, ix), wv * np.sin(2 * hh))
+
+    smooth = 2.0 / um_per_px
+    count_s = ndi.gaussian_filter(count, smooth)
+    cd_s = ndi.gaussian_filter(cd, smooth)
+    sd_s = ndi.gaussian_filter(sd, smooth)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        alignment = np.hypot(cd_s, sd_s) / np.maximum(count_s, 1e-9)
+    return count_s * np.clip(1.0 - alignment, 0.0, 1.0), count_s
+
+
 def find_vertices(vote_map, um_per_px, min_separation_um=8.0, max_vertices=40):
     """Peaks of the convergence vote - candidate myocyte ends."""
     from skimage.feature import peak_local_max
