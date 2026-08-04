@@ -240,8 +240,16 @@ def build_figure(rec, smooth_s=0.5, width_in=13.0, dpi=110):
     # -- panel 3: velocity --------------------------------------------------
     if vel is not None:
         _trace(ax_vel, times, vel, win, rec.fps, "#3A4A52")
-        units = ("um/s, declared scale" if rec.um_per_px > 0
-                 else "px/s - scale NOT calibrated")
+        # A declared scale of exactly 1.000 is placeholder-shaped: it is what a
+        # field left alone tends to hold, and it converts px to um invisibly by
+        # doing nothing. Say so rather than presenting um/s as calibrated - the
+        # reader can then decide, which they cannot do if nothing is said.
+        if rec.um_per_px <= 0:
+            units = "px/s - scale NOT calibrated"
+        elif abs(rec.um_per_px - 1.0) < 1e-9:
+            units = "um/s at a declared 1.000 um/px\n(check - 1.000 is often an unset default)"
+        else:
+            units = "um/s, declared scale"
         ax_vel.set_ylabel("centroid speed\n(%s)%s"
                           % (units, _smooth_note(win, rec.fps)), fontsize=7.5)
     else:

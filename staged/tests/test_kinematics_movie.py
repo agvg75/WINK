@@ -172,6 +172,24 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     except PermissionError as exc:
         check("a refused load releases the stack handle", False, str(exc)[:60])
 
+# --- a placeholder scale must be called out, not presented as calibrated ---
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    tmp = Path(td)
+    rec = km.load(make_csv(tmp, um_per_px=1.0))
+    fig, dyn, ctx = km.build_figure(rec)
+    labels = " ".join(ax.get_ylabel() for ax in ctx["axes"][1:])
+    check("a declared scale of exactly 1.000 is flagged as placeholder-shaped",
+          "unset default" in labels, labels[:70])
+    import matplotlib.pyplot as _plt; _plt.close(fig)
+
+    rec2 = km.load(make_csv(tmp, um_per_px=0.05442))
+    fig2, dyn2, ctx2 = km.build_figure(rec2)
+    labels2 = " ".join(ax.get_ylabel() for ax in ctx2["axes"][1:])
+    check("a real scale is NOT flagged, so the warning stays meaningful",
+          "unset default" not in labels2 and "um/s" in labels2)
+    _plt.close(fig2)
+
+
 # --- optional columns degrade rather than crash ---------------------------
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     tmp = Path(td)
