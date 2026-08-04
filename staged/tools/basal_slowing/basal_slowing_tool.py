@@ -20,7 +20,9 @@ from basal_slowing import (analyze, list_frames, read_gray,
 from track_review import review_tracks, save_track_review
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "app"))
 from roi_editor import draw_roi, draw_rois as draw_multiple_rois
-from process_ui import (CockpitApp, ProcessLog, ReviewWorkbench, track_colour)
+from process_ui import (CockpitApp, ProcessLog, ReviewWorkbench, track_colour,
+                        collect_image_points)
+import worm_area_probe as wap
 
 
 class App(CockpitApp):
@@ -69,6 +71,16 @@ class App(CockpitApp):
                               text="Calibrate scale (scope / bar)...").pack(fill="x", pady=(0, 4))
         entry_row("Minimum worm area (px)", self.min_area)
         entry_row("Maximum worm area (px)", self.max_area)
+        ttk.Label(c, wraplength=300, justify="left", foreground="#5E6E76",
+                  text=("Areas are in SOURCE pixels, so the right values depend "
+                        "on magnification. The defaults of 40 and 2500 suit a "
+                        "modest frame; on a 4K recording the floor is a fraction "
+                        "of a percent of an animal, so every speck of debris "
+                        "clears it and the tracker fills with noise. Measure one "
+                        "animal instead of carrying numbers between rigs.")
+                  ).pack(anchor="w", pady=(0, 2))
+        ttk.Button(c, text="Measure a worm to set these...",
+                   command=self.measure_worm).pack(fill="x", pady=(0, 4))
         entry_row("Max link (px/frame)", self.max_link_px)
         ttk.Label(c, wraplength=300, justify="left", foreground="#5E6E76",
                   text=("How far one animal may travel between frames, in source "
@@ -318,6 +330,95 @@ class App(CockpitApp):
             self.after(0, self.review_tracking, events, tracks, out)
         except Exception as exc:
             self.after(0, self.fail, str(exc))
+
+    def measure_worm(self):
+        """Click one animal; set the area gates from the detector's own mask.
+
+        Clicking says only WHICH object is an animal - the number comes from
+        the thresholded mask, never from a hand-drawn outline, because a traced
+        outline is systematically more generous than the mask and it is the
+        mask the gates are compared against.
+
+        Shares app/worm_area_probe.py with the rest of WINK rather than growing
+        a second copy of the arithmetic. Note that Measure motion depends on
+        these gates, so set the areas first or the motion estimate is measured
+        over whatever debris the old floor let through.
+        """
+        folder = self.folder.get().strip()
+        if not folder:
+            messagebox.showerror("Measure a worm", "Choose a folder first.",
+                                 parent=self)
+            return
+        self.status.set("Sampling frames to measure an animal...")
+        self.update_idletasks()
+        try:
+            files = list_frames(folder)
+            idx = wap.sample_indices(len(files))
+            samples = [read_gray(files[i]) for i in idx]
+            background, chosen = wap.background_and_frame(samples)
+            labels, stats = wap.detect_objects(chosen, background)
+        except Exception as exc:
+            messagebox.showerror("Measure a worm",
+                                 f"Could not sample this recording.\n\n{exc}",
+                                 parent=self)
+            self.status.set("Worm measurement failed.")
+            return
+
+        self.status.set("Click on one animal in the frame.")
+        points = collect_image_points(
+            self, chosen, title="Measure a worm",
+            instructions=("Click once on a single animal - the middle of its "
+                          "body is best. WINK reads the detected object under "
+                          "your click, not the click itself, so precision is "
+                          "not required. Avoid two animals that are touching."),
+            mode="points", min_points=1, max_points=1,
+            process_log=ProcessLog("Measure a worm for the area gates"))
+        if not points:
+            self.status.set("Worm measurement cancelled.")
+            return
+
+        label = wap.object_at(labels, stats, float(points[0][0]),
+                              float(points[0][1]))
+        described = wap.describe(stats, label, scale=1.0)
+        suggested = wap.suggest_gates(described)
+        try:
+            current = (int(self.min_area.get()), int(self.max_area.get()))
+        except ValueError:
+            current = (0, 0)
+        why = wap.gates_look_wrong_for(described, *current)
+
+        message = (
+            f"Detected object under your click:\n\n"
+            f"    area          {described['source_area_px']:,.0f} source px\n"
+            f"    bounding span {described['span_source_px']:,.0f} px\n\n"
+            f"It is larger than {described['percentile_of_objects']:.0f}% of the "
+            f"{described['n_objects']} objects found in this frame.\n\n"
+            f"Suggested gates ({suggested['min_factor']:g}x to "
+            f"{suggested['max_factor']:g}x):\n"
+            f"    Minimum worm area   {suggested['min_area']:,}\n"
+            f"    Maximum worm area   {suggested['max_area']:,}\n\n"
+            f"That would keep {suggested['kept_objects']} of "
+            f"{suggested['n_objects']} objects in this frame.\n\n")
+        if why:
+            message += f"Your current gates {current[0]}/{current[1]}: {why}.\n\n"
+        if described["percentile_of_objects"] < 60:
+            message = ("NOTE: the object you clicked is smaller than most "
+                       "objects in the frame, which usually means a noise blob "
+                       "was clicked rather than an animal. Check the numbers "
+                       "below before applying.\n\n") + message
+        message += "Apply these values?"
+
+        if not messagebox.askyesno("Measure a worm", message, parent=self):
+            self.status.set("Measured animal not applied.")
+            return
+        self.min_area.set(str(suggested["min_area"]))
+        self.max_area.set(str(suggested["max_area"]))
+        self.log("Area gates measured",
+                 f"animal {described['source_area_px']:,.0f} px -> gates "
+                 f"{suggested['min_area']}/{suggested['max_area']}", "info")
+        self.status.set(
+            f"Area gates set from a measured animal: "
+            f"{suggested['min_area']}-{suggested['max_area']} px.")
 
     def measure_motion(self):
         """Measure how far worm-sized objects actually move between frames.
