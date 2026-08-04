@@ -13,6 +13,11 @@ import numpy as np
 import pandas as pd
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"app"))
+# The arithmetic behind "Measure a worm" lives in app/worm_area_probe.py, which
+# was lifted FROM this file so every module derives area gates the same way.
+# tests/test_worm_area_probe.py recomputes the legacy formulas inline and
+# asserts the probe reproduces them exactly, so the two cannot silently drift.
+import worm_area_probe as wap
 from population_swimming import (analyze,list_frames,read_gray,summarize_tracks,
                                  recompute_from_detections,
                                  SPINE_METHODS,SPINE_METHOD_DEFAULT,
@@ -518,13 +523,10 @@ class App(CockpitApp):
             files.close()
             messagebox.showerror("Measure a worm",f"Could not sample the recording.\n\n{exc}",parent=self);return
         files.close()
-        diff=cv2.absdiff(chosen,background);diff=cv2.GaussianBlur(diff,(3,3),0)
-        _,mask=cv2.threshold(diff,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-        count,labels,stats,_=cv2.connectedComponentsWithStats(mask)
-        if count<2:
-            messagebox.showinfo("Measure a worm",
-                                "No moving objects were found in the sampled frame. "
-                                "Try a recording where the animals move.",parent=self);return
+        try:
+            labels,stats=wap.detect_objects(chosen,background)
+        except ValueError as exc:
+            messagebox.showinfo("Measure a worm",str(exc),parent=self);return
         self.status.set("Click on one worm in the frame.")
         points=collect_image_points(
             self,chosen,title="Measure a worm",
@@ -536,17 +538,12 @@ class App(CockpitApp):
         if not points:
             self.status.set("Worm measurement cancelled.");return
         px,py=float(points[0][0]),float(points[0][1])
-        label=int(labels[int(np.clip(py,0,labels.shape[0]-1)),
-                         int(np.clip(px,0,labels.shape[1]-1))])
-        if label<=0:                       # clicked background: take the nearest object
-            centroids=np.stack([stats[1:,cv2.CC_STAT_LEFT]+stats[1:,cv2.CC_STAT_WIDTH]/2,
-                                stats[1:,cv2.CC_STAT_TOP]+stats[1:,cv2.CC_STAT_HEIGHT]/2],1)
-            label=int(np.argmin(np.hypot(centroids[:,0]-px,centroids[:,1]-py)))+1
-        proxy_area=float(stats[label,cv2.CC_STAT_AREA])
-        w_px=float(stats[label,cv2.CC_STAT_WIDTH]);h_px=float(stats[label,cv2.CC_STAT_HEIGHT])
-        source_area=proxy_area/(scale*scale)
-        span_px=float(np.hypot(w_px,h_px))/scale
-        thickness_proxy=proxy_area/max(1.0,float(np.hypot(w_px,h_px)))
+        label=wap.object_at(labels,stats,px,py)
+        described=wap.describe(stats,label,scale)
+        proxy_area=described["proxy_area_px"]
+        source_area=described["source_area_px"]
+        span_px=described["span_source_px"]
+        thickness_proxy=described["thickness_proxy_px"]
         # Measure how far worm-sized objects actually travel between frames.
         # max_link_px was hard-coded at 60 source px; on this class of recording
         # animals move a few px per frame, and an over-large gate lets the
@@ -559,29 +556,17 @@ class App(CockpitApp):
                 seq=[np.asarray(f) for f in probe.sampled_proxy_frames(pair_idx,scale)]
             finally:
                 probe.close()
-            steps=[]
-            previous=None
-            for frame in seq:
-                dd=cv2.GaussianBlur(cv2.absdiff(frame,background),(3,3),0)
-                _,mm=cv2.threshold(dd,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-                cn,_,st,ct=cv2.connectedComponentsWithStats(mm)
-                pts=np.array([ct[k] for k in range(1,cn)
-                              if st[k,cv2.CC_STAT_AREA]>=0.3*proxy_area],float)
-                if previous is not None and len(pts) and len(previous):
-                    for q in pts:
-                        steps.append(float(np.min(np.hypot(previous[:,0]-q[0],
-                                                           previous[:,1]-q[1]))))
-                previous=pts
-            if len(steps)>=20:
-                # p95 of observed motion, with headroom for missed frames.
-                link_suggestion=max(8.0,round(float(np.percentile(steps,95))/scale*3.0))
+            # p95 of observed motion with headroom, shared with every other
+            # module through the probe. Returns None when too few frames
+            # resolve, rather than a guessed number.
+            link_suggestion=wap.estimate_link_px(seq,background,proxy_area,scale)
         except Exception:
             link_suggestion=None
-        all_areas=np.sort(stats[1:,cv2.CC_STAT_AREA].astype(float))
-        percentile=100.0*float((all_areas<=proxy_area).sum())/max(1,len(all_areas))
-        low=max(1.0,round(source_area*self.MEASURE_MIN_FACTOR))
-        high=round(source_area*self.MEASURE_MAX_FACTOR)
-        kept=int(((all_areas>=low*scale*scale)&(all_areas<=high*scale*scale)).sum())
+        all_areas=described["all_areas_proxy"]
+        percentile=described["percentile_of_objects"]
+        gates=wap.suggest_gates(described,self.MEASURE_MIN_FACTOR,
+                                self.MEASURE_MAX_FACTOR)
+        low,high,kept=gates["min_area"],gates["max_area"],gates["kept_objects"]
         thin_warning=("\n\nWARNING: at this detection resolution the animal is only about "
                       f"{thickness_proxy:.1f} px thick. Below ~3 px the standard skeleton "
                       "fragments and spines become unreliable - prefer 50% or original "

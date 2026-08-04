@@ -125,6 +125,61 @@ thin = wap.describe(stats, label, scale=0.25)
 check("thickness is reported so a fragmenting skeleton can be predicted",
       "too_thin_for_skeleton" in thin)
 
+# --- equivalence with the implementation this was lifted from -------------
+# population_swimming_tool.measure_worm has NO test coverage, so migrating it
+# onto this module cannot be verified by its own suite. Instead the legacy
+# arithmetic is recomputed here, inline and independently, and the probe must
+# reproduce it exactly. If the two ever diverge this fails, whichever side
+# moved - which is what makes the migration safe to perform at all.
+import cv2  # noqa: E402
+
+frames2, true_area2 = make_frames(seed=7)
+bg2, chosen2 = wap.background_and_frame(frames2)
+labels2, stats2 = wap.detect_objects(chosen2, bg2)
+cx2, cy2 = 20 + (len(frames2) // 2) * 6 + 15, 104
+scale = 1.0
+
+# --- legacy, transcribed from population_swimming_tool.py ---
+lab = int(labels2[int(np.clip(cy2, 0, labels2.shape[0] - 1)),
+                  int(np.clip(cx2, 0, labels2.shape[1] - 1))])
+if lab <= 0:
+    cent = np.stack([stats2[1:, cv2.CC_STAT_LEFT] + stats2[1:, cv2.CC_STAT_WIDTH] / 2,
+                     stats2[1:, cv2.CC_STAT_TOP] + stats2[1:, cv2.CC_STAT_HEIGHT] / 2], 1)
+    lab = int(np.argmin(np.hypot(cent[:, 0] - cx2, cent[:, 1] - cy2))) + 1
+legacy_proxy = float(stats2[lab, cv2.CC_STAT_AREA])
+lw = float(stats2[lab, cv2.CC_STAT_WIDTH]); lh = float(stats2[lab, cv2.CC_STAT_HEIGHT])
+legacy_source = legacy_proxy / (scale * scale)
+legacy_span = float(np.hypot(lw, lh)) / scale
+legacy_thick = legacy_proxy / max(1.0, float(np.hypot(lw, lh)))
+legacy_all = np.sort(stats2[1:, cv2.CC_STAT_AREA].astype(float))
+legacy_pct = 100.0 * float((legacy_all <= legacy_proxy).sum()) / max(1, len(legacy_all))
+legacy_low = max(1.0, round(legacy_source * 0.40))
+legacy_high = round(legacy_source * 5.0)
+legacy_kept = int(((legacy_all >= legacy_low * scale * scale)
+                   & (legacy_all <= legacy_high * scale * scale)).sum())
+
+# --- the probe ---
+probe_label = wap.object_at(labels2, stats2, cx2, cy2)
+d2 = wap.describe(stats2, probe_label, scale)
+g2 = wap.suggest_gates(d2)
+
+check("probe picks the same object as the legacy click logic",
+      probe_label == lab, f"{probe_label} vs {lab}")
+check("probe area matches legacy exactly",
+      d2["source_area_px"] == legacy_source, f"{d2['source_area_px']} vs {legacy_source}")
+check("probe span matches legacy exactly",
+      d2["span_source_px"] == legacy_span)
+check("probe thickness matches legacy exactly",
+      d2["thickness_proxy_px"] == legacy_thick)
+check("probe percentile matches legacy exactly",
+      d2["percentile_of_objects"] == legacy_pct)
+check("probe gates match legacy exactly",
+      g2["min_area"] == int(legacy_low) and g2["max_area"] == int(legacy_high),
+      f"{g2['min_area']}/{g2['max_area']} vs {int(legacy_low)}/{int(legacy_high)}")
+check("probe kept-count matches legacy exactly",
+      g2["kept_objects"] == legacy_kept,
+      f"{g2['kept_objects']} vs {legacy_kept}")
+
 print()
 failed = [n for n, ok_, _ in results if not ok_]
 print(f"{len(results) - len(failed)} of {len(results)} checks passed")
