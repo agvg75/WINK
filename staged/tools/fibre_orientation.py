@@ -324,6 +324,122 @@ def boundary_evidence(angles, coherence, image, um_per_px, **kw):
     }
 
 
+def longitudinal_evidence(image, angles, coherence, um_per_px,
+                          row_um=10.0, striation_um=1.5):
+    """Evidence for a LONGITUDINAL myocyte seam at each pixel.
+
+    Andres's hand marks settled the geometry: 99% of boundary ink runs within
+    30 degrees of the body axis. Cells tile in rows stacked across the width,
+    so a seam is a step ACROSS y, not along x. Everything here is therefore
+    differentiated in y - the transpose of the first, wrong, design.
+
+    Two cues, kept separate:
+      * brightness - each myocyte takes up phalloidin individually, so the
+        band-passed intensity steps between rows. Differentiated across y.
+      * fibre continuity - at a seam one cell's striations end and the next's
+        begin, usually offset. The fibres either side are nearly PARALLEL
+        there, so an angle-turn detector is the wrong instrument; what breaks
+        is alignment, which shows as a coherence trough.
+    """
+    from scipy import ndimage as ndi
+
+    img = np.asarray(image, dtype=float)
+    s_small = max(striation_um / um_per_px, 0.8)
+    s_row = max(row_um / um_per_px, s_small * 2)
+
+    # Band-pass, then step across y. Smooth ALONG x much harder than across y:
+    # a seam is coherent over a long run in x and thin in y, so anisotropic
+    # smoothing raises it above texture without blurring the thing being found.
+    banded = ndi.gaussian_filter(img, s_small) - ndi.gaussian_filter(img, s_row)
+    dy = ndi.gaussian_filter1d(banded, s_small, axis=0, order=1)
+    # Elongate along x, but only mildly. Smoothing hard in x flattens the
+    # evidence into horizontal bands, and the traced path then cannot follow a
+    # boundary that slants - which is most of them, since myocytes are
+    # rhomboid. The anisotropy has to be enough to suppress texture and no
+    # more.
+    bright = ndi.gaussian_filter(np.abs(dy), (s_small, s_row * 0.75))
+
+    # Alignment trough, likewise mildly elongated along x.
+    coh2d = np.nanmean(np.asarray(coherence, dtype=float), axis=0) \
+        if np.asarray(coherence).ndim == 3 else np.asarray(coherence, dtype=float)
+    coh_s = ndi.gaussian_filter(coh2d, (s_small, s_row * 0.75))
+    trough = np.clip(ndi.gaussian_filter(coh_s, (s_row, s_row)) - coh_s, 0, None)
+
+    # Normalise from a LOW floor. The default _norm clips at the median, which
+    # zeroes half the field; a geometric mean of two such maps is exact zero
+    # almost everywhere and the path search then runs on noise rather than on
+    # evidence. Seam tracing needs a graded field, not a sparse one.
+    a, b = _norm(bright, 5, 99), _norm(trough, 5, 99)
+    return {"brightness_step_y": bright, "alignment_trough": trough,
+            "brightness_norm": a, "alignment_norm": b,
+            "combined": np.sqrt(a * b), "banded": banded}
+
+
+def trace_seams(evidence, n_seams=6, min_separation_px=12, max_slope=1):
+    """Find the strongest left-to-right seams through an evidence map.
+
+    Dynamic programming over paths that step at most `max_slope` pixels in y
+    per column. That constraint is the anatomy: a myocyte seam drifts gently
+    across the field, so a path free to jump would fit noise, and a path
+    forced straight could not follow a rhomboid edge. It also makes a vertical
+    boundary structurally impossible to return, which is the failure mode the
+    first design produced.
+
+    Seams are taken strongest-first with a suppression band between them, so
+    one strong boundary cannot be reported several times over.
+    """
+    E = np.asarray(evidence, dtype=float)
+    H, W = E.shape
+    avail = np.ones(H, dtype=bool)
+    seams, scores = [], []
+
+    for _ in range(int(n_seams)):
+        work = np.where(avail[:, None], E, -1e6)
+        cost = np.full((H, W), -np.inf)
+        back = np.zeros((H, W), dtype=int)
+        cost[:, 0] = work[:, 0]
+        offs = list(range(-max_slope, max_slope + 1))
+        for x in range(1, W):
+            best = np.full(H, -np.inf)
+            bidx = np.zeros(H, dtype=int)
+            for o in offs:
+                shifted = np.full(H, -np.inf)
+                if o < 0:
+                    shifted[-o:] = cost[:H + o, x - 1]
+                elif o > 0:
+                    shifted[:H - o] = cost[o:, x - 1]
+                else:
+                    shifted = cost[:, x - 1]
+                better = shifted > best
+                best = np.where(better, shifted, best)
+                bidx = np.where(better, o, bidx)
+            cost[:, x] = work[:, x] + best
+            back[:, x] = bidx
+
+        end = int(np.argmax(cost[:, -1]))
+        if not np.isfinite(cost[end, -1]) or cost[end, -1] < -1e5:
+            break
+        path = np.zeros(W, dtype=int)
+        path[-1] = end
+        for x in range(W - 1, 0, -1):
+            # back holds the OFFSET o such that shifted[y] == cost[y + o],
+            # i.e. the predecessor row is y + o. Subtracting it instead of
+            # adding walks every path the wrong way.
+            path[x - 1] = np.clip(path[x] + back[path[x], x], 0, H - 1)
+        mean_e = float(E[path, np.arange(W)].mean())
+        seams.append(path)
+        scores.append(mean_e)
+        for x in range(W):
+            lo = max(path[x] - min_separation_px, 0)
+            hi = min(path[x] + min_separation_px + 1, H)
+            avail[lo:hi] = False
+        if not avail.any():
+            break
+
+    order = np.argsort([-s for s in scores])
+    return [seams[i] for i in order], [scores[i] for i in order]
+
+
 def _windowed_mean_angle(mean_angle, lo, hi):
     """Circular mean of undirected angles over a slice, NaNs ignored."""
     seg = mean_angle[lo:hi]
