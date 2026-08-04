@@ -31,6 +31,65 @@ SPINE_METHODS = ("morphological", "thinning")
 SPINE_METHOD_DEFAULT = "morphological"
 
 
+try:                                    # shared implementation lives in app/
+    from table_io import coerce_numeric  # noqa: F401
+except Exception:                        # pragma: no cover - kept importable
+    coerce_numeric = None
+
+
+def _coerce_numeric_fallback(df, columns=None, min_numeric_fraction=0.6):
+    """Force measurement columns to a real numeric dtype after reading a CSV.
+
+    PANDAS 3 REGRESSION, seen in the field 2026-08-04. A numeric column holding
+    any stray non-numeric cell used to be read as `object`; pandas 3 reads it as
+    StringDtype instead. numpy refuses both:
+
+        TypeError: ufunc 'isfinite' not supported for the input types
+
+    so one bad cell anywhere in a column now aborts the whole analysis, with a
+    message that names numpy internals rather than the column at fault. Coercing
+    at read time turns that into the NaN it always should have been - and NaN is
+    already handled everywhere downstream, because these columns are full of it
+    by design.
+
+    WHICH COLUMNS ARE TOUCHED IS DECIDED FROM THE DATA, NOT THE NAME. The first
+    version of this matched column names against patterns like "_s" and "_x",
+    which also match `fps_source`, `um_per_px_source` and `spine_x_json` -
+    genuine TEXT columns recording whether a frame rate was declared or guessed.
+    Coercing those turns "declared" into NaN and erases the provenance silently,
+    which is a worse bug than the one being fixed. So a column is only converted
+    when most of its non-empty values already parse as numbers.
+
+    The threshold sits in a wide gap rather than on a guess. Measured across the
+    lab's own result CSVs: text provenance columns (`fps_source`,
+    `um_per_px_source`, `spine_skip_reason`, `edge_source`) parse at **0%**,
+    while measurement columns parse at 75-100% even when they carry stray
+    sentinels. Half-way between leaves room on both sides, and a column that is
+    genuinely half numbers and half words is ambiguous enough that leaving it
+    alone is the safer default.
+    """
+    if columns is None:
+        columns = list(df.columns)
+    for c in columns:
+        if c not in df.columns:
+            continue
+        s = df[c]
+        if s.dtype.kind in "fiub":
+            continue
+        present = s.notna()
+        if not present.any():
+            continue
+        coerced = pd.to_numeric(s, errors="coerce")
+        rescued = float(coerced[present].notna().mean())
+        if rescued >= min_numeric_fraction:
+            df[c] = coerced
+    return df
+
+
+if coerce_numeric is None:               # app/ not importable in this context
+    coerce_numeric = _coerce_numeric_fallback
+
+
 def _morphological_skeleton(component):
     """Erosion-residue skeleton. The historical WINK method, kept as the default
     so existing results remain reproducible.
@@ -796,7 +855,7 @@ def recompute_from_detections(results_dir, fps, um_per_px, output_dir=None,
             progress(done, total)
 
     report(0, 1, "Reloading saved detections")
-    tracks = pd.read_csv(detections_path)
+    tracks = coerce_numeric(pd.read_csv(detections_path))
 
     metadata = {}
     metadata_path = results_dir / "analysis_metadata.json"
