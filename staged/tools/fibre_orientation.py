@@ -50,7 +50,25 @@ CUE_POWER = {
 #   chance. It is the change in relative width that carries signal, never
 #   where the sheet sits in z.
 CUE_POWER_REJECTED = {"depth_value": 0.141, "depth_step": 0.392,
-                      "thickness_value": 0.422, "gradient_dIdy": 0.788}
+                      "thickness_value": 0.422, "gradient_dIdy": 0.788,
+                      "fibre_spacing": 0.972}
+
+# WHY fibre_spacing IS REJECTED DESPITE THE HIGHEST SCORE OF ANYTHING TESTED.
+# CUE_POWER asks "is this elevated at a marked boundary", which rewards a cue
+# that is broadly high across whole REGIONS containing boundaries. Fibre
+# spacing is large across every dim area - including the wide dark band
+# between quadrants - so it is elevated at the marks and useless for locating
+# them. A seam tracer needs a sharp ridge to follow, not a plateau. Measured
+# end-to-end: adding it took recall from 63.7% down to 49.9%.
+#
+# So this screening metric is a POOR PROXY for localisation and must never be
+# the sole reason to adopt a cue. Thickness is kept because it improved the
+# end-to-end trace, not because it scored 0.686. Always confirm with a trace.
+#
+# Note also that spacing came out with the OPPOSITE sign to the anatomical
+# prediction that fibres crowd together at an edge: measured spacing is WIDER
+# at boundaries. That may mean this ridge detector finds individual striations
+# where the real cue lives between fibre BUNDLES - untested.
 
 
 def structure_tensor_2d(plane, sigma=2.0, rho=4.0):
