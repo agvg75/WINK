@@ -122,12 +122,36 @@ class Recording:
                 f"Rendering anyway would draw one recording's geometry over "
                 f"another's numbers and look entirely normal.")
 
-    def _find_images(self):
-        if self.image_dir is None or not self.image_dir.exists():
+    # The extractor's own mapping, from WormRGBCaMPMap_v1.java:692 -
+    # "ch00 blue, ch01 green, ch02 red, ch03 DIC. Track on DIC, measure the
+    # three fluorescent channels." Never inferred from folder order.
+    CHANNEL_DIRS = (("blue", "ch00"), ("green", "ch01"), ("red", "ch02"))
+    DIC_DIR = "ch03"
+    IMAGE_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
+
+    def _list_images(self, folder):
+        if folder is None or not Path(folder).exists():
             return []
-        exts = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
-        files = sorted(p for p in self.image_dir.iterdir()
-                       if p.suffix.lower() in exts)
+        return sorted(p for p in Path(folder).iterdir()
+                      if p.suffix.lower() in self.IMAGE_EXTS)
+
+    def _find_images(self):
+        """The DIC sequence, plus the three fluorescent channels if they sit
+        beside it as the extractor expects.
+
+        Seeing the raw channel next to the diagram is the point: it is what
+        lets a viewer check that a bright cell in the schematic corresponds to
+        something actually present in the recording.
+        """
+        self.channel_files = {}
+        if self.image_dir is None:
+            return []
+        files = self._list_images(self.image_dir)
+        parent = self.image_dir.parent
+        for name, sub in self.CHANNEL_DIRS:
+            found = self._list_images(parent / sub)
+            if found:
+                self.channel_files[name] = found
         return files
 
     # -- derived, all read straight from the CSV ---------------------------
@@ -230,7 +254,74 @@ def _read_frame(path):
     return np.asarray(Image.open(path))
 
 
-def build_figure(rec, normalisation="percentile", figsize=(13.0, 7.2), dpi=110):
+# The channel TIFFs are RGB with the signal in the plane matching the channel:
+# ch00 carries blue in B, ch01 green in G, ch02 red in R, and the other two
+# planes are identically zero. Reading a fixed plane silently returns an
+# all-zero image for two channels out of three, which looks exactly like a
+# recording with no signal in them.
+CHANNEL_PLANE = {"blue": 2, "green": 1, "red": 0}
+
+
+def channel_plane(frame, name):
+    frame = np.asarray(frame)
+    if frame.ndim == 2:
+        return frame
+    return frame[..., CHANNEL_PLANE.get(name, 0)]
+
+
+def _channel_limits(files, name, n_sample=12, pct=(50.0, 100.0)):
+    """Display limits for one channel, sampled across the whole recording.
+
+    Sampled rather than autoscaled per frame so brightness is comparable frame
+    to frame - a per-frame rescale would make a dim frame look as bright as a
+    lit one, which for a calcium channel destroys the signal being looked at.
+
+    The percentiles are deliberately lopsided. An animal occupies a few percent
+    of the frame, so even a 99.8th percentile of ALL pixels is still plate
+    background: symmetric limits rendered the weaker channels completely black.
+    The median is the background level and the top fraction is the animal.
+    """
+    if not files:
+        return 0.0, 1.0
+    idx = np.unique(np.linspace(0, len(files) - 1,
+                                min(n_sample, len(files))).astype(int))
+    vals = []
+    for i in idx:
+        vals.append(np.asarray(channel_plane(_read_frame(files[int(i)]), name),
+                               dtype=float).ravel())
+    pooled = np.concatenate(vals)
+    lo, hi = np.percentile(pooled, pct[0]), np.percentile(pooled, pct[1])
+    if hi <= lo:
+        hi = lo + 1.0
+    return float(lo), float(hi)
+
+
+def smooth_window_frames(seconds, fps):
+    """Odd frame count for a smoothing window given in seconds."""
+    n = int(round(float(seconds) * float(fps)))
+    if n < 2:
+        return 0
+    return n + 1 if n % 2 == 0 else n
+
+
+def moving_average(values, window):
+    """NaN-aware centred moving average. Gaps stay gaps: a window with no
+    finite samples returns NaN rather than borrowing from further away, so a
+    smoothed trace never draws across a stretch where nothing was measured."""
+    v = np.asarray(values, dtype=float)
+    if window < 2:
+        return v
+    finite = np.isfinite(v).astype(float)
+    filled = np.where(np.isfinite(v), v, 0.0)
+    kernel = np.ones(int(window), dtype=float)
+    num = np.convolve(filled, kernel, mode="same")
+    den = np.convolve(finite, kernel, mode="same")
+    out = np.divide(num, den, out=np.full_like(num, np.nan), where=den > 0)
+    return out
+
+
+def build_figure(rec, normalisation="percentile", smooth_s=0.6,
+                 width_in=15.0, dpi=110):
     """Static layers drawn once; returns the artists that change per frame.
 
     The split is the point: axes, the diagram outline, the whole velocity
@@ -247,34 +338,84 @@ def build_figure(rec, normalisation="percentile", figsize=(13.0, 7.2), dpi=110):
     kymo = rec.curvature_kymograph()
     prov = rec.provenance_summary()
 
-    fig = plt.figure(figsize=figsize, dpi=dpi)
-    fig.patch.set_facecolor("white")
-    # The frame is square and the diagram is a long thin worm, so stacking them
-    # wasted width on one and height on the other. Side by side, the row is set
-    # by the taller of the two and the movie loses a third of its height.
-    gs = GridSpec(3, 2, figure=fig, width_ratios=[1.0, 3.05],
-                  height_ratios=[2.2, 1.0, 1.15],
-                  hspace=0.55, wspace=0.06,
-                  left=0.075, right=0.975, top=0.92, bottom=0.09)
+    # Row heights are derived from the CONTENT's aspect, not guessed, so
+    # nothing letterboxes: square frames get a row as tall as they are wide,
+    # and the schematic gets a row matching its own 4.2:1 worm. Guessing these
+    # is what left white gutters either side of everything.
+    panels_n = 1 + sum(1 for n, _ in rec.CHANNEL_DIRS if n in rec.channel_files)
+    left, right = 0.05, 0.99
+    usable_w = width_in * (right - left)
+    # Capped: with only the DIC panel present, a full-width square row would
+    # make the figure taller than it is wide and produce an absurd movie.
+    frame_row = min(usable_w / max(1, panels_n), 4.0)   # square frames
+    diagram_row = usable_w / 4.2                     # the schematic's aspect
+    rows = [frame_row, diagram_row, 1.55, 2.0]
+    height_in = sum(rows) + 1.5                      # titles, captions, margins
 
-    ax_img = fig.add_subplot(gs[0, 0])
-    ax_dia = fig.add_subplot(gs[0, 1])
-    ax_vel = fig.add_subplot(gs[1, :])
-    ax_kym = fig.add_subplot(gs[2, :])
+    fig = plt.figure(figsize=(width_in, height_in), dpi=dpi)
+    fig.patch.set_facecolor("white")
+    # Top row is the DIC frame with its overlay, then each fluorescent channel
+    # raw beside it. That row is what lets a viewer check that a bright cell in
+    # the diagram below corresponds to signal actually present in the
+    # recording, rather than taking the schematic on trust.
+    panels = ["DIC"] + [n for n, _ in rec.CHANNEL_DIRS if n in rec.channel_files]
+    n_panels = max(1, len(panels))
+    gs = GridSpec(4, n_panels, figure=fig, height_ratios=rows,
+                  hspace=0.34, wspace=0.02,
+                  left=left, right=right,
+                  top=1.0 - 0.55 / height_in, bottom=0.62 / height_in)
+
+    image_axes = [fig.add_subplot(gs[0, i]) for i in range(n_panels)]
+    ax_img = image_axes[0]
+    ax_dia = fig.add_subplot(gs[1, :])
+    ax_vel = fig.add_subplot(gs[2, :])
+    ax_kym = fig.add_subplot(gs[3, :])
 
     dyn = {}
 
-    # -- panel 1: worm + overlay -------------------------------------------
-    ax_img.set_title("frame 1", fontsize=10, loc="left", color="#22303A")
-    ax_img.axis("off")
+    # -- top row: DIC with overlay, then each channel raw -------------------
+    from matplotlib.colors import LinearSegmentedColormap
+    # Black -> the channel's own hue, so a frame reads as fluorescence rather
+    # than a wash of colour. A matplotlib "Blues_r" puts the BACKGROUND in
+    # saturated blue and the signal in white, which inverts the thing being
+    # looked at.
+    CH_HUE = {"blue": (0.25, 0.45, 1.0), "green": (0.15, 1.0, 0.35),
+              "red": (1.0, 0.25, 0.2)}
+    dyn["channels_img"] = {}
+    for ax, name in zip(image_axes, panels):
+        ax.axis("off")
+        ax.set_title(name if name == "DIC" else f"{name} channel (raw)",
+                     fontsize=9, loc="left", color="#22303A")
     if rec.image_files:
         first = _read_frame(rec.image_files[0])
         dyn["image"] = ax_img.imshow(
             first, cmap=None if first.ndim == 3 else "gray", animated=True)
     else:
         ax_img.text(0.5, 0.5,
-                    "no image sequence supplied - panels 2-4 are unaffected",
-                    ha="center", va="center", fontsize=10, color="#a00000")
+                    "no image sequence supplied - the panels below are unaffected",
+                    ha="center", va="center", fontsize=9, color="#a00000")
+    for ax, name in zip(image_axes[1:], panels[1:]):
+        files = rec.channel_files[name]
+        frame0 = channel_plane(_read_frame(files[0]), name)
+        hue = CH_HUE.get(name, (1.0, 1.0, 1.0))
+        cmap = LinearSegmentedColormap.from_list(
+            f"wink_{name}", [(0, 0, 0), hue, (1, 1, 1)])
+        # Fixed limits computed ACROSS the recording, not autoscaled off the
+        # first frame: a channel whose opening frame happens to be flat would
+        # otherwise stay flat for the whole movie, which is exactly what a weak
+        # blue channel did. Percentiles so one saturated speck cannot flatten
+        # everything else.
+        lo, hi = _channel_limits(files, name)
+        dyn["channels_img"][name] = ax.imshow(
+            frame0, cmap=cmap, vmin=lo, vmax=hi, animated=True)
+        ax.set_title("%s channel (raw)   shown %.0f-%.0f" % (name, lo, hi),
+                     fontsize=8, loc="left", color="#22303A")
+        # The animal's outline in white on every channel, so a dim channel
+        # still shows WHERE the worm is rather than looking empty. No signal
+        # and no animal are different findings and must not look alike.
+        outline, = ax.plot([], [], lw=0.9, color="white", alpha=0.9,
+                           animated=True)
+        dyn.setdefault("channel_outlines", {})[name] = outline
     line, = ax_img.plot([], [], lw=1.4, color="#00C8FF", animated=True)
     dyn["midline"] = line
     dyn["bands"] = []
@@ -304,13 +445,21 @@ def build_figure(rec, normalisation="percentile", figsize=(13.0, 7.2), dpi=110):
         fontsize=8, loc="left", color="#3E4F58", linespacing=1.6)
 
     # -- panel 3: velocity --------------------------------------------------
-    if vel_um is not None:
-        ax_vel.plot(times, vel_um, lw=1.0, color="#3A4A52")
-        ax_vel.set_ylabel("axial velocity\n(um/s, declared scale)", fontsize=8)
+    # Smoothing is a DISPLAY choice, so the raw trace stays visible underneath
+    # it. A smoothed line alone would look like a cleaner measurement than the
+    # one that was taken, which is the one thing this module must not do.
+    win = smooth_window_frames(smooth_s, rec.fps)
+    series = vel_um if vel_um is not None else vel_px
+    units = ("um/s, declared scale" if vel_um is not None
+             else "px/s - scale NOT calibrated")
+    if win >= 2:
+        ax_vel.plot(times, series, lw=0.7, color="#B8C2C7", zorder=1)
+        ax_vel.plot(times, moving_average(series, win), lw=1.4,
+                    color="#3A4A52", zorder=2)
+        units += f"\nsmoothed {win} frames ({win / rec.fps:.1f} s), raw in grey"
     else:
-        ax_vel.plot(times, vel_px, lw=1.0, color="#3A4A52")
-        ax_vel.set_ylabel("axial velocity\n(px/s - scale NOT calibrated)",
-                          fontsize=8)
+        ax_vel.plot(times, series, lw=1.0, color="#3A4A52")
+    ax_vel.set_ylabel("axial velocity\n(%s)" % units, fontsize=7.5)
     ax_vel.axhline(0, lw=0.6, color="#9AA6AC")
     ax_vel.set_xlim(float(times[0]), float(times[-1]))
     ax_vel.tick_params(labelsize=8)
@@ -318,12 +467,20 @@ def build_figure(rec, normalisation="percentile", figsize=(13.0, 7.2), dpi=110):
                                        lw=1.2, animated=True)
 
     # -- panel 4: curvature kymograph ---------------------------------------
-    finite = kymo[np.isfinite(kymo)]
+    # Smoothed along TIME only. Smoothing across segments would blur the
+    # head-to-tail structure the kymograph exists to show, and that structure
+    # is the wave.
+    shown = kymo
+    kym_note = ""
+    if win >= 2:
+        shown = np.vstack([moving_average(row, win) for row in kymo])
+        kym_note = f"\nsmoothed {win} frames in time"
+    finite = shown[np.isfinite(shown)]
     lim = float(np.percentile(np.abs(finite), 99)) if finite.size else 1.0
-    ax_kym.imshow(kymo, aspect="auto", cmap="RdBu_r", vmin=-lim, vmax=lim,
+    ax_kym.imshow(shown, aspect="auto", cmap="RdBu_r", vmin=-lim, vmax=lim,
                   extent=[float(times[0]), float(times[-1]), rec.n_seg, 0],
                   interpolation="nearest")
-    ax_kym.set_ylabel("segment\n(head at top)", fontsize=8)
+    ax_kym.set_ylabel("segment\n(head at top)%s" % kym_note, fontsize=7.5)
     ax_kym.set_xlabel("time (s)", fontsize=9)
     ax_kym.tick_params(labelsize=8)
     dyn["kym_cursor"] = ax_kym.axvline(float(times[0]), color="#111111",
@@ -358,8 +515,12 @@ def _update(rec, fig, dyn, ctx, i):
 
     if "image" in dyn and i < len(rec.image_files):
         dyn["image"].set_data(_read_frame(rec.image_files[i]))
-    ax_img.set_title("frame %d / %d" % (frame_no, rec.n_frames),
-                     fontsize=10, loc="left", color="#22303A")
+    for name, artist in dyn.get("channels_img", {}).items():
+        files = rec.channel_files.get(name, [])
+        if i < len(files):
+            artist.set_data(channel_plane(_read_frame(files[i]), name))
+    fig.suptitle("%s   -   frame %d / %d" % (rec.base, frame_no, rec.n_frames),
+                 fontsize=10, x=0.065, ha="left", color="#22303A")
 
     geo = rec.frame_geometry(frame_no)
     if geo is None:
@@ -384,6 +545,18 @@ def _update(rec, fig, dyn, ctx, i):
                     continue
                 poly.set_xy(np.asarray(pts, dtype=float))
                 poly.set_visible(True)
+
+    outline_xy = None
+    if geo is not None:
+        pts = np.array([[x, y] for x, y in geo.get("outline", [])
+                        if x is not None and y is not None], dtype=float)
+        if len(pts) >= 3:
+            outline_xy = np.vstack([pts, pts[:1]])
+    for artist in dyn.get("channel_outlines", {}).values():
+        if outline_xy is None:
+            artist.set_data([], [])
+        else:
+            artist.set_data(outline_xy[:, 0], outline_xy[:, 1])
 
     vals = ctx["values"][i]
     for key, patch in dyn["cells"].items():
@@ -410,11 +583,13 @@ def _dynamic_artists(dyn):
            dyn.get("vel_cursor"), dyn.get("kym_cursor")]
     out += list(dyn.get("bands", []))
     out += list(dyn.get("cells", {}).values())
+    out += list(dyn.get("channels_img", {}).values())
+    out += list(dyn.get("channel_outlines", {}).values())
     return [a for a in out if a is not None]
 
 
-def render(rec, out_path, normalisation="percentile", decimate=1, fps=None,
-           progress=None):
+def render(rec, out_path, normalisation="percentile", smooth_s=0.6,
+           decimate=1, fps=None, progress=None):
     """Write the movie and its provenance JSON. Returns (path, provenance)."""
     import matplotlib
     matplotlib.use("Agg")
@@ -422,7 +597,8 @@ def render(rec, out_path, normalisation="percentile", decimate=1, fps=None,
     import imageio.v2 as imageio
 
     out_path = Path(out_path)
-    fig, dyn, ctx = build_figure(rec, normalisation=normalisation)
+    fig, dyn, ctx = build_figure(rec, normalisation=normalisation,
+                                 smooth_s=smooth_s)
     canvas = fig.canvas
     canvas.draw()
     background = canvas.copy_from_bbox(fig.bbox)
@@ -438,7 +614,12 @@ def render(rec, out_path, normalisation="percentile", decimate=1, fps=None,
             for artist in _dynamic_artists(dyn):
                 fig.draw_artist(artist)
             canvas.blit(fig.bbox)
-            writer.append_data(np.asarray(canvas.buffer_rgba())[..., :3])
+            frame = np.asarray(canvas.buffer_rgba())[..., :3]
+            # libx264 rejects odd dimensions, and the figure size is derived
+            # from content aspect so it lands on one whenever it likes. Trim
+            # rather than rescale: a rescale would resample every pixel.
+            frame = frame[:frame.shape[0] // 2 * 2, :frame.shape[1] // 2 * 2]
+            writer.append_data(frame)
             if progress and (n % 20 == 0 or n == len(indices) - 1):
                 progress(n + 1, len(indices))
     finally:
@@ -454,6 +635,9 @@ def render(rec, out_path, normalisation="percentile", decimate=1, fps=None,
         "decimate": int(decimate), "output_fps": out_fps,
         "n_seg": rec.n_seg, "band_names": rec.band_names,
         "normalisation": normalisation,
+        "smoothing_seconds": float(smooth_s),
+        "smoothing_frames": smooth_window_frames(smooth_s, rec.fps),
+        "channels_shown": sorted(rec.channel_files),
         "channel_ranges": {k: list(v) for k, v in ctx["ranges"].items()},
         "um_per_px_declared": rec.um_per_px,
         "velocity_units": "um/s" if rec.um_per_px > 0 else "px/s",
@@ -465,7 +649,7 @@ def render(rec, out_path, normalisation="percentile", decimate=1, fps=None,
     return out_path, prov
 
 
-def preview(rec, out_path, normalisation="percentile", n=4):
+def preview(rec, out_path, normalisation="percentile", smooth_s=0.6, n=4):
     """Contact sheet of representative frames.
 
     Choosing a normalisation from four stills beats rendering a whole movie
@@ -481,7 +665,8 @@ def preview(rec, out_path, normalisation="percentile", n=4):
     picks = sorted({0, int(ordered[0]), int(ordered[len(ordered) // 2]),
                     int(ordered[-1])})[:n]
 
-    fig, dyn, ctx = build_figure(rec, normalisation=normalisation)
+    fig, dyn, ctx = build_figure(rec, normalisation=normalisation,
+                                 smooth_s=smooth_s)
     sheet, axes = plt.subplots(len(picks), 1, figsize=(11, 3.2 * len(picks)))
     axes = np.atleast_1d(axes)
     for ax, i in zip(axes, picks):
