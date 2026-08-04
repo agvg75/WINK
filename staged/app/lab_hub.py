@@ -100,6 +100,17 @@ REGISTRY = [
          "Motor output - Locomotion", "python", "ready", "tools/worm_kinematics/run_one_kinematics_launcher.py"),
     Tool("Kinematics browser", "Browse one recording's kinematics results and figures.",
          "Motor output - Locomotion", "python", "ready", "tools/worm_kinematics/kinematics_browser_launcher.py"),
+    Tool("Kinematics results movie",
+         "Render one tracked recording as a movie: the frame with its midline, "
+         "head and tail overlaid, head-bend, centroid speed and a curvature "
+         "kymograph on one time cursor. Plays at real time whatever the frame "
+         "decimation, and ticks every needs_help frame on each trace. Renders "
+         "what the tracker already exported and measures nothing itself.",
+         "Motor output - Locomotion", "python", "ready",
+         "tools/worm_kinematics/kinematics_movie_launcher.py",
+         requires="a kinematics CSV from Track one worm (frame, time_s, segment, "
+                  "seg_curv_deg, fps), and the image stack or folder it was "
+                  "tracked on for the overlay panel"),
     Tool("Single-worm swimming analysis", "Measure swim frequency, occupancy, amplitude, phase, and usable coverage from a swimming track.",
          "Motor output - Locomotion", "python", "ready", "tools/worm_kinematics/swimming_analysis_launcher.py",
          requires="a Track one worm CSV recorded in swimming mode"),

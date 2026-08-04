@@ -61,8 +61,17 @@ def moving_average(values, window):
     stretch where nothing was measured.
     """
     v = np.asarray(values, dtype=float)
-    if window < 2:
+    window = int(window)
+    if window < 2 or v.size == 0:
         return v
+    # np.convolve(mode="same") returns max(len(data), len(kernel)), so a window
+    # LONGER than the recording silently returns more samples than it was
+    # given - the smoothed trace then no longer aligns with its own time axis.
+    # Harmless on a 6000-frame recording, fatal on a short one.
+    if window > v.size:
+        window = v.size if v.size % 2 else v.size - 1
+        if window < 2:
+            return v
     finite = np.isfinite(v).astype(float)
     filled = np.where(np.isfinite(v), v, 0.0)
     kernel = np.ones(int(window), dtype=float)
@@ -123,6 +132,32 @@ class FrameSource:
         if arr.ndim == 3:
             arr = arr[..., self.plane if self.plane is not None else 0]
         return arr
+
+    def close(self):
+        """Release the stack handle.
+
+        A multipage stack is held open and seeked, which is what makes it fast
+        - but an unreleased handle keeps a Windows lock on the file for the
+        life of the process, so nothing else can move, replace or delete it.
+        On a network share that is somebody else's tool failing for no visible
+        reason.
+        """
+        stack, self._stack = self._stack, None
+        if stack is not None:
+            try:
+                stack.close()
+            except Exception:
+                pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    def __del__(self):
+        self.close()
 
     def limits(self, n_sample=12, pct=(50.0, 100.0)):
         """Display limits sampled across the whole sequence. See

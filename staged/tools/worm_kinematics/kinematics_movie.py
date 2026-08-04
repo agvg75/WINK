@@ -83,8 +83,16 @@ class Recording:
         self.image_path = Path(image_path) if image_path else None
         self.images = mc.FrameSource(self.image_path) if self.image_path else None
         if self.images and len(self.images) and len(self.images) != self.n_frames:
+            # Close BEFORE raising. The stack is already open by this point, and
+            # the exception's traceback keeps this half-built object alive, so
+            # __del__ never runs and the file stays locked - every refused load
+            # would leak a handle, which on a share is somebody else's tool
+            # failing for no visible reason.
+            n_images = len(self.images)
+            self.images.close()
+            self.images = None
             raise MovieInputError(
-                f"The image stack has {len(self.images)} frames and the CSV "
+                f"The image stack has {n_images} frames and the CSV "
                 f"describes {self.n_frames}. These are not the same recording, "
                 f"or one of them is stale.\n\n"
                 f"Rendering anyway would draw one recording's midline over "
@@ -145,6 +153,19 @@ class Recording:
 
     def frame_geometry(self, frame_number):
         return self._geo.get(int(frame_number))
+
+    def close(self):
+        """Release the image stack handle. See movie_core.FrameSource.close -
+        an unreleased handle locks the file for the life of the process."""
+        if self.images is not None:
+            self.images.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
 
 def load(csv_path, image_path=None):
