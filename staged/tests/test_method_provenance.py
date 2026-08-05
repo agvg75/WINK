@@ -68,6 +68,81 @@ bad2 = {"y": dict(title="t", module="m", origin="andres",
 check("an origin that contributed nothing is caught",
       any("contributed nothing" in p for p in mp.check_registry(bad2)))
 
+# --- the bibliography -----------------------------------------------------
+rc = mp.check_references()
+check("every reference is well formed", not rc["problems"],
+      "; ".join(rc["problems"][:2]) if rc["problems"]
+      else f"{rc['n_references']} references")
+check("retrieved and recalled sources are kept apart",
+      len(rc["retrieved"]) > 0 and len(rc["recalled"]) > 0,
+      f"{len(rc['retrieved'])} retrieved, {len(rc['recalled'])} recalled")
+check("...every retrieved source carries the URL it came from",
+      all(mp.REFERENCES[k]["url"] for k in rc["retrieved"]))
+check("...and every recalled one says what must be verified",
+      all(mp.REFERENCES[k].get("check") for k in rc["recalled"]))
+check("the unverified ones are flagged as a publication blocker",
+      "VERIFY" in mp.references_section()
+      and "before publication" in rc["publication_blocker"])
+
+check("a method claiming literature support must cite something",
+      not [p for p in mp.check_registry() if "cites nothing" in p])
+bad3 = {"z": dict(title="t", module="m", origin="literature",
+                  contribution={"literature": "trust me"})}
+check("...and an uncited literature claim is caught",
+      any("cites nothing" in p for p in mp.check_registry(bad3)))
+bad4 = {"w": dict(title="t", module="m", origin="claude",
+                  contribution={"claude": "x"}, refs=["no_such_ref"])}
+check("a dangling reference key is caught",
+      any("unknown reference" in p for p in mp.check_registry(bad4)))
+
+# --- the supervision record -----------------------------------------------
+a = mp.contribution_audit()
+check("corrections are recorded, not just contributed methods",
+      a["corrections_total"] >= 8, f"{a['corrections_total']} corrections")
+check("...including reversals of the direction of the work",
+      a["reversals"] >= 3, f"{a['reversals']} reversals")
+check("...each naming an artefact so the claim is checkable",
+      all(c.get("evidence") for c in mp.CORRECTIONS))
+check("...and each saying what the implementation had had first",
+      all(c.get("assistant_had") and c.get("andres_said") and c.get("consequence")
+          for c in mp.CORRECTIONS))
+check("the audit states what the corrections establish",
+      "not output that was accepted uncritically" in a["what_this_establishes"])
+check("...and that it is checkable against the repository",
+      "commit history" in a["auditable"])
+
+# The record must cut both ways or it is advocacy, not an audit.
+check("the record also holds cases where his expectation was revised",
+      a["counter_record_entries"] >= 2, f"{a['counter_record_entries']} entries")
+check("...and says why a one-sided record would not count",
+      "advocacy" in a["not_one_sided"])
+check("every counter-record entry names what the evidence showed",
+      all(c.get("evidence_showed") and c.get("outcome")
+          for c in mp.COUNTER_RECORD))
+
+stmt = mp.contribution_statement()
+check("the contributions section carries both halves",
+      "Supervision record" in stmt and "the other way" in stmt)
+
+# --- what a future reader needs -------------------------------------------
+check("rejected alternatives are recorded with their numbers",
+      a["rejected_alternatives"] >= 6
+      and all(r.get("numbers") and r.get("why") for r in mp.REJECTED.values()),
+      f"{a['rejected_alternatives']} recorded")
+check("...each pointing at the method that superseded it",
+      all(r["instead_of"] in mp.METHODS for r in mp.REJECTED.values()))
+check("open problems name the data to work from",
+      a["open_problems"] >= 5
+      and all(p.get("data") and p.get("would_resolve")
+              for p in mp.OPEN_PROBLEMS.values()),
+      f"{a['open_problems']} open")
+
+brief = mp.supersession_brief()
+check("the brief warns that some rejects won on the obvious metric",
+      "scored BETTER on the obvious metric" in brief)
+check("...and lists the open problems with their data",
+      "Open problems" in brief and "myocyte_vertices_head.npz" in brief)
+
 # --- the human override ---------------------------------------------------
 machine = {"head_end": 0, "confidence": 0.42, "low_confidence": True,
            "cues": {"taper": 0.3}, "why": "weak"}
