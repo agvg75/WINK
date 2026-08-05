@@ -222,9 +222,26 @@ def measure(channels, assignment, min_pixels=8):
       max     the single brightest pixel. Kept because the contract has it, but
               it is one pixel: a hot camera pixel, a cosmic ray or a gut granule
               sets it, and it will not reproduce.
-      min     effectively the local background inside the ROI.
+      p10     a robust low value - the mirror of p90.
+      min     the DARKEST PIXEL in the ROI. Read the warning below before using
+              it as a resting-calcium measure.
 
-    Both `median` and `p90` are additions; `min`, `mean` and `max` are
+    RESTING CALCIUM IS NOT THE `min` COLUMN. This matters because elevated
+    resting calcium in dystrophic muscle is a real finding of this lab's, and
+    the column whose name suggests it does not carry it. `min` is a SPATIAL
+    minimum - the darkest pixel present on that frame - and on the hand-curated
+    extraction its median across hemisegments is 0.0. It is pinned to the
+    darkest background pixel that happened to fall inside the band, and it moves
+    when the band's edge moves.
+
+    The resting level is a TEMPORAL low percentile of the background-subtracted
+    mean, which is what `worm_kinetics.resting_calcium` computes (10th
+    percentile of `green_bgsub`, deliberately not of dF/F0, which subtracts its
+    own baseline and so cannot report a resting shift by construction). On the
+    same file that is 10.1 against an overall mean of 44.9 - a muscle at rest,
+    not a dark pixel.
+
+    `median`, `p90` and `p10` are additions; `min`, `mean` and `max` are
     unchanged, so nothing downstream breaks.
     """
 
@@ -252,11 +269,12 @@ def measure(channels, assignment, min_pixels=8):
                 v = np.asarray(img, dtype=float)[sel]
                 v = v[np.isfinite(v)]
                 if v.size == 0:
-                    for stat in ("min", "mean", "median", "p90", "max"):
+                    for stat in ("min", "p10", "mean", "median", "p90", "max"):
                         row[f"{name}_{stat}"] = None
                     continue
                 row[f"{name}_min"] = round(float(v.min()), 4)
                 row[f"{name}_mean"] = round(float(v.mean()), 4)
+                row[f"{name}_p10"] = round(float(np.percentile(v, 10)), 4)
                 row[f"{name}_median"] = round(float(np.median(v)), 4)
                 row[f"{name}_p90"] = round(float(np.percentile(v, 90)), 4)
                 row[f"{name}_max"] = round(float(v.max()), 4)
@@ -273,7 +291,11 @@ def measure(channels, assignment, min_pixels=8):
                    "this get'.",
             "max": "ONE pixel. A hot pixel or a gut granule sets it and it "
                    "will not reproduce. Kept for contract compatibility.",
-            "min": "effectively the local background inside the ROI.",
+            "p10": "a robust low value; the mirror of p90.",
+            "min": ("the DARKEST PIXEL in the ROI - on real data its median is "
+                    "0.0. NOT a resting-calcium measure: that is a TEMPORAL "
+                    "low percentile of the background-subtracted mean, which "
+                    "worm_kinetics.resting_calcium computes."),
         },
         "roi_is_geometric": (
             "A hemisegment is a BAND OF BODY PIXELS on one side of the "
