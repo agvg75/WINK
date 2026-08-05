@@ -318,6 +318,31 @@ METHODS = {
         },
         refs=["pearl_1988_noisy_or"]),
 
+    "brightness_statistic_choice": dict(
+        title="Which brightness statistic to report, and the ROI-area confound",
+        module="app/brightness_statistics.py", origin="joint",
+        contribution={
+            "andres": ("Asked what is actually being reported when we measure "
+                       "brightness, and then how the statistics behave against "
+                       "time and curvature - and asked for it to be tested on "
+                       "the RGBCaMP data already measured and hand curated "
+                       "rather than left synthetic."),
+            "claude": ("The diagnostic, and the ROI-area confound: a "
+                       "hemisegment ROI changes area with bending by geometry, "
+                       "so a statistic that tracks area appears to track "
+                       "curvature. area_control() partials it out and refuses "
+                       "when the two are collinear."),
+        },
+        verified=("On the hand-curated extraction: the confound is real and "
+                  "signed by side (ventral -0.55, dorsal +0.61 area vs "
+                  "curvature), and it removes 10 of 22 mean-based curvature "
+                  "relationships. Testing on real data reversed the "
+                  "synthetic-only guidance - see REJECTED."),
+        known_limits=("One worm, 135 frames. And median and p90 are absent "
+                      "from the Fiji extraction, so the two statistics "
+                      "expected to be most robust are still untested on real "
+                      "data.")),
+
     "coerce_numeric_from_data": dict(
         title="Decide column types from data, not from column names",
         module="app/table_io.py", origin="claude",
@@ -600,6 +625,22 @@ REJECTED = {
              "number of frames alternates between two values - 7.5 frames "
              "becomes 7, 8, 7, 8 - and the median picks one of them."),
         numbers="several percent rate bias; mean of steady intervals instead"),
+
+    "synthetic_roi_statistics": dict(
+        instead_of="brightness_statistic_choice",
+        alternative=("Choosing the brightness statistic from a synthetic ROI: "
+                     "max is area-biased and noisy, mean is fine."),
+        why=("Both halves failed on the lab's own hand-curated extraction. The "
+             "MEAN tracks ROI area (median r = -0.34, |r| > 0.3 in 27 of 48 "
+             "hemisegments) and the max barely does (-0.02); controlling for "
+             "area destroys 10 of 22 mean-based curvature relationships "
+             "against 1 of 13 for the max. The synthetic ROI had homogeneous "
+             "pixels, so it measured sampling noise in a uniform region. A "
+             "real hemisegment is 28 pixels of part muscle and part dark "
+             "tissue, and its mean is set by how much dark tissue the bend "
+             "happened to include."),
+        numbers=("mean-vs-area r -0.34 against max -0.02; 10/22 vs 1/13 "
+                 "relationships lost to area control")),
 
     "column_name_type_inference": dict(
         instead_of="coerce_numeric_from_data",

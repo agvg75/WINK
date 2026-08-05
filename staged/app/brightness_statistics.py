@@ -48,12 +48,70 @@ of it on the rows you actually have: how noisy each statistic is frame to
 frame, how much dynamic range it shows, how strongly it tracks the thing you
 care about - and how strongly it tracks ROI AREA, which is the number that
 tells you whether you are looking at muscle or at geometry.
+
+MEASURED ON REAL DATA, AND IT INVERTED THE ADVICE ABOVE.
+Run on the hand-curated Fiji extraction (`tests/parity/golden_input/
+WormRGBCaMP_extracted_w1.csv`, one worm, 135 frames at 5 fps, 48 hemisegments),
+the statistic in trouble is the MEAN, not the max:
+
+  green_mean vs roi_area_px    median r = -0.34, |r| > 0.3 in 27 of 48
+  green_max  vs roi_area_px    median r = -0.02, |r| > 0.3 in 11 of 48
+
+and when the apparent calcium-curvature coupling is re-tested holding ROI area
+fixed, 10 of the 22 relationships found with the mean largely disappear
+(mean |r| 0.46 -> 0.24), against 1 of 13 for the max (0.41 -> 0.33).
+
+The reason is visible in the same file: the median hemisegment ROI is 28 PIXELS
+and its area swings 2.9x within a recording. At that size a band that is part
+muscle and part dark non-muscle tissue has a mean dominated by how much dark
+tissue happened to be included, which is exactly what changes as the animal
+bends. The max, being set by the brightest muscle pixel, is comparatively
+insulated. The synthetic fixture had homogeneous pixels and so showed the
+opposite - it was measuring sampling noise in a uniform ROI, which is not the
+situation.
+
+AND THE CONFOUND HAS OPPOSITE SIGN ON THE TWO SIDES:
+
+  ventral   area vs curvature   median r = -0.55   (20 of 24 negative)
+  dorsal    area vs curvature   median r = +0.61   (21 of 24 positive)
+
+which is the geometry - bending shrinks the ROI on the inside and grows it on
+the outside. That makes a DORSAL-VERSUS-VENTRAL calcium comparison against
+curvature the single analysis most exposed to this, because the artefact
+produces the same antiphase pattern that alternating contraction would.
+
+WHAT IS NOT YET KNOWN: the Fiji extraction has no median or p90 column, so the
+two statistics expected to be most robust could not be tested on real data at
+all. Re-extracting with tools/hemisegments.py, which computes them, is the way
+to settle it.
 """
 from __future__ import annotations
 
 import numpy as np
 
 STATS = ("mean", "median", "p90", "max", "min")
+
+# Measured on WormRGBCaMP_extracted_w1.csv - ONE worm, 135 frames. Real, and
+# not yet general: it establishes that the confound is present and material in
+# this lab's data, not how large it is in every recording.
+REAL_DATA_FINDINGS = {
+    "source": "tests/parity/golden_input/WormRGBCaMP_extracted_w1.csv",
+    "scope": "1 worm, 135 frames at 5 fps, 48 hemisegments, condition 1G",
+    "median_roi_area_px": 28,
+    "roi_area_swing": "2.9x within a hemisegment",
+    "mean_vs_area_median_r": -0.34,
+    "max_vs_area_median_r": -0.02,
+    "curvature_relationships_lost_to_area": {"mean": "10 of 22", "max": "1 of 13"},
+    "area_vs_curvature_by_side": {"ventral": -0.55, "dorsal": +0.61},
+    "conclusion": (
+        "On this data the MEAN is the compromised statistic and the max is "
+        "comparatively robust - the reverse of what a homogeneous synthetic "
+        "ROI predicts. Do not report a mean against a postural variable "
+        "without area_control()."),
+    "untested": ("median and p90 are absent from the Fiji extraction, so the "
+                 "two expected to be most robust have never been checked on "
+                 "real data."),
+}
 
 
 class BrightnessError(Exception):
