@@ -119,6 +119,43 @@ class FlowFrame(_BASE):
         return len(ys)
 
 
+def wrap_to_width(label, container=None, margin=28, minimum=120):
+    """Keep a label's `wraplength` matched to the width it actually has.
+
+    THE SECOND HALF OF THE SAME BUG. A label given a fixed `wraplength=285`
+    wraps correctly at the width someone measured once. Put it in a resizable
+    pane and narrow that pane, and the text no longer fits the space it is
+    wrapping to - so it overflows and is CLIPPED, not re-wrapped. Widen the
+    pane and the extra room goes unused while the text stays in a narrow
+    column. Both directions look like the tool cannot lay out its own text.
+
+    This binds the container's resize and follows it, so wrapping is always
+    against the width the label really has.
+
+    `minimum` stops the text collapsing to one word per line during the
+    intermediate sizes Tk reports while a pane is being dragged.
+    """
+    if ttk is None:                                        # pragma: no cover
+        return label
+    holder = container if container is not None else label.master
+
+    def _fit(event=None):
+        width = (event.width if event is not None else holder.winfo_width())
+        target = max(int(width) - int(margin), int(minimum))
+        try:
+            if int(label.cget("wraplength")) != target:
+                label.configure(wraplength=target)
+        except Exception:                                  # pragma: no cover
+            pass
+
+    holder.bind("<Configure>", _fit, add="+")
+    try:
+        holder.after_idle(_fit)
+    except Exception:                                      # pragma: no cover
+        pass
+    return label
+
+
 def set_minimum_size(window, width=760, height=520):
     """Stop a window being narrowed past the point where it makes sense.
 

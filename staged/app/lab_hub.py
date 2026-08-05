@@ -31,6 +31,13 @@ from tkinter import ttk, filedialog, messagebox
 from run_feedback import BRIEFINGS, RunFeedbackStore, ToolBriefing, show_first_run_briefing
 from updater import ApplicationUpdater, UpdateError
 from acquisition_advisor import show_acquisition_advisor
+from flow_layout import FlowFrame, set_minimum_size, wrap_to_width
+
+# Optional: the theme must never be able to stop the Hub from opening.
+try:
+    import theme_lcars as _theme
+except Exception:                                          # pragma: no cover
+    _theme = None
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -327,6 +334,73 @@ CATEGORY_ORDER = [
 ]
 
 
+def ask_update(parent, title, headline, changelog):
+    """Yes/no dialog whose buttons are always reachable, however long the notes.
+
+    This replaces messagebox.askyesno, which interpolated the whole changelog
+    into its message. The native Windows message box sizes itself to fit its
+    text with no cap and no scrolling, so a long changelog grew the dialog past
+    the bottom of the screen and took OK and Cancel with it - leaving a modal
+    window that could not be answered or dismissed, on a machine that had just
+    opened an old release. Reported from a lab computer, 2026-08-04.
+
+    Two things prevent it recurring:
+      * the buttons are packed to the BOTTOM before the notes are added, so
+        they claim their space first and the notes take what is left
+      * the window is capped to a fraction of the screen and the notes scroll
+    Escape and Return also answer it, so a dialog that somehow lands off-screen
+    can still be dismissed from the keyboard.
+    """
+    win = tk.Toplevel(parent)
+    win.title(title)
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    w = max(420, min(720, int(sw * 0.55)))
+    h = max(260, min(520, int(sh * 0.55)))
+    win.geometry(f"{w}x{h}+{max((sw - w) // 2, 0)}+{max((sh - h) // 3, 0)}")
+    win.minsize(400, 240)
+    result = {"ok": False}
+
+    def answer(ok):
+        result["ok"] = ok
+        win.destroy()
+
+    # Buttons FIRST and pinned to the bottom: whatever the notes do, these keep
+    # their space. This ordering is the fix, not decoration.
+    bar = ttk.Frame(win, padding=(12, 10))
+    bar.pack(side="bottom", fill="x")
+    ttk.Button(bar, text="Not now", command=lambda: answer(False)
+               ).pack(side="right")
+    ttk.Button(bar, text="Install update", command=lambda: answer(True)
+               ).pack(side="right", padx=(0, 8))
+
+    ttk.Label(win, text=headline, wraplength=w - 40, justify="left",
+              padding=(14, 12, 14, 6)).pack(side="top", fill="x")
+
+    if changelog:
+        body = ttk.Frame(win)
+        body.pack(side="top", fill="both", expand=True, padx=14, pady=(0, 6))
+        text = tk.Text(body, wrap="word", height=6, relief="flat",
+                       borderwidth=1, padx=8, pady=6)
+        scroll = ttk.Scrollbar(body, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        text.pack(side="left", fill="both", expand=True)
+        text.insert("1.0", changelog)
+        text.configure(state="disabled")
+
+    win.bind("<Escape>", lambda _e: answer(False))
+    win.bind("<Return>", lambda _e: answer(True))
+    win.protocol("WM_DELETE_WINDOW", lambda: answer(False))
+    try:
+        win.transient(parent)
+    except Exception:
+        pass
+    win.grab_set()
+    win.focus_force()
+    win.wait_window()
+    return result["ok"]
+
+
 def group_tools_by_category(registry=REGISTRY):
     grouped = {}
     for tool in registry:
@@ -466,6 +540,13 @@ class Hub(_BASE):
             not tool.filename or resolve_tool_path(tool) is not None)
 
     def _build_top_bar(self):
+        # A floor on the window size. Wrapping keeps every control reachable;
+        # a floor keeps the layout legible - without it a determined drag turns
+        # the toolbar into a vertical column of buttons, which is reachable and
+        # useless.
+        set_minimum_size(self, 860, 560)
+        if _theme is not None:
+            _theme.apply(self)          # honours the saved preference, off by default
         tk.Frame(self, bg=SAGE, height=7).pack(fill="x")
         header = tk.Frame(self, bg=WARM_WHITE)
         header.pack(fill="x", padx=18, pady=(10, 5))
@@ -485,40 +566,47 @@ class Hub(_BASE):
                  fg=MUTED).pack(anchor="w")
         self._add_logo(header)
 
-        controls = ttk.Frame(self)
+        # A FlowFrame, not a plain Frame packed left/right. Eleven controls in
+        # one packed row is exactly the case Tk's pack handles worst: it does
+        # not wrap, so narrowing the window makes the widgets that no longer
+        # fit SILENTLY VANISH rather than move. The row still looks complete,
+        # which is what made it read as the Hub losing features.
+        controls = FlowFrame(self)
         controls.pack(fill="x", padx=18, pady=(2, 8))
-        ttk.Button(controls, text="Load movie / stack / folder",
-                   command=self._load).pack(side="left")
-        ttk.Button(controls,text="Plan a recording",
-                   command=lambda:show_acquisition_advisor(self)).pack(side="left",padx=(6,0))
-        self.movie_lbl = ttk.Label(
-            controls, text="No movie loaded", width=26)
-        self.movie_lbl.pack(side="left", padx=(8, 18))
-        ttk.Label(controls, text="Filter").pack(side="left")
+        controls.add(ttk.Button(controls, text="Load movie / stack / folder",
+                                command=self._load))
+        controls.add(ttk.Button(controls, text="Plan a recording",
+                                command=lambda: show_acquisition_advisor(self)))
+        self.movie_lbl = ttk.Label(controls, text="No movie loaded", width=26)
+        controls.add(self.movie_lbl)
+        controls.add(ttk.Label(controls, text="Filter"))
         self.filter_entry = ttk.Entry(
             controls, textvariable=self.filter_text, width=24)
-        self.filter_entry.pack(side="left", padx=(5, 12))
+        controls.add(self.filter_entry)
         values = [f"{tool.section} — {tool.name}" for tool in REGISTRY]
         self.all_tools = ttk.Combobox(
             controls, textvariable=self.all_tools_value, values=values,
             state="readonly", width=31)
-        self.all_tools.pack(side="left", padx=(0, 12))
+        controls.add(self.all_tools)
         self.all_tools.bind("<<ComboboxSelected>>", self._all_tools_selected)
-        ttk.Label(controls, text="Status").pack(side="left")
+        controls.add(ttk.Label(controls, text="Status"))
         self.status_combo = ttk.Combobox(
             controls, textvariable=self.status_filter,
             values=["All", "Ready", "Experimental"], state="readonly",
             width=13)
-        self.status_combo.pack(side="left", padx=5)
-        ttk.Button(controls, text="Check for updates",
-                   command=self._manual_update_check).pack(side="right")
-        ttk.Button(controls, text="Revert update",
-                   command=self._revert_update).pack(side="right", padx=5)
-        ttk.Label(
+        controls.add(self.status_combo)
+        controls.add(ttk.Button(controls, text="Check for updates",
+                                command=self._manual_update_check))
+        controls.add(ttk.Button(controls, text="Revert update",
+                                command=self._revert_update))
+        controls.add(ttk.Label(
             controls,
             text=(f"App {self.versions['installed_app_version']} · "
-                  f"Runtime {self.versions['installed_runtime_version']}"),
-        ).pack(side="right", padx=8)
+                  f"Runtime {self.versions['installed_runtime_version']}")))
+        if _theme is not None:
+            tog = _theme.add_toggle(controls, self)
+            if tog is not None:
+                controls.add(tog)
 
         self.drop = tk.Label(
             self, text=("Drop a movie, stack, or folder here"
@@ -597,6 +685,12 @@ class Hub(_BASE):
             detail, text="Launch", command=self._launch_selected)
         self.launch_button.pack(anchor="w", padx=(14, 4), pady=4)
         self.launch_button.state(["disabled"])
+        # These three carried a FIXED wraplength, which is correct only at the
+        # width someone measured once. This pane is user-resizable: narrow it
+        # and the text overflows and is clipped; widen it and the space goes
+        # unused. Follow the pane instead.
+        for _lbl in (self.detail_title, self.detail_desc, self.detail_requires):
+            wrap_to_width(_lbl, detail)
 
     def _configure_styles(self):
         style = ttk.Style(self)
@@ -670,10 +764,11 @@ class Hub(_BASE):
 
     def _offer_update(self, manifest):
         changelog = manifest.get("changelog", "")
-        if not messagebox.askyesno(
-                "WINK update available",
-                f"Application {manifest['app_version']} is available.\n\n"
-                f"{changelog}\n\nInstall it now? The runtime will not change."):
+        if not ask_update(
+                self, "WINK update available",
+                f"Application {manifest['app_version']} is available. "
+                f"Install it now? The runtime will not change.",
+                changelog):
             return
         try:
             redirect = self.updater.apply(manifest)
