@@ -65,6 +65,44 @@ def wave_continuity(curv_grid, min_overlap=6):
     return r
 
 
+def _classify_flips(grid, r, flip_threshold, settle=3):
+    """Split flips into PERSISTENT and TRANSIENT. Returns (persistent, transient).
+
+    A flip that inverts the profile and comes straight back costs one frame. A
+    flip after which the animal stays inverted costs everything downstream,
+    because from there on anterior is posterior and dorsal is ventral.
+
+    FLIPS TOGGLE THE ORIENTATION, which is the model that finally fits. A flip
+    at frame 10 and another at frame 30 does not mean two ruined recordings, or
+    one recording ruined from frame 10 - it means frames 10 to 30 are inverted
+    and the rest is fine. So the cost is the FRACTION OF FRAMES SPENT INVERTED,
+    and whether the recording ENDS inverted is a separate fact worth reporting.
+
+    Two earlier attempts were wrong in instructive ways. Weighting every flip
+    by the frames downstream of it made 18 of 24 real recordings rank on head
+    flips when the median recording has 0.905 continuity. Comparing the profile
+    a few frames after the event with a few frames before does not work either:
+    in a travelling wave those frames are already tens of degrees apart in
+    phase and anticorrelated whether or not anything flipped, so the wave's own
+    advance masquerades as the fault.
+
+    Returns (inverted_fraction, flip_frames, ends_inverted).
+    """
+    n = len(r) + 1
+    idx = [i + 1 for i, v in enumerate(np.nan_to_num(r, nan=1.0))
+           if v < flip_threshold]
+    if not idx:
+        return 0.0, [], False
+    inverted = 0
+    state = 0
+    bounds = idx + [n]
+    for k in range(len(idx)):
+        state ^= 1
+        if state:
+            inverted += bounds[k + 1] - bounds[k]
+    return inverted / max(n, 1), idx, bool(state)
+
+
 def score(curv_grid, flip_threshold=-0.4, break_threshold=0.15,
           run_frames=3):
     """Triage score for one recording, plus the components that produced it.
@@ -100,17 +138,24 @@ def score(curv_grid, flip_threshold=-0.4, break_threshold=0.15,
     missing_frac = float(missing.mean())
     longest_frac = longest / max(n, 1)
 
-    # A HEAD FLIP IS NOT A FRAME, IT IS A SPAN. Scored per-frame like the other
-    # faults it came to 3/400 - the same as one dropped frame - which ranked a
-    # recording whose second half is labelled backwards alongside a trivial
-    # dropout. Everything after a flip has its anterior-posterior axis and its
-    # dorsal/ventral sides inverted, so the cost is the fraction of the
-    # recording downstream of it, and even one is a serious finding.
-    if flips:
-        first = int(np.argmax(np.nan_to_num(r, nan=1.0) < flip_threshold))
-        affected = max(1.0 - first / max(n, 1), 0.25)
-    else:
-        affected = 0.0
+    # A FLIP COSTS THE REST OF THE RECORDING ONLY IF IT PERSISTS, and the
+    # first version did not check. Weighting every flip by the fraction
+    # downstream of it made 18 of 24 real recordings rank on "head flip" when
+    # the median recording has excellent continuity (0.905) and only 4.7% of
+    # frames inverted. Those were TRANSIENT: the profile inverts for a frame
+    # or two and comes straight back, which is one bad frame, not a relabelled
+    # second half.
+    #
+    # A flip persists if the frames after it stay inverted relative to the
+    # frames before. Transient flips are counted like other point faults;
+    # a persistent one still costs everything downstream, because there
+    # everything downstream really is backwards.
+    inverted_frac, flip_frames, ends_inverted = _classify_flips(
+        g, r, flip_threshold)
+    # Ending inverted is worse than the same time inverted mid-recording:
+    # nothing downstream corrects it, and anything computed from the tail
+    # of the recording is backwards with no later frame to reveal it.
+    affected = inverted_frac + (0.15 if ends_inverted else 0.0)
 
     # Deliberately simple and additive, because the point is an ORDER. A
     # weighted product would rank slightly differently and be far harder to
@@ -124,14 +169,17 @@ def score(curv_grid, flip_threshold=-0.4, break_threshold=0.15,
         "longest_gap_frames": int(longest),
         "longest_gap_fraction": round(longest_frac, 4),
         "head_flips": flips,
+        "inverted_fraction": round(float(inverted_frac), 4),
+        "ends_inverted": ends_inverted,
+        "flip_frames": flip_frames[:12],
         "wave_breaks": breaks,
         "median_continuity": round(continuity, 4),
         "score": round(float(total), 4),
-        "frames_after_first_flip": (round(float(affected), 4) if flips else 0.0),
+
         "worst": max(
             [("bad section", 2.0 * longest_frac),
              ("missing frames", 1.0 * missing_frac),
-             ("head flip", 1.5 * affected),
+             ("inverted stretch", 1.5 * affected),
              ("wave break", 2.0 * breaks / max(n, 1)),
              ("low continuity", max(0.0, 0.5 - continuity))],
             key=lambda t: t[1])[0],
