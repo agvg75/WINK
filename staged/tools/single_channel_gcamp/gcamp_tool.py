@@ -235,6 +235,12 @@ class App(CockpitApp):
                 return str(p.parent)
         return str(p)
 
+    # Above this the whole-movie load is refused and a frame range must be
+    # chosen. Frames are held as float32, so a long recording is far larger in
+    # memory than on disk - a 24 GB movie was attempted whole and simply
+    # exhausted the machine, with no way offered to take part of it.
+    MAX_FRAME_BYTES = 2_000_000_000
+
     def load_frames(self):
         if self.frames is not None:
             return self.frames
@@ -249,17 +255,53 @@ class App(CockpitApp):
         x0=max(0,int(np.floor(centers[:,0].min()-margin)));x1=min(int(movie.width),int(np.ceil(centers[:,0].max()+margin)))
         y0=max(0,int(np.floor(centers[:,1].min()-margin)));y1=min(int(movie.height),int(np.ceil(centers[:,1].max()+margin)))
         self.analysis_crop=(x0,y0,x1,y1)
-        self.frames=np.empty((count,y1-y0,x1-x0),dtype=np.float32)
+
+        # Which frames? Offer the choice BEFORE allocating anything. The
+        # neuron tracker already works this way; this tool did not, and loaded
+        # every frame of whatever it was given.
+        indices = list(range(count))
+        per_frame = (y1 - y0) * (x1 - x0) * 4
+        if per_frame * count > self.MAX_FRAME_BYTES:
+            try:
+                from frame_range_selector import select_frame_ranges
+                ranges = select_frame_ranges(
+                    self, movie,
+                    "This recording is too large to load whole - choose the "
+                    "frames to analyse")
+            except Exception:
+                ranges = None
+            if ranges:
+                indices = [i for a, b in ranges for i in range(a, b + 1)]
+            if not indices or per_frame * len(indices) > self.MAX_FRAME_BYTES:
+                movie.close()
+                need = per_frame * max(len(indices), 1) / 1e9
+                raise ValueError(
+                    f"This selection needs about {need:.1f} GB of memory "
+                    f"({len(indices)} frames at {per_frame/1e6:.1f} MB each, "
+                    f"held as float32). The limit is "
+                    f"{self.MAX_FRAME_BYTES/1e9:.1f} GB.\n\n"
+                    f"Choose a shorter range of frames. Loading more than the "
+                    f"machine can hold does not fail quickly - it swaps, and "
+                    f"the tool appears to hang instead of telling you why.")
+
+        self.frame_indices = indices
+        self.frames=np.empty((len(indices),y1-y0,x1-x0),dtype=np.float32)
         def cropped_gray(frame):return gray(frame)[y0:y1,x0:x1]
         if getattr(movie, "source_kind", "") == "image_sequence":
             workers = min(6, max(2, (os.cpu_count() or 2) // 2))
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                for index, frame in enumerate(pool.map(
-                        lambda i: cropped_gray(movie.get_frame(i)), range(count))):
-                    self.frames[index] = frame
+                for slot, frame in enumerate(pool.map(
+                        lambda i: cropped_gray(movie.get_frame(i)), indices)):
+                    self.frames[slot] = frame
         else:
+            wanted = set(indices)
+            slot = 0
             for index, frame in enumerate(movie.frames()):
-                self.frames[index] = cropped_gray(frame)
+                if index in wanted:
+                    self.frames[slot] = cropped_gray(frame)
+                    slot += 1
+                    if slot >= len(indices):
+                        break
         movie.close()
         self.seed=(self.seed[0]-x0,self.seed[1]-y0)
         return self.frames

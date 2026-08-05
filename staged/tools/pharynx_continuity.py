@@ -305,6 +305,74 @@ def bright_scar(image, um_per_px, sigma_um=1.0, z_threshold=3.0,
     }
 
 
+def cortex_mask(shape, centreline, um_per_px, inner_frac=0.35, outer_um=None):
+    """The CORTEX half of the organ - outer, away from the lumen.
+
+    Andres: the damage is "concentrated to the cortex half of the organs. the
+    center has the lumen so it is intrinsically non radial". That second clause
+    is why an earlier version reported 53% of the fibre area as coiled - it was
+    measuring deviation-from-radial through the core, where radial is not the
+    expectation and never was. Excluding the inner fraction is not a tuning
+    choice; the core is a different structure.
+    """
+    H, W = int(shape[0]), int(shape[1])
+    cy = np.asarray(centreline, dtype=float)
+    yy = np.arange(H)[:, None]
+    r = np.abs(yy - cy[None, :]) * um_per_px
+    if outer_um is None:
+        outer_um = float(np.percentile(r, 99))
+    return (r >= inner_frac * outer_um) & (r <= outer_um), r
+
+
+def radial_congruence(angles, coherence, expected_angle_map, um_per_px,
+                      window_um=2.0):
+    """Do neighbouring fibres AGREE with each other, as healthy ones do?
+
+    Andres describes a "loss of radial congruence" - not merely fibres pointing
+    the wrong way, but neighbours disagreeing where they used to march
+    together. That is a different quantity from deviation-from-expected: a
+    whole patch could be rotated and still be congruent, while a tangle is
+    incongruent even if it averages to the right direction.
+    """
+    from scipy import ndimage as ndi
+
+    a = np.asarray(angles, dtype=float)
+    c = np.asarray(coherence, dtype=float)
+    w = max(window_um / um_per_px, 2.0)
+    d = np.deg2rad(a * 2.0)
+    C = ndi.gaussian_filter(np.cos(d) * c, w)
+    S = ndi.gaussian_filter(np.sin(d) * c, w)
+    Wt = ndi.gaussian_filter(c, w)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        congruence = np.hypot(C, S) / np.maximum(Wt, 1e-9)
+    return np.clip(congruence, 0.0, 1.0)
+
+
+def fibre_bending(angles, coherence, um_per_px, window_um=1.5):
+    """How much each fibre BENDS along itself - curved rather than straight.
+
+    Andres: broken fibres "are bent rather than straight". A bent fibre can
+    still average to the right direction, so deviation-from-expected misses it
+    entirely; what changes is the turn ALONG the fibre. Measured as the rate of
+    orientation change in the direction the fibre runs.
+    """
+    from scipy import ndimage as ndi
+
+    a = np.deg2rad(np.asarray(angles, dtype=float))
+    # gradient of the doubled angle, handled as a unit vector field so the
+    # 0/180 wrap does not create false turns
+    cx, sx = np.cos(2 * a), np.sin(2 * a)
+    gcy, gcx = np.gradient(cx)
+    gsy, gsx = np.gradient(sx)
+    turn = np.sqrt(gcy ** 2 + gcx ** 2 + gsy ** 2 + gsx ** 2) / (2.0 * um_per_px)
+    w = max(window_um / um_per_px, 2.0)
+    c = np.asarray(coherence, dtype=float)
+    num = ndi.gaussian_filter(turn * c, w)
+    den = ndi.gaussian_filter(c, w)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(den > 1e-9, num / np.maximum(den, 1e-9), 0.0)
+
+
 def coiled_filaments(image, um_per_px, expected_angle_map=None,
                      coil_window_um=0.2, min_area_um2=1.0):
     """Filaments that have DETACHED and lost axial orientation - they coil.
