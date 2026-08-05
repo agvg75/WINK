@@ -70,10 +70,35 @@ check("the missing colour appears in no fluorophore ramp",
       all(not np.allclose(bad, cm(x)[:3], atol=0.06)
           for x in np.linspace(0, 1, 256)),
       f"missing={tuple(round(c,2) for c in bad)}")
-check("each channel ramps from black to its own fluorophore",
-      np.allclose(ky.channel_cmap("red")(0.0)[:3], (0, 0, 0), atol=0.01)
-      and ky.channel_cmap("red")(1.0)[0] > 0.9
-      and ky.channel_cmap("blue")(1.0)[2] > 0.9)
+check("each channel ramps from WHITE to its own fluorophore",
+      np.allclose(ky.channel_cmap("red")(0.0)[:3], (1, 1, 1), atol=0.01)
+      and ky.channel_cmap("red")(1.0)[0] > 0.8
+      and ky.channel_cmap("blue")(1.0)[2] > 0.8
+      and ky.channel_cmap("green")(1.0)[1] > 0.5)
+check("...so the low end keeps its resolution, where resting calcium lives",
+      abs(ky.channel_cmap("green")(0.05)[1] - ky.channel_cmap("green")(0.0)[1])
+      > 0.01)
+check("curvature is red-white-blue, white at straight",
+      np.allclose(ky.curvature_cmap()(0.5)[:3], (1, 1, 1), atol=0.02)
+      and ky.curvature_cmap()(0.0)[2] > ky.curvature_cmap()(0.0)[0]
+      and ky.curvature_cmap()(1.0)[0] > ky.curvature_cmap()(1.0)[2])
+
+# --- compression must not swallow the odd frame --------------------------
+wide = np.tile(np.linspace(10, 12, 2000), (4, 1))
+wide[2, 1234] = 900.0                     # one bad frame in two thousand
+small, step = ky.downsample_preserving_outliers(wide, 200)
+check("a long recording compresses to the requested width",
+      small.shape[1] <= 200 and step == 10, f"{small.shape[1]} cols, {step}/col")
+check("THE SINGLE ODD FRAME SURVIVES COMPRESSION",
+      np.nanmax(small) == 900.0,
+      "averaging would have divided it by 10 and hidden it")
+mean_would = np.nanmean(wide[2, 1230:1240])
+check("...where a mean would have buried it",
+      mean_would < 110, f"mean of that block is {mean_would:.0f}, not 900")
+gap = wide.copy(); gap[:, 500:520] = np.nan
+sg, _ = ky.downsample_preserving_outliers(gap, 200)
+check("a wholly missing block stays missing after compression",
+      np.isnan(sg[:, 50:51]).all())
 
 # --- panels ---------------------------------------------------------------
 spec = ky.panels(rows, n_seg=NSEG, n_frames=NF)

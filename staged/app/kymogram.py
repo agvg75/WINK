@@ -40,14 +40,21 @@ from pathlib import Path
 
 import numpy as np
 
-# Fluorophore ramps: black at zero to the channel's own colour at maximum.
-CHANNEL_COLOUR = {"blue": (0.10, 0.35, 1.00),
-                  "green": (0.10, 0.95, 0.25),
-                  "red": (1.00, 0.15, 0.15)}
+# Fluorophore ramps: WHITE at zero rising to the channel's own colour.
+#
+# Inverted from the microscope's own black-on-dark, and for a reason beyond
+# print economy. On a black-based ramp the low end is perceptually crushed -
+# black to dark blue is a much smaller visual step than mid to bright blue - so
+# resolution is lost exactly where RESTING calcium lives, which is the quantity
+# the dystrophy work cares about most. A white-based ramp spends its
+# perceptual range at the bottom instead.
+CHANNEL_COLOUR = {"blue": (0.05, 0.25, 0.85),
+                  "green": (0.00, 0.60, 0.15),
+                  "red": (0.85, 0.05, 0.05)}
 
-# A colour that appears in NO fluorophore ramp, so a gap cannot be mistaken for
-# a dark frame. Desaturated warm grey - neither black nor any channel hue.
-MISSING = (0.42, 0.40, 0.38)
+# With white at zero, MISSING is dark - which on a white-to-colour ramp cannot
+# be confused with anything, because nothing else in the panel is dark.
+MISSING = (0.20, 0.20, 0.24)
 
 
 class KymogramError(Exception):
@@ -55,23 +62,64 @@ class KymogramError(Exception):
 
 
 def channel_cmap(channel):
-    """A black-to-fluorophore colormap with a distinct colour for missing data."""
+    """A white-to-fluorophore colormap with a distinct colour for missing data."""
     from matplotlib.colors import LinearSegmentedColormap
-    rgb = CHANNEL_COLOUR.get(channel, (1.0, 1.0, 1.0))
+    rgb = CHANNEL_COLOUR.get(channel, (0.2, 0.2, 0.2))
     cm = LinearSegmentedColormap.from_list(
-        f"wink_{channel}", [(0, 0, 0), rgb], N=256)
+        f"wink_{channel}", [(1, 1, 1), rgb], N=256)
     cm.set_bad(MISSING)
     return cm
 
 
 def curvature_cmap():
-    """Diverging, centred on straight. Curvature is signed: the sign IS the side."""
+    """Red-white-blue, the convention for curvature kymographs in this field.
+
+    White is straight. Curvature is signed and the sign IS the side, so a
+    diverging map centred on zero puts dorsal and ventral bends on opposite
+    limbs and makes the travelling wave read as alternating bands. Matching the
+    convention matters more than any improvement on it: a reader who has seen
+    one worm curvature kymograph can read this one without a legend.
+    """
     from matplotlib.colors import LinearSegmentedColormap
     cm = LinearSegmentedColormap.from_list(
         "wink_curv",
-        [(0.15, 0.45, 0.95), (0.06, 0.06, 0.09), (0.98, 0.62, 0.10)], N=256)
+        [(0.02, 0.19, 0.55), (0.26, 0.52, 0.80), (1, 1, 1),
+         (0.84, 0.38, 0.30), (0.40, 0.00, 0.12)], N=256)
     cm.set_bad(MISSING)
     return cm
+
+
+def downsample_preserving_outliers(grid, max_columns):
+    """Compress the time axis WITHOUT losing the single odd frame.
+
+    A review display exists to make one bad frame jump out, so averaging frames
+    into a column is exactly the wrong reduction: a single spike divided by
+    twenty neighbours disappears into them. Each output column instead keeps the
+    value FURTHEST FROM THE COLUMN MEDIAN, so an outlier survives compression
+    and a quiet stretch still reads as quiet.
+
+    Returns (grid, frames_per_column). At 1 the grid is untouched.
+    """
+    n = grid.shape[1]
+    if max_columns is None or n <= int(max_columns):
+        return grid, 1
+    step = int(np.ceil(n / int(max_columns)))
+    pad = (-n) % step
+    if pad:
+        grid = np.concatenate(
+            [grid, np.full((grid.shape[0], pad), np.nan)], axis=1)
+    blocks = grid.reshape(grid.shape[0], -1, step)
+    with np.errstate(invalid="ignore"):
+        med = np.nanmedian(blocks, axis=2, keepdims=True)
+        dev = np.abs(blocks - med)
+        dev = np.where(np.isnan(blocks), -np.inf, dev)
+        pick = np.nanargmax(dev, axis=2)
+    out = np.take_along_axis(blocks, pick[:, :, None], axis=2)[:, :, 0]
+    # A block that is entirely missing must stay missing rather than inherit
+    # whatever nanargmax fell back on.
+    allnan = np.all(np.isnan(blocks), axis=2)
+    out[allnan] = np.nan
+    return out, step
 
 
 def build(rows, value, n_seg=24, side=None, n_frames=None):
@@ -228,7 +276,7 @@ def flagged_recordings(paths):
 # Drawing
 # --------------------------------------------------------------------------- #
 def render(rows, recording=None, fps=None, shared_limits=None, title=None,
-           on_flag=None, **kw):
+           on_flag=None, width=5.5, row_height=0.85, max_columns=1400, **kw):
     """Draw the panel stack. Returns (figure, axes). Click a panel to flag.
 
     `shared_limits` pins the fluorescence scale - pass the same value across a
@@ -247,19 +295,30 @@ def render(rows, recording=None, fps=None, shared_limits=None, title=None,
     curv = [p["grid"] for p in spec if p["kind"] == "curvature"]
     cmax = float(np.nanpercentile(np.abs(curv[0]), 98)) if curv else 1.0
 
-    fig, axes = plt.subplots(len(spec), 1, figsize=(11, 1.35 * len(spec)),
+    fig, axes = plt.subplots(len(spec), 1,
+                             figsize=(width, row_height * len(spec)),
                              sharex=True, constrained_layout=True)
     axes = np.atleast_1d(axes)
+    step = 1
     for ax, p in zip(axes, spec):
-        g = p["grid"]
+        g, step = downsample_preserving_outliers(p["grid"], max_columns)
+        p["grid_shown"] = g
         if p["kind"] == "curvature":
             im = ax.imshow(g, aspect="auto", cmap=curvature_cmap(),
                            norm=Normalize(-cmax, cmax), interpolation="nearest")
         else:
             im = ax.imshow(g, aspect="auto", cmap=channel_cmap(p["channel"]),
                            norm=Normalize(lo, hi), interpolation="nearest")
-        cov = coverage(g)
-        ax.set_ylabel(f"{p['label']}\n{cov['fraction']:.0%}", fontsize=8)
+        cov = coverage(p["grid"])
+        # The label goes INSIDE the panel. At half width, stacked ylabels
+        # collide with each other and with the neighbouring panel's - the first
+        # render read "blue dorsalcurvature". Inside, they cannot.
+        ax.text(0.006, 0.5, f"{p['label']}  {cov['fraction']:.0%}",
+                transform=ax.transAxes, va="center", ha="left", fontsize=7,
+                color="#22303A",
+                bbox=dict(facecolor="white", alpha=0.72, edgecolor="none",
+                          pad=1.2))
+        ax.set_ylabel("")
         ax.set_yticks([])
         fig.colorbar(im, ax=ax, pad=0.01, fraction=0.02)
 
@@ -271,17 +330,18 @@ def render(rows, recording=None, fps=None, shared_limits=None, title=None,
         existing = load_flags(recording)
         for f in existing.get("flags", []):
             for ax in axes:
-                ax.axvline(f["frame"], color="#FFCC00", lw=0.8, alpha=0.9)
+                ax.axvline(f["frame"] / step, color="#E8A200", lw=0.8,
+                           alpha=0.9)
 
         def onclick(event):
             if event.inaxes is None or event.xdata is None:
                 return
-            frame = int(round(event.xdata))
+            frame = int(round(event.xdata) * step)
             idx = list(axes).index(event.inaxes) if event.inaxes in list(axes) else 0
             add_flag(recording, frame, panel=spec[idx]["label"],
                      reason="flagged from kymogram review")
             for ax in axes:
-                ax.axvline(frame, color="#FFCC00", lw=0.8, alpha=0.9)
+                ax.axvline(frame / step, color="#E8A200", lw=0.8, alpha=0.9)
             event.canvas.draw_idle()
             if on_flag:
                 on_flag(frame, spec[idx]["label"])
@@ -290,4 +350,5 @@ def render(rows, recording=None, fps=None, shared_limits=None, title=None,
 
     return fig, axes, {"panels": [p["label"] for p in spec],
                        "limits": (lo, hi), "limit_basis": basis,
+                       "frames_per_column": step,
                        "coverage": [coverage(p["grid"]) for p in spec]}
