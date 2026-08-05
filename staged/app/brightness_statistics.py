@@ -255,6 +255,98 @@ def _recommend(out, against):
     return " ".join(lines)
 
 
+def relaxed_brightness(rows, channel="green", stat="max",
+                       curv_col="seg_curv_deg", quantile=0.33,
+                       absolute_curv_deg=None, area_key="roi_area_px"):
+    """Brightness during RELAXATION - the elevated-resting-calcium measure.
+
+    Relaxation is read from POSTURE, not from calcium: the frames in the bottom
+    `quantile` of local |curvature|. That is what keeps the measure honest -
+    selecting relaxed frames by low calcium and then reporting calcium in them
+    would be circular, and `worm_kinetics.contraction_state` already avoids it
+    the same way.
+
+    THREE WAYS TO SUMMARISE, AND ONE OF THEM IS BIASED BY RECORDING LENGTH.
+
+      mean_of_frame_max    the average of the per-frame maxima. n-independent.
+      median_of_frame_max  the same, robust. n-independent.
+      single_max           the largest value seen in ANY relaxed frame. This is
+                           an extreme of extremes: it grows with the NUMBER of
+                           relaxed frames, so an animal that spends more time
+                           relaxed scores higher for that reason alone.
+
+    The last one matters for a genotype comparison specifically. Dystrophic
+    animals move less, so they have MORE relaxed frames, so a single-max
+    measure is inflated in exactly the group expected to show the effect. The
+    count is returned alongside so the two can be checked against each other,
+    and the summary says so rather than leaving it to be noticed.
+
+    ABSOLUTE OR RELATIVE THRESHOLD. With `quantile`, "relaxed" is the bottom
+    third of THIS animal's own curvature range - so a stiff animal's relaxed
+    frames may be more bent than a mobile animal's. Within one animal that is
+    the right normalisation; ACROSS genotypes it means the two groups are not
+    being held at the same posture. Pass `absolute_curv_deg` to threshold at a
+    fixed bend instead, and compare the two.
+    """
+    key = f"{channel}_{stat}"
+    v = np.array([r.get(key, np.nan) for r in rows], float)
+    c = np.abs(np.array([r.get(curv_col, np.nan) for r in rows], float))
+    a = np.array([r.get(area_key, np.nan) for r in rows], float)
+    ok = np.isfinite(v) & np.isfinite(c)
+    if ok.sum() < 20:
+        raise BrightnessError(
+            f"Only {int(ok.sum())} frames have both {key} and {curv_col}. A "
+            f"relaxed-state measure over so few is describing a handful of "
+            f"postures, not a resting level.")
+
+    if absolute_curv_deg is not None:
+        sel = ok & (c <= float(absolute_curv_deg))
+        rule = f"|{curv_col}| <= {absolute_curv_deg} deg (absolute)"
+    else:
+        thr = float(np.quantile(c[ok], quantile))
+        sel = ok & (c <= thr)
+        rule = (f"bottom {quantile:.0%} of this animal's own |{curv_col}|, "
+                f"i.e. <= {thr:.2f} deg")
+    n_rel = int(sel.sum())
+    if n_rel < 10:
+        raise BrightnessError(
+            f"Only {n_rel} relaxed frames under {rule}. Widen the threshold or "
+            f"record longer; a resting level from fewer is one posture.")
+
+    vr = v[sel]
+    out = {
+        "channel": channel, "statistic": stat, "relaxation_rule": rule,
+        "n_relaxed_frames": n_rel,
+        "n_frames_total": int(ok.sum()),
+        "fraction_relaxed": round(n_rel / max(int(ok.sum()), 1), 4),
+        "mean_of_frame_max": round(float(np.mean(vr)), 4),
+        "median_of_frame_max": round(float(np.median(vr)), 4),
+        "single_max": round(float(np.max(vr)), 4),
+        "relaxed_roi_area_median": (round(float(np.nanmedian(a[sel])), 2)
+                                    if np.isfinite(a).any() else None),
+        "all_frames_roi_area_median": (round(float(np.nanmedian(a[ok])), 2)
+                                       if np.isfinite(a).any() else None),
+        "prefer": "median_of_frame_max",
+        "why": ("mean_of_frame_max and median_of_frame_max do not depend on how "
+                "many relaxed frames there were. single_max does: it is the "
+                "largest of n draws and grows with n, so an animal that spends "
+                "more time relaxed scores higher for that reason alone. In a "
+                "genotype comparison that inflates whichever group moves less, "
+                "which is the dystrophic one."),
+        "posture_not_calcium": (
+            "Relaxed frames were chosen by curvature, so this is not circular: "
+            "calcium was not used to decide which frames count as resting."),
+    }
+    if absolute_curv_deg is None:
+        out["threshold_is_relative"] = (
+            "The threshold is this animal's own bottom "
+            f"{quantile:.0%}, so a stiff animal's 'relaxed' frames may be more "
+            "bent than a mobile animal's. Within one animal that is the right "
+            "normalisation; across genotypes it means the groups are not held "
+            "at the same posture. Re-run with absolute_curv_deg to check.")
+    return out
+
+
 def area_control(rows, channel="green", stat="mean", against="seg_curv_deg",
                  area_key="roi_area_px"):
     """Does the relationship survive removing ROI area?

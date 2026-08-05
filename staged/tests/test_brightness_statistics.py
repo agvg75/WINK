@@ -166,6 +166,67 @@ check("the reading guide points at the area correlation first",
       "THE ONE TO CHECK FIRST"
       in flagged_report["how_to_read"]["r_with_roi_area"])
 
+# --- brightness during relaxation: the PNAS-style measure ----------------
+# Two animals with IDENTICAL resting calcium, one of which moves less and so
+# spends more frames relaxed. A single-max measure must be inflated in the
+# sluggish one; the mean and median of the per-frame maxima must not be.
+def relaxed_fixture(n_frames, bend_amp):
+    out = []
+    for k in range(n_frames):
+        curv = bend_amp * np.sin(2 * np.pi * k / 20.0)
+        px = rng.normal(500.0, 12.0, 30)          # same calcium in both
+        out.append({"segment": 11, "hemisegment": "ventral",
+                    "roi_area_px": 30, "seg_curv_deg": float(curv),
+                    "green_max": float(px.max()),
+                    "green_mean": float(px.mean())})
+    return out
+
+
+mobile = bs.relaxed_brightness(relaxed_fixture(200, 40.0), "green", "max")
+sluggish = bs.relaxed_brightness(relaxed_fixture(200, 6.0), "green", "max")
+check("relaxation is selected by posture, not by calcium",
+      "calcium was not used" in mobile["posture_not_calcium"])
+check("the median of per-frame maxima is unaffected by how much the animal moved",
+      abs(mobile["median_of_frame_max"] - sluggish["median_of_frame_max"]) < 8,
+      f"{mobile['median_of_frame_max']:.1f} vs "
+      f"{sluggish['median_of_frame_max']:.1f}")
+check("...and the summary says which to prefer and why",
+      mobile["prefer"] == "median_of_frame_max"
+      and "grows with n" in mobile["why"])
+
+# The n-dependence of single_max, shown directly: more relaxed frames, higher max.
+few = bs.relaxed_brightness(relaxed_fixture(60, 40.0), "green", "max")
+many = bs.relaxed_brightness(relaxed_fixture(400, 40.0), "green", "max")
+check("single_max grows with the NUMBER of relaxed frames alone",
+      many["single_max"] > few["single_max"],
+      f"{few['n_relaxed_frames']} frames -> {few['single_max']:.1f}, "
+      f"{many['n_relaxed_frames']} -> {many['single_max']:.1f}")
+check("...while the median of the same frames does not",
+      abs(many["median_of_frame_max"] - few["median_of_frame_max"]) < 6,
+      f"{few['median_of_frame_max']:.1f} vs {many['median_of_frame_max']:.1f}")
+check("the relaxed frame count is reported so the bias is visible",
+      "n_relaxed_frames" in mobile and mobile["n_relaxed_frames"] > 0)
+
+check("a within-animal quantile threshold is flagged as relative",
+      "not held at the same posture" in mobile["threshold_is_relative"])
+absolute = bs.relaxed_brightness(relaxed_fixture(200, 40.0), "green", "max",
+                                 absolute_curv_deg=5.0)
+check("...and an absolute threshold is available instead",
+      "absolute" in absolute["relaxation_rule"]
+      and "threshold_is_relative" not in absolute)
+check("an absolute threshold selects fewer frames from a mobile animal",
+      absolute["n_relaxed_frames"] < mobile["n_relaxed_frames"],
+      f"{absolute['n_relaxed_frames']} vs {mobile['n_relaxed_frames']}")
+
+try:
+    bs.relaxed_brightness(relaxed_fixture(60, 40.0), "green", "max",
+                          absolute_curv_deg=0.001)
+    check("too few relaxed frames is refused", False)
+except bs.BrightnessError as exc:
+    check("too few relaxed frames is refused", True)
+    check("...saying a resting level from fewer is one posture",
+          "is one posture" in str(exc))
+
 try:
     bs.compare_statistics(real_rows[:5], "green")
     check("too few frames is refused", False)
