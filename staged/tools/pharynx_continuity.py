@@ -458,23 +458,140 @@ def coiled_filaments(image, um_per_px, expected_angle_map=None,
     }
 
 
-def damage_report(image, um_per_px):
+def disrupted_fibres(image, um_per_px, centreline, inner_frac=0.35,
+                     bend_threshold=None, congruence_threshold=0.5,
+                     min_area_um2=1.0):
+    """Disrupted fibres in the CORTEX: bent, and no longer congruent.
+
+    THIS IS THE VALIDATED MEASURE. Scored against Andres's hand-marked coiled
+    fibres on a real dys-1 pharynx, P(marked > unmarked median):
+
+        fibre bending, cortex only        0.849
+        loss of congruence, cortex only   0.827
+        either measure over the whole organ  ~0.5   (useless)
+        deviation from radial, cortex     0.374   (below chance)
+
+    Three things that specification got right and an earlier version did not:
+
+    * "BENT rather than straight" is literal. A detached fibre can still average
+      to the right direction, so deviation-from-expected misses it; what changes
+      is the turn ALONG the fibre.
+    * "loss of radial CONGRUENCE" is about neighbours disagreeing, which is a
+      different quantity again - a whole patch can be rotated and stay
+      congruent.
+    * "concentrated to the CORTEX half... the center has the lumen so it is
+      intrinsically non radial". Measuring through the core is why an earlier
+      version reported 53% of the fibre area as coiled: radial was never the
+      expectation there.
+
+    Requires the lumen centreline, because cortex and core cannot be told apart
+    without it. `coiled_filaments` remains for the no-lumen case, but it scores
+    far worse and should not be preferred when a centreline is available.
+    """
+    from scipy import ndimage as ndi
+    import fibre_orientation as fo
+
+    img = np.asarray(image, dtype=float)
+    angles, coh = fo.structure_tensor_2d(img, sigma=1.5, rho=3.0)
+    lo, hi = np.percentile(img, [20, 99])
+    tissue = img > lo + 0.25 * (hi - lo)
+    has_fibre = tissue & (coh > 0.25)
+    if has_fibre.sum() < 100:
+        raise ContinuityError(
+            "Too little coherent fibre signal to judge disruption. An image "
+            "with no resolvable filaments cannot show broken ones.")
+
+    cortex, r_um = cortex_mask(img.shape, centreline, um_per_px,
+                               inner_frac=inner_frac)
+    region = has_fibre & cortex
+    if region.sum() < 100:
+        raise ContinuityError(
+            f"The cortex band holds too little fibre signal "
+            f"({int(region.sum())} px). Check the centreline - if it does not "
+            f"follow the lumen, the cortex is not where this thinks it is.")
+
+    slope = np.gradient(np.asarray(centreline, dtype=float))
+    expected = np.broadcast_to(
+        ((np.degrees(np.arctan2(slope, 1.0)) + 90.0) % 180.0)[None, :],
+        img.shape)
+    bend = fibre_bending(angles, coh, um_per_px)
+    cong = radial_congruence(angles, coh, expected, um_per_px)
+
+    if bend_threshold is None:
+        # relative to this organ's own healthy tissue, since bending in
+        # absolute units depends on resolution and fibre thickness
+        bend_threshold = float(np.percentile(bend[region], 75))
+    disrupted = region & ((bend > bend_threshold) | (cong < congruence_threshold))
+
+    lab, n = ndi.label(disrupted)
+    px_area = um_per_px ** 2
+    patches = []
+    for i in range(1, n + 1):
+        m = lab == i
+        area = float(m.sum()) * px_area
+        if area < min_area_um2:
+            continue
+        patches.append({"area_um2": round(area, 3),
+                        "mean_bending": round(float(bend[m].mean()), 4),
+                        "mean_congruence": round(float(cong[m].mean()), 4)})
+    patches.sort(key=lambda p: -p["area_um2"])
+    cortex_area = float(region.sum()) * px_area
+    total = sum(p["area_um2"] for p in patches)
+    return {
+        "n_disrupted_patches": len(patches),
+        "disrupted_area_um2": round(total, 3),
+        "disrupted_fraction_of_cortex": round(total / max(cortex_area, 1e-9), 5),
+        "cortex_fibre_area_um2": round(cortex_area, 3),
+        "median_bending_cortex": round(float(np.median(bend[region])), 4),
+        "median_congruence_cortex": round(float(np.median(cong[region])), 4),
+        "patches": patches[:20],
+        "bend_threshold": round(float(bend_threshold), 4),
+        "measured_in": "cortex only (inner core excluded - it holds the lumen)",
+        "validated_against": ("hand-marked coiled fibres on one dys-1 pharynx: "
+                              "bending 0.849, congruence 0.827"),
+    }
+
+
+def damage_report(image, um_per_px, centreline=None):
     """All three damage features Andres described, side by side.
 
     Deliberately NOT combined into a single score. They are different lesions
     with different causes, and a total would hide which one an animal actually
     has - the thing a person looking at the image can see at a glance and would
     want the numbers to preserve.
+
+    Supply `centreline` whenever it is known. Without it the fibre measure falls
+    back to `coiled_filaments`, which cannot separate cortex from core and
+    scored far worse against real marks - it reported half the fibre area as
+    disrupted. The fallback exists so an unmarked image still returns something;
+    it is not an equivalent.
     """
     out = {"interior_holes": None, "bright_scar": None, "coiled_filaments": None,
-           "refusals": {}}
+           "disrupted_fibres": None, "refusals": {}}
     for name, fn in (("interior_holes", interior_holes),
-                     ("bright_scar", bright_scar),
-                     ("coiled_filaments", coiled_filaments)):
+                     ("bright_scar", bright_scar)):
         try:
             out[name] = fn(image, um_per_px)
         except ContinuityError as exc:
             out["refusals"][name] = str(exc)
+
+    if centreline is not None:
+        try:
+            out["disrupted_fibres"] = disrupted_fibres(image, um_per_px,
+                                                       centreline)
+        except ContinuityError as exc:
+            out["refusals"]["disrupted_fibres"] = str(exc)
+        out["fibre_measure_used"] = "disrupted_fibres (validated)"
+    else:
+        try:
+            out["coiled_filaments"] = coiled_filaments(image, um_per_px)
+        except ContinuityError as exc:
+            out["refusals"]["coiled_filaments"] = str(exc)
+        out["fibre_measure_used"] = "coiled_filaments (FALLBACK - no centreline)"
+        out["fallback_warning"] = (
+            "No lumen centreline was supplied, so cortex and core could not be "
+            "separated and the weaker measure was used. On real tissue it "
+            "reported half the fibre area as disrupted. Supply a centreline.")
     out["combined_score"] = None
     out["why_no_combined_score"] = (
         "Holes, scarring and coiling are different lesions. A single number "
