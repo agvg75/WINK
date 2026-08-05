@@ -153,14 +153,18 @@ class App(CockpitApp):
         self.center_fig = Figure(figsize=(5.6, 4.0), dpi=100)
         self.center_ax = self.center_fig.add_subplot(111); self.center_ax.set_axis_off()
         self.center_canvas = FigureCanvasTkAgg(self.center_fig, master=self.center)
-        self.center_canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=(0, 4))
         self.center_ax.text(0.5, 0.5, "Choose a source; the first frame appears here.",
                             ha="center", va="center", fontsize=10, color="#888888")
         self.center_canvas.draw()
+        # The picture is packed LAST, after every control below, so it takes
+        # only the space that is left. Packed first with expand=True it grew
+        # into the window and pushed the dial and its buttons off the bottom
+        # after a run made the status text longer - the controls vanished and
+        # a second recording could not be chosen.
         dial = ttk.LabelFrame(self.center, text="Display brightness / contrast "
                                                 "(changes what you SEE, never "
                                                 "what is measured)", padding=6)
-        dial.pack(fill="x", padx=6, pady=(0, 4))
+        dial.pack(side="bottom", fill="x", padx=6, pady=(0, 4))
         self.disp_lo = tk.DoubleVar(value=1.0)
         self.disp_hi = tk.DoubleVar(value=99.5)
         ttk.Label(dial, text="black point (percentile)").grid(row=0, column=0,
@@ -183,14 +187,20 @@ class App(CockpitApp):
                    command=self.choose_frame_subset).grid(row=1, column=3, padx=4)
 
         ttk.Label(self.center, textvariable=self.status, wraplength=560,
-                  justify="left").pack(anchor="w", padx=6, pady=(0, 2))
+                  justify="left").pack(side="bottom", anchor="w", padx=6,
+                                       pady=(0, 2))
         ttk.Label(self.center, wraplength=560, justify="left", foreground="#8a3b00",
                   text=("Pick a job: (1) body-wall GCaMP - is the worm separable from "
                         "background enough to read its outline/kinematics; (2) a single "
                         "cell - track it and its soma->tip long axis (position, brightness, "
                         "translational and angular velocity); (3) both. Cell tracking "
                         "searches only near the predicted position - it never jumps to the "
-                        "brightest object elsewhere.")).pack(anchor="w", padx=6, pady=(0, 6))
+                        "brightest object elsewhere.")).pack(side="bottom", anchor="w",
+                                                             padx=6, pady=(0, 6))
+        # Everything above claimed its space from the bottom up; the canvas now
+        # fills whatever remains and can never squeeze the controls out.
+        self.center_canvas.get_tk_widget().pack(fill="both", expand=True,
+                                                padx=6, pady=(0, 4))
 
     def find_episodes(self):
         """Split a session folder into separate recordings and let one be chosen.
@@ -618,16 +628,31 @@ class App(CockpitApp):
             anatomical_orientation="unknown").validate()
 
     def load_feasibility_sample(self):
-        """Read only the transparent feasibility subsample, never the full movie."""
+        """Read only the transparent feasibility subsample, never the full movie.
+
+        The sample is drawn from the CHOSEN RANGE, not the whole file. It used
+        to span the entire folder regardless, so after picking one recording out
+        of a session the feasibility pass still assessed all of it - including
+        the transmitted-light stretches between takes - and reported the worm as
+        not separable when the chosen episode was fine. The choice had no effect
+        on the thing it was made for.
+        """
         movie = open_movie(self.v["source"].get())
         count = int(movie.n_frames)
         if count < 2:
             movie.close()
             raise ValueError("A multi-frame recording is required.")
-        sample_count = max(
-            2, min(int(self.v["sample_frames"].get()), count))
+        episode = getattr(self, "episode_range", None)
+        lo, hi = (int(episode[0]), min(int(episode[1]), count - 1)) if episode \
+            else (0, count - 1)
+        if hi - lo < 1:
+            movie.close()
+            raise ValueError(
+                f"The chosen range {lo}-{hi} holds fewer than two frames.")
+        sample_count = max(2, min(int(self.v["sample_frames"].get()),
+                                  hi - lo + 1))
         indices = np.unique(np.linspace(
-            0, count - 1, sample_count).round().astype(int))
+            lo, hi, sample_count).round().astype(int))
         frames = np.stack(
             [gray(movie.get_frame(int(index))) for index in indices])
         movie.close()
