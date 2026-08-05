@@ -116,6 +116,84 @@ except ca.CycleError as e2:
     check("...naming the count rather than returning a number",
           "Only 4 cycles" in str(e2))
 
+# --- waveform shape, and variability as its own dimension -----------------
+# THE PROPERTY THAT MATTERS: two trains with the SAME mean excursion and the
+# same mean shape but different cycle-to-cycle spread must be separable. If the
+# means alone were reported these two animals would be called identical.
+L = 20                       # frames per cycle at 20 fps -> 1 Hz
+rng2 = np.random.default_rng(11)
+
+
+def build(n_cycles, amps, gammas):
+    out = []
+    for a, g in zip(amps, gammas):
+        u = np.linspace(0.0, 1.0, L, endpoint=False)
+        out.append(a * np.sin(2 * np.pi * (u ** g)))
+    return np.concatenate(out)
+
+
+NC = 40
+steady_sig = build(NC, np.full(NC, 30.0), np.full(NC, 1.0))
+erratic_sig = build(NC,
+                    rng2.normal(30.0, 7.0, NC),
+                    rng2.uniform(0.65, 1.45, NC))
+
+rs = ca.cycles_over_spans(steady_sig, [(0, steady_sig.size - 1)], fps=FPS)
+re_ = ca.cycles_over_spans(erratic_sig, [(0, erratic_sig.size - 1)], fps=FPS)
+
+check("shape descriptors appear on every cycle row",
+      all("time_to_peak_frac" in r and "time_to_relax_frac" in r
+          and "asymmetry" in r for r in rs["cycles"]),
+      f"{rs['n_cycles']} rows")
+check("a symmetric sine peaks about a quarter of the way through",
+      abs(np.median([r["time_to_peak_frac"] for r in rs["cycles"]]) - 0.25) < 0.08,
+      f"median {np.median([r['time_to_peak_frac'] for r in rs['cycles']]):.3f}")
+
+vs = ca.shape_variability(rs["cycles"])
+ve = ca.shape_variability(re_["cycles"])
+
+check("the two trains have indistinguishable MEDIAN excursion",
+      abs(vs["fields"]["excursion"]["median"]
+          - ve["fields"]["excursion"]["median"]) < 6.0,
+      f"{vs['fields']['excursion']['median']:.1f} vs "
+      f"{ve['fields']['excursion']['median']:.1f}")
+check("...but clearly different excursion VARIABILITY",
+      ve["fields"]["excursion"]["cv"] > 3 * vs["fields"]["excursion"]["cv"],
+      f"CV {ve['fields']['excursion']['cv']} vs "
+      f"{vs['fields']['excursion']['cv']}")
+check("...and different time-to-peak variability",
+      ve["fields"]["time_to_peak_frac"]["sd"]
+      > 3 * vs["fields"]["time_to_peak_frac"]["sd"],
+      f"SD {ve['fields']['time_to_peak_frac']['sd']} vs "
+      f"{vs['fields']['time_to_peak_frac']['sd']}")
+
+check("a robust CV is reported alongside the plain one",
+      ve["fields"]["excursion"]["robust_cv"] is not None)
+check("variability is stated to be a separate dimension, not a worse mean",
+      vs["is_a_separate_dimension_from_the_mean"] is True
+      and "Levene" in vs["note"])
+check("...and the noise confound is stated",
+      "imaging becomes the phenotype" in vs["confound"])
+
+# --- the quantisation floor ----------------------------------------------
+check("a regular train is NOT credited with timing variability",
+      vs["fields"]["time_to_peak_frac"]["above_quantisation_floor"] is False
+      and "warning" in vs["fields"]["time_to_peak_frac"],
+      f"SD {vs['fields']['time_to_peak_frac']['sd']} vs floor "
+      f"{vs['fields']['time_to_peak_frac']['timing_quantisation_sd']}")
+check("...while genuine timing variability clears the floor",
+      ve["fields"]["time_to_peak_frac"]["above_quantisation_floor"] is True)
+
+try:
+    ca.shape_variability(rs["cycles"][:3])
+    check("too few cycles are skipped rather than reported", True)
+except Exception:
+    check("too few cycles are skipped rather than reported", False)
+few = ca.shape_variability(rs["cycles"][:3])
+check("...naming which fields were skipped and why",
+      "excursion" in few["not_enough_cycles"]
+      and "need 8" in few["not_enough_cycles"]["excursion"])
+
 # --- a signal with no oscillation ----------------------------------------
 flat = np.linspace(0, 1, N)
 out = ca.cycles_over_spans(flat, [(0, N - 1)], fps=FPS)

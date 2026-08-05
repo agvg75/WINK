@@ -53,6 +53,57 @@ def find_cycles(signal, fps=None, min_period_frames=4, detrend_window=None):
     return cycles, c
 
 
+def shape_descriptors(segment, fps=None, prefix=""):
+    """Waveform SHAPE within one cycle - how it rose, how it relaxed.
+
+    Excursion says how far; these say how it got there and back. Two cycles of
+    identical amplitude and identical period can have completely different rise
+    and relaxation kinetics, and a tissue losing its contractile machinery is
+    expected to change the second while leaving the first alone for a while.
+
+    Timing is reported as a FRACTION of the cycle, not in seconds, so cycles at
+    different rates are comparable - a slow cycle and a fast cycle with the same
+    asymmetry give the same number. The absolute seconds are reported too,
+    because a rate-independent shape change and a slowing are different findings.
+    """
+    s = np.asarray(segment, dtype=float)
+    n = s.size
+    out = {}
+    if n < 3 or not np.isfinite(s).any():
+        for k in ("time_to_peak_frac", "time_to_relax_frac", "asymmetry",
+                  "rise_rate", "decay_rate", "time_to_peak_s",
+                  "time_to_relax_s"):
+            out[f"{prefix}{k}"] = None
+        return out
+
+    i_pk = int(np.nanargmax(s))
+    # Relaxation runs from the peak to the lowest point AFTER it. Searching the
+    # whole cycle would find a trough that preceded the peak and report a
+    # negative relaxation time.
+    tail = s[i_pk:]
+    i_tr = i_pk + int(np.nanargmin(tail)) if tail.size > 1 else n - 1
+
+    denom = max(n - 1, 1)
+    rise_frac = i_pk / denom
+    relax_frac = (i_tr - i_pk) / denom
+    rise_s = (i_pk / float(fps)) if fps else None
+    relax_s = ((i_tr - i_pk) / float(fps)) if fps else None
+
+    amp_up = float(s[i_pk] - s[0])
+    amp_dn = float(s[i_pk] - s[i_tr])
+    out[f"{prefix}time_to_peak_frac"] = round(float(rise_frac), 4)
+    out[f"{prefix}time_to_relax_frac"] = round(float(relax_frac), 4)
+    out[f"{prefix}asymmetry"] = (round(float(rise_frac / (rise_frac + relax_frac)), 4)
+                                 if (rise_frac + relax_frac) > 0 else None)
+    out[f"{prefix}time_to_peak_s"] = round(rise_s, 5) if rise_s is not None else None
+    out[f"{prefix}time_to_relax_s"] = round(relax_s, 5) if relax_s is not None else None
+    out[f"{prefix}rise_rate"] = (round(amp_up / rise_s, 5)
+                                 if fps and rise_s and rise_s > 0 else None)
+    out[f"{prefix}decay_rate"] = (round(amp_dn / relax_s, 5)
+                                  if fps and relax_s and relax_s > 0 else None)
+    return out
+
+
 def cycle_table(cycles, detrended, signals=None, fps=None, span_offset=0,
                 span_id=0):
     """One row per cycle: excursion, duration, and the peak of each signal.
@@ -81,6 +132,7 @@ def cycle_table(cycles, detrended, signals=None, fps=None, span_offset=0,
         if fps:
             row["duration_s"] = round((b - a + 1) / float(fps), 4)
             row["frequency_hz"] = round(float(fps) / max(b - a + 1, 1), 4)
+        row.update(shape_descriptors(seg, fps=fps))
         for name, series in signals.items():
             s = np.asarray(series, dtype=float)[a:b + 1]
             if s.size == 0 or not np.isfinite(s).any():
@@ -94,6 +146,10 @@ def cycle_table(cycles, detrended, signals=None, fps=None, span_offset=0,
             # phase in turns (0..1) through the cycle, so cycles of different
             # duration are comparable
             row[f"{name}_phase_at_peak"] = round(i / max(s.size - 1, 1), 4)
+            # the same shape descriptors for the measured signal - a calcium
+            # transient that takes longer to decay is a different finding from
+            # one that peaks lower, and only the shape terms separate them
+            row.update(shape_descriptors(s, fps=fps, prefix=f"{name}_"))
         rows.append(row)
     return rows
 
@@ -131,6 +187,92 @@ def cycles_over_spans(signal, spans, signals=None, fps=None,
         "note": ("Each confidence span was cycled independently and the cycles "
                  "pooled. Spans were never concatenated, so no cycle's period "
                  "or excursion describes a join between them."),
+    }
+
+
+SHAPE_FIELDS = ("excursion", "duration_s", "time_to_peak_frac",
+                "time_to_relax_frac", "asymmetry", "rise_rate", "decay_rate")
+
+
+def shape_variability(rows, fields=None, min_n=8):
+    """How much cycles DIFFER from each other - a dimension a mean cannot hold.
+
+    Two animals can have identical mean excursion, identical mean time-to-peak
+    and identical mean rate while one is metronomic and the other erratic. The
+    mean is blind to that by construction, and it is the difference that a
+    failing tissue may show first.
+
+    This is not speculative. In the C. elegans defecation rhythm, knocking down
+    the TRPM channels gon-2 and gtl-1 INCREASES cycle variability with NO CHANGE
+    IN THE MEAN period - a phenotype invisible to any analysis reporting means.
+    So the precedent exists in this animal; what is thin in the literature is
+    applying the same treatment to the WAVEFORM SHAPE terms - rise time,
+    relaxation time, per-cycle excursion - rather than only to cycle period.
+
+    Reports both a plain CV and a ROBUST CV from the median absolute deviation,
+    because one mis-detected cycle inflates an ordinary standard deviation far
+    more than it moves a median, and the disagreement between the two is itself
+    the signal that a detection needs looking at.
+    """
+    fields = list(fields or SHAPE_FIELDS)
+    durations = [r.get("duration_frames") for r in rows
+                 if r.get("duration_frames")]
+    median_frames = float(np.median(durations)) if durations else None
+
+    out, skipped = {}, {}
+    for f in fields:
+        vals = np.array([float(r[f]) for r in rows
+                         if r.get(f) is not None and np.isfinite(float(r[f]))])
+        if vals.size < min_n:
+            skipped[f] = f"only {vals.size} cycles (need {min_n})"
+            continue
+        med = float(np.median(vals))
+        mad = float(np.median(np.abs(vals - med)))
+        mean = float(np.mean(vals))
+        entry = {
+            "n": int(vals.size),
+            "median": round(med, 6),
+            "iqr": round(float(np.percentile(vals, 75)
+                               - np.percentile(vals, 25)), 6),
+            "sd": round(float(np.std(vals, ddof=1)), 6),
+            "cv": round(float(np.std(vals, ddof=1) / mean), 4) if mean else None,
+            # 1.4826 puts the MAD on the same scale as a standard deviation
+            # for normally distributed data, so the two CVs are comparable
+            "robust_cv": (round(1.4826 * mad / abs(med), 4) if med else None),
+        }
+        # A timing fraction cannot be measured more finely than one frame. With
+        # F frames in a cycle the quantisation step is 1/(F-1), and quantisation
+        # alone produces an SD of step/sqrt(12) in a PERFECTLY regular animal.
+        # Reporting variability below that floor would be reporting the camera.
+        if f.endswith("_frac") or f == "asymmetry":
+            if median_frames and median_frames > 1:
+                step = 1.0 / (median_frames - 1)
+                floor = step / np.sqrt(12.0)
+                entry["timing_quantisation_sd"] = round(float(floor), 5)
+                entry["above_quantisation_floor"] = bool(entry["sd"] > 2 * floor)
+                if not entry["above_quantisation_floor"]:
+                    entry["warning"] = (
+                        f"SD {entry['sd']} is within twice the {floor:.4f} "
+                        f"expected from frame quantisation alone at "
+                        f"{median_frames:.0f} frames per cycle. Record faster "
+                        f"before treating this as variability of the animal.")
+        out[f] = entry
+
+    return {
+        "fields": out,
+        "not_enough_cycles": skipped,
+        "median_frames_per_cycle": median_frames,
+        "is_a_separate_dimension_from_the_mean": True,
+        "note": ("Variability across cycles is not a worse version of the mean, "
+                 "it is a different measurement. Report both. Compare with "
+                 "Levene's or Brown-Forsythe test, which compare SPREADS - a "
+                 "t-test on the means will find nothing when only the spread "
+                 "has changed."),
+        "confound": ("Cycle-to-cycle spread rises with measurement noise as "
+                     "well as with biology, so a dimmer or blurrier recording "
+                     "looks more variable. Compare variability only across "
+                     "recordings of matched exposure, magnification and rate, "
+                     "or the imaging becomes the phenotype."),
     }
 
 
