@@ -214,6 +214,73 @@ def known_tools():
     return sorted(ENVELOPES)
 
 
+def export_grounding(path=None):
+    """Write the whole grounding as one document, for a Claude Project.
+
+    WHY THIS EXISTS SEPARATELY FROM THE ENDPOINT. The endpoint is plumbing; the
+    GROUNDING is the part that makes an assistant useful rather than fluent.
+    A lab that already has a Claude account can attach this document to a
+    Project and get most of the value today, with no API key, no server and no
+    cost beyond the subscription it already pays for.
+
+    What that route does NOT give you is the ledger - no record of what was
+    asked, no answers accumulating for the next student, no repeated questions
+    surfacing as a bug queue - and no per-student caps, because a subscription
+    is flat. Those are the reasons to build the endpoint later, and they are
+    better reasons once there is evidence students use it at all.
+    """
+    parts = [
+        "# WINK: what the tools measure and what their settings hide",
+        "",
+        "Attach this to a Claude Project. It is the operating envelope of each "
+        "tool - the settings that bound what it can detect and what happens to "
+        "a specimen outside them - plus what each measure computes and how it "
+        "was validated.",
+        "",
+        "**Answer from this document.** If it does not cover a question, say "
+        "so and suggest asking Andres. General microscopy advice that sounds "
+        "reasonable sends a student to fix something that was never the "
+        "problem, and they have no way to tell.",
+        "",
+    ]
+    for key in known_tools():
+        env = ENVELOPES[key]
+        parts += [f"## {env['tool']}  (`{key}`)", f"*Source: {env['module']}*", ""]
+        for lim in env["limits"]:
+            parts += [f"**Setting:** {lim['setting']}",
+                      f"**Consequence:** {lim['consequence']}",
+                      f"**What to do:** {lim['what_to_do']}", ""]
+
+    try:
+        import method_provenance as mp
+        parts += ["## What the measures compute, and how they were validated", ""]
+        for k, m in mp.METHODS.items():
+            line = f"- **{m['title']}** (`{m['module']}`)"
+            if m.get("verified"):
+                line += f" — *validated:* {m['verified']}"
+            if m.get("known_limits"):
+                line += f" — *known limits:* {m['known_limits']}"
+            parts.append(line)
+        parts += ["", "## Things we have NOT solved", ""]
+        for k, p in mp.OPEN_PROBLEMS.items():
+            parts.append(f"- **{k}** — {p['problem']} A solution would show: "
+                         f"{p['would_resolve']}")
+        parts += ["", "## Approaches already tried and rejected", "",
+                  "*Several scored better on the obvious metric and were "
+                  "rejected anyway. If a student proposes one, this is why.*", ""]
+        for k, r in mp.REJECTED.items():
+            parts.append(f"- **{r['alternative']}** {r['why']} "
+                         f"({r['numbers']})")
+    except ImportError:                                    # pragma: no cover
+        parts.append("*(method_provenance unavailable; envelopes only.)*")
+
+    text = "\n".join(parts) + "\n"
+    if path:
+        from pathlib import Path
+        Path(path).write_text(text, encoding="utf-8")
+    return text
+
+
 def envelope_notice(tool_key):
     """The short warning a tool can show BEFORE it runs, not only on failure.
 
