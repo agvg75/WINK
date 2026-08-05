@@ -189,6 +189,232 @@ def continuity_metrics(unrolled, arc_um, radius_um, tissue_percentile=60,
     }
 
 
+def interior_holes(image, um_per_px, tissue_percentile=60, min_area_um2=2.0,
+                   close_um=1.0):
+    """Enclosed voids INSIDE the muscle, with the perimeter intact.
+
+    Andres, on a dystrophic terminal bulb: "the perimeter is intact, but inside
+    there is a hole." That is a different topology from an interruption, and
+    `continuity_metrics` cannot see it - that function asks whether a
+    cross-section along the lumen is empty, and a bulb with a hole in the
+    middle still has muscle all the way round, so every cross-section is
+    occupied and it scores as perfectly continuous.
+
+    An enclosed void is exactly what fill-holes finds: the difference between
+    the filled tissue mask and the tissue itself. A void that opens to the
+    outside is not counted, which is the point - that is the perimeter being
+    broken, a different thing again.
+    """
+    from scipy import ndimage as ndi
+
+    img = np.asarray(image, dtype=float)
+    lo, hi = np.percentile(img, [20, 99])
+    if hi <= lo:
+        raise ContinuityError(
+            "The image has no intensity range, so tissue cannot be separated "
+            "from background and a 'hole' would be meaningless.")
+    tissue = img > lo + 0.25 * (hi - lo)
+    k = max(int(close_um / um_per_px), 1)
+    tissue = ndi.binary_closing(tissue, np.ones((k, k)))
+    filled = ndi.binary_fill_holes(tissue)
+    voids = filled & ~tissue
+
+    lab, n = ndi.label(voids)
+    px_area = um_per_px ** 2
+    holes = []
+    for i in range(1, n + 1):
+        m = lab == i
+        area = float(m.sum()) * px_area
+        if area < min_area_um2:
+            continue
+        ys, xs = np.nonzero(m)
+        holes.append({
+            "area_um2": round(area, 3),
+            "centroid_y_um": round(float(ys.mean()) * um_per_px, 2),
+            "centroid_x_um": round(float(xs.mean()) * um_per_px, 2),
+            "equivalent_diameter_um": round(2.0 * np.sqrt(area / np.pi), 3),
+        })
+    holes.sort(key=lambda h: -h["area_um2"])
+    tissue_area = float(filled.sum()) * px_area
+    total = sum(h["area_um2"] for h in holes)
+    return {
+        "n_interior_holes": len(holes),
+        "hole_area_um2": round(total, 3),
+        "hole_fraction_of_organ": round(total / max(tissue_area, 1e-9), 5),
+        "largest_hole_um2": round(holes[0]["area_um2"], 3) if holes else 0.0,
+        "holes": holes[:20],
+        "organ_area_um2": round(tissue_area, 3),
+        "note": ("Enclosed voids only - a gap that opens to the outside is a "
+                 "broken perimeter, which is a different lesion and is not "
+                 "counted here."),
+    }
+
+
+def bright_scar(image, um_per_px, sigma_um=1.0, z_threshold=3.0,
+                min_area_um2=1.0):
+    """Abnormally BRIGHT regions - scar tissue, not absence.
+
+    The other half of Andres's description: alongside holes, a degenerating
+    pharynx shows "extra bright scar tissue". Every measure written before this
+    looked for missing signal, so a lesion made of EXCESS signal was invisible
+    to all of them.
+
+    Brightness is judged against the organ's own distribution, in robust units
+    (median and MAD), because absolute intensity varies with laser power,
+    exposure and depth and cannot be compared between animals.
+    """
+    from scipy import ndimage as ndi
+
+    img = ndi.gaussian_filter(np.asarray(image, dtype=float),
+                              max(sigma_um / um_per_px, 0.8))
+    lo, hi = np.percentile(img, [20, 99])
+    tissue = img > lo + 0.25 * (hi - lo)
+    if tissue.sum() < 100:
+        raise ContinuityError("Too little tissue to judge scarring against.")
+    vals = img[tissue]
+    med = float(np.median(vals))
+    mad = float(np.median(np.abs(vals - med))) * 1.4826
+    if mad <= 0:
+        raise ContinuityError(
+            "The tissue has no intensity variation, so 'abnormally bright' has "
+            "no meaning here.")
+    z = (img - med) / mad
+    scar = tissue & (z > z_threshold)
+    lab, n = ndi.label(scar)
+    px_area = um_per_px ** 2
+    patches = []
+    for i in range(1, n + 1):
+        m = lab == i
+        area = float(m.sum()) * px_area
+        if area < min_area_um2:
+            continue
+        patches.append({"area_um2": round(area, 3),
+                        "peak_z": round(float(z[m].max()), 2)})
+    patches.sort(key=lambda p: -p["area_um2"])
+    organ = float(tissue.sum()) * px_area
+    total = sum(p["area_um2"] for p in patches)
+    return {
+        "n_scar_patches": len(patches),
+        "scar_area_um2": round(total, 3),
+        "scar_fraction_of_organ": round(total / max(organ, 1e-9), 5),
+        "patches": patches[:20],
+        "z_threshold": z_threshold,
+        "note": ("Brightness judged against the organ's own median and MAD, "
+                 "not an absolute level - laser power, exposure and depth all "
+                 "move absolute intensity and none of them are pathology."),
+    }
+
+
+def coiled_filaments(image, um_per_px, expected_angle_map=None,
+                     coil_window_um=0.2, min_area_um2=1.0):
+    """Filaments that have DETACHED and lost axial orientation - they coil.
+
+    Andres's third damage feature. Healthy pharyngeal fibres run radially about
+    the lumen in a consistent local direction; detached ones curl, so within a
+    small neighbourhood their orientation turns through a large angle instead
+    of staying put.
+
+    Measured as DEVIATION FROM THE EXPECTED DIRECTION, not as raw local
+    variability. In a radially organised organ the orientation turns everywhere
+    by construction - that is what "radial" means - so a spread measure would
+    score healthy muscle as coiled and the metric would be worthless. What
+    marks a detached filament is that it points somewhere the local anatomy
+    does not.
+
+    `expected_angle_map` should give the expected fibre direction in degrees at
+    each pixel. With none supplied it is taken as radial about the tissue's
+    centroid, which is right for a bulb and wrong for the isthmus - so supply
+    it when the geometry is known.
+
+    Deliberately not the same as low coherence either: empty space has low
+    coherence, and scoring it as disorder would make every hole look like a
+    tangle. Only places with real fibre signal are considered.
+    """
+    from scipy import ndimage as ndi
+    import fibre_orientation as fo
+
+    img = np.asarray(image, dtype=float)
+    angles, coh = fo.structure_tensor_2d(img, sigma=1.5, rho=3.0)
+    lo, hi = np.percentile(img, [20, 99])
+    tissue = img > lo + 0.25 * (hi - lo)
+    has_fibre = tissue & (coh > 0.25)
+    if has_fibre.sum() < 100:
+        raise ContinuityError(
+            "Too little coherent fibre signal to judge coiling. An image with "
+            "no resolvable filaments cannot show detached ones.")
+
+    if expected_angle_map is None:
+        ys, xs = np.nonzero(tissue)
+        cy, cx = float(ys.mean()), float(xs.mean())
+        yy, xx = np.mgrid[0:img.shape[0], 0:img.shape[1]]
+        expected_angle_map = np.degrees(np.arctan2(yy - cy, xx - cx)) % 180.0
+    expected = np.asarray(expected_angle_map, dtype=float)
+
+    # BARELY SMOOTH AT ALL. The structure tensor above already averages over
+    # sigma and rho, so anything added here is pure dilution. Measured on a
+    # fixture where a detached filament sits at 84.9 degrees from expected and
+    # healthy radial tissue at 7.1 - excellent separation - smoothing with
+    # sigma 16 px across a 5 px filament pulled that 85 down to 26 and nothing
+    # was detected at all. The lesion is one filament wide; the support must
+    # not be wider than the lesion.
+    dev = fo._angular_difference(angles, expected)      # 0..90 degrees
+    sigma = max(coil_window_um / um_per_px, 1.0)
+    wgt = np.where(has_fibre, coh, 0.0)
+    dev_s = (ndi.gaussian_filter(dev * wgt, sigma)
+             / np.maximum(ndi.gaussian_filter(wgt, sigma), 1e-9))
+    spread = np.clip(dev_s / 90.0, 0.0, 1.0)   # 0 = as expected, 1 = across it
+
+    coiled = has_fibre & (spread > 0.45)
+    lab, n = ndi.label(coiled)
+    px_area = um_per_px ** 2
+    patches = []
+    for i in range(1, n + 1):
+        m = lab == i
+        area = float(m.sum()) * px_area
+        if area < min_area_um2:
+            continue
+        patches.append({"area_um2": round(area, 3),
+                        "mean_spread": round(float(spread[m].mean()), 3)})
+    patches.sort(key=lambda p: -p["area_um2"])
+    fibre_area = float(has_fibre.sum()) * px_area
+    total = sum(p["area_um2"] for p in patches)
+    return {
+        "n_coiled_patches": len(patches),
+        "coiled_area_um2": round(total, 3),
+        "coiled_fraction_of_fibre": round(total / max(fibre_area, 1e-9), 5),
+        "patches": patches[:20],
+        "note": ("Measured only where there IS fibre signal. Low coherence "
+                 "alone is not coiling - empty space has low coherence too, "
+                 "and scoring it as disorder would make every hole look like "
+                 "a tangle."),
+    }
+
+
+def damage_report(image, um_per_px):
+    """All three damage features Andres described, side by side.
+
+    Deliberately NOT combined into a single score. They are different lesions
+    with different causes, and a total would hide which one an animal actually
+    has - the thing a person looking at the image can see at a glance and would
+    want the numbers to preserve.
+    """
+    out = {"interior_holes": None, "bright_scar": None, "coiled_filaments": None,
+           "refusals": {}}
+    for name, fn in (("interior_holes", interior_holes),
+                     ("bright_scar", bright_scar),
+                     ("coiled_filaments", coiled_filaments)):
+        try:
+            out[name] = fn(image, um_per_px)
+        except ContinuityError as exc:
+            out["refusals"][name] = str(exc)
+    out["combined_score"] = None
+    out["why_no_combined_score"] = (
+        "Holes, scarring and coiling are different lesions. A single number "
+        "would hide which one an animal has, which is exactly what a person "
+        "reading the image can see and would want kept.")
+    return out
+
+
 def compare(control, mutant):
     """Put two animals side by side without pretending it is a statistic.
 
