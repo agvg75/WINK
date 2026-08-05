@@ -409,15 +409,18 @@ def render(rows, recording=None, fps=None, shared_limits=None, title=None,
                     fontsize=5.5, ha="right", va="center", color="#22303A",
                     bbox=dict(facecolor="white", alpha=0.75, edgecolor="none",
                               pad=1.0), zorder=6)
-        if axis_labels:
-            # Name BOTH ends on every panel. An unlabelled body axis is worse
-            # than a wrongly-oriented one: a reader who knows the convention
-            # assumes it, and a reader who does not cannot check.
-            top, bot = ("tail", "head") if head_down else ("head", "tail")
-            ax.text(-0.012, 1.0, top, transform=ax.transAxes, fontsize=6,
-                    ha="right", va="top", color="#5E6E76")
-            ax.text(-0.012, 0.0, bot, transform=ax.transAxes, fontsize=6,
-                    ha="right", va="bottom", color="#5E6E76")
+        # ONE label, on the last panel only, inside the plot. Naming both ends
+        # on all seven panels was clutter: once "head" is placed, the other end
+        # is implied, and the panels share an axis so the convention carries
+        # across all of them. The label sits inside because the margin at half
+        # width is where the panels collide.
+        if axis_labels and p is spec[-1]:
+            ax.text(0.012, 0.06 if head_down else 0.94, "head",
+                    transform=ax.transAxes, fontsize=6.5,
+                    ha="left", va="bottom" if head_down else "top",
+                    color="#22303A",
+                    bbox=dict(facecolor="white", alpha=0.85,
+                              edgecolor="none", pad=1.2), zorder=7)
         ax.set_yticks([])
         fig.colorbar(im, ax=ax, pad=0.01, fraction=0.02)
 

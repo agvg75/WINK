@@ -184,8 +184,10 @@ lo, hi = axes[0].get_ylim()
 check("...segment 0 sits at the bottom of the panel", lo < hi,
       f"ylim {lo:.1f} -> {hi:.1f}")
 texts = {t.get_text() for ax in axes for t in ax.texts}
-check("both ends are NAMED on every panel", {"head", "tail"} <= texts,
-      "an unlabelled body axis is worse than a wrongly-oriented one")
+check('the body axis is named ONCE, on the last panel', 'head' in texts,
+      'once head is placed the other end is implied, and the panels share an axis')
+check('...not repeated on every panel, which was clutter',
+      sum(1 for ax in axes for t in ax.texts if t.get_text() == 'head') == 1)
 
 up = ky.render(rows, n_frames=NF, n_seg=NSEG, head_down=False)
 check("the convention can be flipped", up[2]["orientation"] == "head at top")
