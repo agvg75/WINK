@@ -171,6 +171,65 @@ except ky.KymogramError as exc:
     check("...saying flags would be silently lost",
           "silently lost" in str(exc))
 
+# --- orientation: head DOWN, and both ends named -------------------------
+import matplotlib   # noqa: E402
+matplotlib.use("Agg")
+
+fig, axes, info = ky.render(rows, n_frames=NF, n_seg=NSEG)
+check("head is at the BOTTOM by default, matching how the lab publishes",
+      info["orientation"] == "head at bottom", info["orientation"])
+# imshow itself inverts the y-axis (row 0 at top), so head-down means putting
+# it back: segment 0 ends up at the BOTTOM, i.e. ylim ascending.
+lo, hi = axes[0].get_ylim()
+check("...segment 0 sits at the bottom of the panel", lo < hi,
+      f"ylim {lo:.1f} -> {hi:.1f}")
+texts = {t.get_text() for ax in axes for t in ax.texts}
+check("both ends are NAMED on every panel", {"head", "tail"} <= texts,
+      "an unlabelled body axis is worse than a wrongly-oriented one")
+
+up = ky.render(rows, n_frames=NF, n_seg=NSEG, head_down=False)
+check("the convention can be flipped", up[2]["orientation"] == "head at top")
+ulo, uhi = up[1][0].get_ylim()
+check("...and segment 0 moves to the top when it is", ulo > uhi,
+      f"ylim {ulo:.1f} -> {uhi:.1f}")
+
+# --- the head: marked, kept, and out of the scale ------------------------
+# The head carries extra reporters in green and red. Including it in the scale
+# sets the ceiling from tissue nobody is measuring and crushes the body.
+head_bright = [dict(r) for r in rows]
+for r in head_bright:
+    if r["segment"] < 8:
+        r["green_p90"] = 250.0        # the head reporters, far above the body
+        r["red_p90"] = 250.0
+
+fig2, ax2, info2 = ky.render(head_bright, n_frames=NF, n_seg=NSEG)
+check("green and red are scaled on the BODY, not the head",
+      info2["limits"][1] < 200,
+      f"ceiling {info2['limits'][1]:.0f}, not the head's 250")
+check("...and the report says what was excluded and why",
+      "extra reporters" in info2["limit_basis"]["excluded"],
+      info2["limit_basis"]["excluded"])
+check("...which is what stops the body being crushed into the ramp's bottom",
+      info2["limits"][1] < 200)
+
+from matplotlib.patches import Rectangle   # noqa: E402
+boxes = {lbl: sum(1 for p in ax.patches if isinstance(p, Rectangle))
+         for lbl, ax in zip(info2["panels"], ax2)}
+check("green and red panels carry a head box",
+      all(boxes[l] >= 1 for l in boxes if l.startswith(("green", "red"))),
+      f"{boxes}")
+check("...blue does NOT, because the head does not compromise it",
+      all(boxes[l] == 0 for l in boxes if l.startswith("blue")),
+      f"blue boxes: {[boxes[l] for l in boxes if l.startswith('blue')]}")
+check("...and curvature does not either", boxes["curvature (deg)"] == 0)
+check("the head data is KEPT, not removed - an absence would invite the "
+      "assumption that nothing was there",
+      np.isfinite(ky.build(head_bright, "green_p90", NSEG, "dorsal",
+                           NF)[:8]).any())
+check("which channels are masked is reported",
+      set(info2["head_masked_in"]) == {"green", "red"}
+      and info2["head_segments"] == list(range(8)))
+
 print()
 failed = [n for n, ok, _ in results if not ok]
 print(f"{len(results) - len(failed)} of {len(results)} checks passed")

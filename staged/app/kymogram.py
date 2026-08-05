@@ -57,6 +57,13 @@ CHANNEL_COLOUR = {"blue": (0.05, 0.25, 0.85),
 MISSING = (0.20, 0.20, 0.24)
 
 
+# The head carries ADDITIONAL reporters in green and red, which is why this lab
+# does not read body-wall calcium there. Matches worm_kinetics.HEAD_SEGMENTS.
+HEAD_SEGMENTS = tuple(range(8))
+# Blue survives the head: worm_kinetics.KEEP_IN_HEAD says the same.
+MASK_HEAD_CHANNELS = ("green", "red")
+
+
 class KymogramError(Exception):
     """Refusals that name the consequence."""
 
@@ -177,13 +184,23 @@ def build(rows, value, n_seg=24, side=None, n_frames=None):
     return grid
 
 
-def limits(grids, percentile=99.0, shared=True):
+def limits(grids, percentile=99.0, shared=True, exclude_rows=None):
     """Display limits, stated rather than implied.
 
     `shared=True` computes one set across every grid given, which is what makes
     two recordings comparable. Per-recording limits make a dim animal and a
     bright one look identical.
+
+    `exclude_rows` keeps segments OUT OF THE SCALE without removing them from
+    the picture. The head carries extra reporters in green and red, so including
+    it sets the ceiling from tissue nobody is measuring and crushes the entire
+    body into the bottom of the ramp - which is exactly what the first render
+    did. The body normalises the body.
     """
+    if exclude_rows is not None:
+        keep = [i for i in range(max(g.shape[0] for g in grids if g is not None))
+                if i not in set(exclude_rows)]
+        grids = [g[keep] if g is not None else None for g in grids]
     arrays = [g for g in grids if g is not None and np.isfinite(g).any()]
     if not arrays:
         return (0.0, 1.0, {"basis": "no finite data", "shared": shared})
@@ -303,22 +320,44 @@ def flagged_recordings(paths):
 # Drawing
 # --------------------------------------------------------------------------- #
 def render(rows, recording=None, fps=None, shared_limits=None, title=None,
-           on_flag=None, width=5.5, row_height=0.85, max_columns=1400, **kw):
+           on_flag=None, width=5.5, row_height=0.85, max_columns=1400,
+           head_down=True, axis_labels=True,
+           head_segments=HEAD_SEGMENTS, **kw):
     """Draw the panel stack. Returns (figure, axes). Click a panel to flag.
 
     `shared_limits` pins the fluorescence scale - pass the same value across a
     batch and the recordings become comparable by eye, which is the entire
     point of reviewing them together.
+
+    HEAD DOWN BY DEFAULT, and labelled. Segment 0 is the head and imshow puts
+    row 0 at the top, so the first version plotted head-up without saying so.
+    This lab publishes head-down, and an unlabelled body axis is worse than a
+    wrong one: a reader who knows the convention will assume it, and a reader
+    who does not has no way to check. Both ends are now named on every panel.
     """
     import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
+    from matplotlib.patches import Rectangle
 
     spec = panels(rows, **kw)
     if not spec:
         raise KymogramError("No panels could be built from these rows.")
-    fluo = [p["grid"] for p in spec if p["kind"] == "fluorescence"]
-    lo, hi, basis = (shared_limits if shared_limits
-                     else limits(fluo, shared=True))
+    # Green and red are normalised on the BODY ONLY. Blue is not, because the
+    # head does not compromise it.
+    body_scaled = [p["grid"] for p in spec if p["kind"] == "fluorescence"
+                   and p.get("channel") in MASK_HEAD_CHANNELS]
+    other = [p["grid"] for p in spec if p["kind"] == "fluorescence"
+             and p.get("channel") not in MASK_HEAD_CHANNELS]
+    if shared_limits:
+        lo, hi, basis = shared_limits
+    elif body_scaled:
+        lo, hi, basis = limits(body_scaled, shared=True,
+                               exclude_rows=head_segments)
+        basis["excluded"] = (f"segments {min(head_segments)}-"
+                             f"{max(head_segments)} (extra reporters in "
+                             f"{', '.join(MASK_HEAD_CHANNELS)})")
+    else:
+        lo, hi, basis = limits(other, shared=True)
     curv = [p["grid"] for p in spec if p["kind"] == "curvature"]
     cmax = float(np.nanpercentile(np.abs(curv[0]), 98)) if curv else 1.0
 
@@ -336,6 +375,10 @@ def render(rows, recording=None, fps=None, shared_limits=None, title=None,
         else:
             im = ax.imshow(g, aspect="auto", cmap=channel_cmap(p["channel"]),
                            norm=Normalize(lo, hi), interpolation="nearest")
+        # Segment 0 is the HEAD, and imshow puts row 0 at the top. This lab
+        # publishes head-down, so flip unless asked otherwise.
+        if head_down:
+            ax.invert_yaxis()
         cov = coverage(p["grid"])
         # The label goes INSIDE the panel. At half width, stacked ylabels
         # collide with each other and with the neighbouring panel's - the first
@@ -346,6 +389,35 @@ def render(rows, recording=None, fps=None, shared_limits=None, title=None,
                 bbox=dict(facecolor="white", alpha=0.72, edgecolor="none",
                           pad=1.2))
         ax.set_ylabel("")
+        # Mark the head where its signal is NOT the one being measured. The
+        # data stays - it is still drawn, and a reader can see what is there -
+        # but the box says plainly that this stretch carries extra reporters
+        # and is not body-wall calcium. Removing it would be worse: an absence
+        # invites the assumption that nothing was there.
+        if (p["kind"] == "fluorescence"
+                and p.get("channel") in MASK_HEAD_CHANNELS and head_segments):
+            h0, h1 = min(head_segments), max(head_segments)
+            ax.add_patch(Rectangle(
+                (-0.5, h0 - 0.5), g.shape[1], (h1 - h0) + 1,
+                fill=False, edgecolor="#22303A", linewidth=1.0,
+                linestyle=(0, (3, 2)), zorder=5))
+            ax.text(0.985, (h0 + h1) / 2.0 / max(g.shape[0] - 1, 1)
+                    if head_down else 1 - (h0 + h1) / 2.0 / max(g.shape[0] - 1, 1),
+                    "head reporters - not body wall",
+                    transform=ax.get_yaxis_transform(which="grid")
+                    if False else ax.transAxes,
+                    fontsize=5.5, ha="right", va="center", color="#22303A",
+                    bbox=dict(facecolor="white", alpha=0.75, edgecolor="none",
+                              pad=1.0), zorder=6)
+        if axis_labels:
+            # Name BOTH ends on every panel. An unlabelled body axis is worse
+            # than a wrongly-oriented one: a reader who knows the convention
+            # assumes it, and a reader who does not cannot check.
+            top, bot = ("tail", "head") if head_down else ("head", "tail")
+            ax.text(-0.012, 1.0, top, transform=ax.transAxes, fontsize=6,
+                    ha="right", va="top", color="#5E6E76")
+            ax.text(-0.012, 0.0, bot, transform=ax.transAxes, fontsize=6,
+                    ha="right", va="bottom", color="#5E6E76")
         ax.set_yticks([])
         fig.colorbar(im, ax=ax, pad=0.01, fraction=0.02)
 
@@ -376,6 +448,10 @@ def render(rows, recording=None, fps=None, shared_limits=None, title=None,
         fig.canvas.mpl_connect("button_press_event", onclick)
 
     return fig, axes, {"panels": [p["label"] for p in spec],
+                       "orientation": ("head at bottom" if head_down
+                                       else "head at top"),
+                       "head_masked_in": list(MASK_HEAD_CHANNELS),
+                       "head_segments": list(head_segments),
                        "limits": (lo, hi), "limit_basis": basis,
                        "frames_per_column": step,
                        "coverage": [coverage(p["grid"]) for p in spec]}
