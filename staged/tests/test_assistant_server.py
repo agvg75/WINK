@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "app"))
 
 tmp = Path(tempfile.mkdtemp())
 tokens = {"tok-alice": {"user": "alice", "soft_cap": 2, "hard_cap": 3},
+          "tok-alice2": {"user": "alice2", "soft_cap": 2, "hard_cap": 9},
           "tok-bob": {"user": "bob", "soft_cap": 40, "hard_cap": 60}}
 (tmp / "tokens.json").write_text(json.dumps(tokens), encoding="utf-8")
 os.environ["WINK_TOKENS"] = str(tmp / "tokens.json")
@@ -131,6 +132,34 @@ if True:
     check("...at no cost", body["cost"] == "none")
     check("...and is told why it was free",
           "does not count against your daily limit" in body["note"])
+
+    # Provenance, not a counter. A banked answer has been CHECKED by people
+    # and a fresh one has not - the opposite of what a student assumes, since
+    # the fresh one looks more bespoke.
+    check("a banked answer says how many students confirmed it",
+          body.get("confirmed_by") == 3
+          and "3 students have confirmed" in body["provenance"],
+          body["provenance"])
+    fresh, _ = None, None
+    code, fresh = srv.handle_ask({"question": "a brand new one", "tool": "cycles"},
+                                 {"X-WINK-Token": "tok-bob"}, client=fake)
+    check("...while a fresh answer says nobody has checked it",
+          fresh["confirmed_by"] == 0
+          and "nobody has checked" in fresh["provenance"])
+
+    # NO running counter. A visible total teaches students that help is scarce
+    # and makes them hesitate over questions they should ask.
+    check("no remaining-question count is sent while well under the cap",
+          "remaining_today" not in fresh and "quota_warning" not in fresh)
+    over = None
+    for i in range(3):
+        _, over = srv.handle_ask({"question": f"filling the cap {i}",
+                                  "tool": "cycles"},
+                                 {"X-WINK-Token": "tok-alice2"}, client=fake)
+    check("...but the warning does appear once the soft cap is passed",
+          over.get("quota_warning") is not None
+          and "not to ration help" in over["quota_warning"],
+          f"remaining {over.get('remaining_today')}")
     n_before = len(fake.calls)
     srv.handle_ask({"question": KNOWN, "tool": "defecation"}, H, client=fake)
     check("...and the model was never called for it", len(fake.calls) == n_before)
@@ -164,7 +193,8 @@ if True:
     os.environ["WINK_TOKENS"] = str(bom)
     srv.TOKENS_PATH = str(bom)
     check("a token file saved with a BOM still loads",
-          len(srv.load_tokens()) == 2, f"{len(srv.load_tokens())} tokens")
+          len(srv.load_tokens()) == len(tokens),
+          f"{len(srv.load_tokens())} tokens")
     check("...and authentication still works through it",
           srv.authenticate("tok-bob") is not None)
 

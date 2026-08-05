@@ -150,11 +150,20 @@ def handle_ask(payload, headers, client=None):
     if hit:
         iid = ledger.record(conn, user, day, tool, question, hit["answer"],
                             "cache", soft, hard)
+        n = int(hit.get("resolved") or 0)
         return 200, {"answer": hit["answer"], "served_from": "cache",
                      "interaction_id": iid, "cost": "none",
-                     "note": ("Answered from the lab's ledger - this question "
-                              "has been resolved by other students. It does "
-                              "not count against your daily limit.")}
+                     "confirmed_by": n,
+                     # The point of saying this is NOT that it was free. It is
+                     # that a banked answer has been checked by people and a
+                     # fresh one has not - which is the opposite of what a
+                     # student would assume, since the fresh one looks more
+                     # bespoke.
+                     "provenance": (f"From the lab's answers - {n} "
+                                    f"{'student has' if n == 1 else 'students have'} "
+                                    f"confirmed this one."),
+                     "note": ("Answered from the lab's ledger. It does not "
+                              "count against your daily limit.")}
 
     # 3. Only now does anything cost money.
     q = ledger.check_quota(conn, user, day, soft, hard)
@@ -173,12 +182,22 @@ def handle_ask(payload, headers, client=None):
 
     iid = ledger.record(conn, user, day, tool, question, answer, "api",
                         soft, hard)
-    return 200, {"answer": answer, "served_from": "api", "interaction_id": iid,
-                 "quota": ledger.check_quota(conn, user, day, soft, hard),
-                 "please_report": ("Say whether this resolved it. That is what "
-                                   "makes the answer available to the next "
-                                   "student, and what removes it if it was "
-                                   "wrong.")}
+    q_after = ledger.check_quota(conn, user, day, soft, hard)
+    out = {"answer": answer, "served_from": "api", "interaction_id": iid,
+           "confirmed_by": 0,
+           "provenance": ("New answer - nobody has checked this one yet."),
+           "please_report": ("Say whether this resolved it. That is what makes "
+                             "the answer available to the next student, and "
+                             "what removes it if it was wrong.")}
+    # The remaining count is deliberately NOT sent unless the soft cap has been
+    # passed. A running total teaches students that help is scarce and makes
+    # them hesitate over questions they should ask, which costs far more than
+    # the questions do. The cap exists to stop a runaway loop, and it should be
+    # invisible until it is close to mattering.
+    if q_after.get("over_soft"):
+        out["quota_warning"] = q_after.get("warning")
+        out["remaining_today"] = q_after.get("remaining")
+    return 200, out
 
 
 def handle_outcome(payload, headers):

@@ -195,9 +195,13 @@ def open_panel(parent, tool_key, tool_label=None):
             def done():
                 ask_btn.state(["!disabled"])
                 if body.get("answer"):
-                    tag = ("  [from the lab's answered questions - free]"
-                           if body.get("served_from") == "cache" else "")
-                    show(body["answer"] + tag)
+                    # Provenance ABOVE the answer, not appended as a footnote:
+                    # whether anyone has checked it changes how the answer
+                    # should be read, so it belongs before it is read.
+                    parts = [body.get("provenance", ""), "", body["answer"]]
+                    if body.get("quota_warning"):
+                        parts += ["", f"[{body['quota_warning']}]"]
+                    show("\n".join(p for p in parts if p is not None).strip())
                     state["interaction_id"] = body.get("interaction_id")
                     resolved.state(["!disabled"])
                     unhelpful.state(["!disabled"])
