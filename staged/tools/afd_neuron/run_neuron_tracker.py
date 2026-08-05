@@ -254,6 +254,15 @@ class Reviewer:
             i, soma=(sx, sy),
             outline_verts=(verts if len(verts) >= 3 else None),
             reconstruct_bounds=(self.active_interval if bounded else None))
+        if not bounded:
+            # A hand correction has to reach the frames AFTER it. Without this
+            # the fix applied to the frame on screen and every later frame kept
+            # tracking from the state that was wrong, so the correction looked
+            # like it had worked while the recording was unchanged past it.
+            # Inside a bounded edit the interval is deliberately the whole
+            # scope, so nothing outside it is touched - same rule as
+            # run_dic_kinematics.
+            self.tr.retrack_from(i)
         self.save_progress()
         self.draw()
 

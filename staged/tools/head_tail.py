@@ -953,6 +953,74 @@ def reconcile_ventral(calls, min_confidence=0.30):
     }
 
 
+def override_head(call, head_end, ventral_call=None, by=None, reason=None):
+    """Human correction of the head call. Propagates by construction.
+
+    The user must be able to overrule this. Every cue here is a heuristic, the
+    animal is the ground truth, and a person who can see the pharynx does not
+    need a confidence score.
+
+    PROPAGATION IS THE WHOLE POINT, and it is why the call is per-track rather
+    than per-frame. There is one head value for the track, so correcting it
+    reaches every frame at once - there is no way for the fix to apply to the
+    frame in view and quietly leave the rest of the recording as it was.
+
+    AND IT PROPAGATES SIDEWAYS TOO. Reversing the spine negates signed
+    curvature, so flipping the head INVERTS dorsal and ventral. Pass the
+    dorsoventral call and it is flipped with it; leave it out and it is
+    returned unchanged, which would be wrong - so this refuses to guess and
+    says so in the result.
+
+    The machine's answer is kept, not overwritten. A human correction is
+    evidence about the method, and a record of where the cues disagreed with a
+    person is what tells us which cue to fix.
+    """
+    if head_end not in (0, 1):
+        raise HeadTailError(
+            f"head_end must be 0 or 1, not {head_end!r}. There are two ends.")
+
+    machine = (call or {}).get("head_end")
+    new = dict(call or {})
+    new.update({
+        "head_end": int(head_end),
+        "confidence": 1.0,
+        "source": "human",
+        "refused": False,
+        "machine_head_end": machine,
+        "machine_confidence": (call or {}).get("confidence"),
+        "agreed_with_machine": (None if machine is None
+                                else bool(machine == int(head_end))),
+        "overridden_by": by,
+        "override_reason": reason,
+        "propagates_to_whole_track": True,
+        "note": ("Set by hand. The head is one value for the track, so this "
+                 "applies to every frame of it - a correction cannot reach the "
+                 "frame on screen and leave the rest of the recording behind."),
+    })
+    for k in ("low_confidence", "cues_disagree", "why"):
+        new.pop(k, None)
+
+    if ventral_call is None:
+        new["dorsoventral_not_updated"] = (
+            "No dorsoventral call was passed. If one was already derived from "
+            "the previous head call it is now INVERTED, because reversing the "
+            "spine negates signed curvature. Re-derive it or pass it here.")
+        return new, None
+
+    flipped = dict(ventral_call)
+    if flipped.get("ventral_sign") is not None and machine is not None \
+            and machine != int(head_end):
+        flipped["ventral_sign"] = -int(ventral_call["ventral_sign"])
+        flipped["flipped_by_head_override"] = True
+        flipped["note_override"] = (
+            "The head call was corrected, which negates signed curvature, so "
+            "the dorsoventral sign was inverted with it rather than left to "
+            "contradict the new head.")
+    else:
+        flipped["flipped_by_head_override"] = False
+    return new, flipped
+
+
 def apply_head_call(spine, head_end):
     """Return the spine ordered head-first, given the track's head call."""
     s = np.asarray(spine, dtype=float)
