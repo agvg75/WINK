@@ -128,16 +128,18 @@ METHODS = {
         title="Score each damage parameter separately, never as one index",
         module="tools/pharynx_continuity.py", origin="literature",
         contribution={
-            "literature": ("A 2023 ischaemic skeletal muscle scheme scores "
+            "literature": ("An ischaemic skeletal muscle scheme scores "
                            "inflammation, fibrosis, necrosis, adipocyte "
-                           "infiltration and degeneration separately, 4-5 "
-                           "levels each, validated by Kendall's W."),
+                           "infiltration and fibre degeneration/regeneration "
+                           "SEPARATELY, with inter-appraiser agreement by "
+                           "Kendall's W of 0.92, 0.94 and 0.77 for the first "
+                           "three."),
             "andres": ("Independently described the same shape - categories "
                        "with a gradient inside each."),
         },
         verified="A single index makes 30% scarring and one detached muscle "
                  "numerically equal.",
-        refs=["ischaemic_muscle_scoring_2023"]),
+        refs=["ischaemic_muscle_scoring"]),
 
     "continuous_not_categorical": dict(
         title="Measure continuously; bin only at the end",
@@ -148,16 +150,21 @@ METHODS = {
                                      "disagreement persists AT GRADE "
                                      "BOUNDARIES, which continuous measures "
                                      "do not have.")},
-        refs=["ishlt_grading_revision"]),
+        refs=["ishlt_grading_revision_2005", "ishlt_reproducibility_angelini"]),
 
     "ordinal_guard": dict(
         title="Never average an ordinal grade",
         module="app/event_rhythm.py", origin="literature",
-        contribution={"literature": ("Averaging ordinal grades assumes equal "
-                                     "spacing no scheme guarantees; ~70% of "
-                                     "papers do it anyway. Median, IQR, full "
-                                     "distribution, non-parametric tests.")},
-        refs=["ordinal_scale_misuse"]),
+        contribution={"literature": ("Histopathologic grades are ordinal and "
+                                     "semiquantitative: the interval between "
+                                     "two grades cannot be objectively "
+                                     "justified, so a rational-scale readout "
+                                     "is impossible and averaging assumes "
+                                     "spacing no scheme guarantees. Report "
+                                     "median, IQR and the full distribution, "
+                                     "and test non-parametrically.")},
+        refs=["gibson_corley_2013_scoring", "schafer_2018_severity_grades",
+              "klopfleisch_2013_scoring_review"]),
 
     "function_anchored_severity": dict(
         title="Anchor damage severity to measured function",
@@ -170,7 +177,7 @@ METHODS = {
             "claude": ("It also tests the detection confound - an artefact "
                        "will not track locomotor decline; real damage should."),
         },
-        refs=["ishlt_grading_revision"]),
+        refs=["ishlt_grading_revision_2005", "ishlt_reproducibility_angelini"]),
 
     # ---- rhythm and cycles ----------------------------------------------
     "cardiac_rhythm_vocabulary": dict(
@@ -355,7 +362,7 @@ REFERENCES = {
     "pharyngeal_timing_2021": dict(
         citation=("Pharyngeal timing and particle transport defects in "
                   "Caenorhabditis elegans feeding mutants. Journal of "
-                  "Neurophysiology (2021)."),
+                  "Neurophysiology (2021). doi:10.1152/jn.00444.2021"),
         url="https://journals.physiology.org/doi/full/10.1152/jn.00444.2021",
         status="retrieved",
         supports=("Timing differences between corpus, anterior isthmus and "
@@ -364,14 +371,15 @@ REFERENCES = {
 
     "intestinal_gaba_2008": dict(
         citation=("Intestinal signaling to GABAergic neurons regulates a "
-                  "rhythmic behavior in Caenorhabditis elegans. PNAS (2008)."),
+                  "rhythmic behavior in Caenorhabditis elegans. PNAS (2008). "
+                  "doi:10.1073/pnas.0803617105"),
         url="https://www.pnas.org/doi/10.1073/pnas.0803617105",
         status="retrieved",
         supports="The defecation motor program as a tightly controlled rhythm."),
 
     "thomas_1994_defecation": dict(
         citation=("Thomas JH. Regulation of a periodic motor program in C. "
-                  "elegans. Journal of Neuroscience 14(4):1953 (1994)."),
+                  "elegans. Journal of Neuroscience 14(4):1953-1962 (1994)."),
         url="https://www.jneurosci.org/content/14/4/1953",
         status="retrieved",
         supports=("~45 s defecation period with an SD of about 3 s - the "
@@ -380,7 +388,7 @@ REFERENCES = {
     "enteric_action_potentials_2022": dict(
         citation=("C. elegans enteric motor neurons fire synchronized action "
                   "potentials underlying the defecation motor program. Nature "
-                  "Communications (2022)."),
+                  "Communications (2022). doi:10.1038/s41467-022-30452-y"),
         url="https://www.nature.com/articles/s41467-022-30452-y",
         status="retrieved",
         supports="Discrete, detectable events underlying the defecation cycle."),
@@ -389,78 +397,138 @@ REFERENCES = {
         citation=("Task Force of the European Society of Cardiology and the "
                   "North American Society of Pacing and Electrophysiology. "
                   "Heart rate variability: standards of measurement, "
-                  "physiological interpretation, and clinical use. Circulation "
-                  "93:1043-1065 (1996)."),
-        url=None, status="recalled",
-        check=("Confirm the volume, page range and year. This is the standard "
-               "definition of SDNN, RMSSD and the Poincare descriptors; the "
-               "definitions used in event_rhythm.py are standard, but the "
-               "citation has not been re-fetched."),
-        supports="SDNN, RMSSD, Poincare SD1/SD2 as used in app/event_rhythm.py."),
+                  "physiological interpretation and clinical use. Circulation "
+                  "93(5):1043-1065 (1996). doi:10.1161/01.CIR.93.5.1043"),
+        url="https://doi.org/10.1161/01.CIR.93.5.1043",
+        status="retrieved",
+        supports=("SDNN, RMSSD and the Poincare descriptors as used in "
+                  "app/event_rhythm.py.")),
 
-    "ishlt_grading_revision": dict(
-        citation=("Stewart S et al. Revision of the 1990 working formulation "
-                  "for the standardization of nomenclature in the diagnosis of "
-                  "heart rejection. Journal of Heart and Lung Transplantation "
-                  "(2005)."),
-        url=None, status="recalled",
-        check=("Verify authors, year and journal, and separately locate the "
-               "interobserver-variability studies showing disagreement "
-               "concentrated at grade boundaries (1B/1R, 3A/2R) - that finding "
-               "is what the argument rests on, and it is not in the revision "
-               "paper itself."),
-        supports=("Categorical grading revised specifically to fix "
-                  "reproducibility, and still unreliable at boundaries - the "
-                  "argument for continuous measures.")),
+    "ishlt_grading_revision_2005": dict(
+        citation=("Stewart S, Winters GL, Fishbein MC, Tazelaar HD, "
+                  "Kobashigawa J, et al. Revision of the 1990 working "
+                  "formulation for the standardization of nomenclature in the "
+                  "diagnosis of heart rejection. Journal of Heart and Lung "
+                  "Transplantation 24(11):1710-1720 (2005). PMID 16297770."),
+        url="https://pubmed.ncbi.nlm.nih.gov/16297770/",
+        status="retrieved",
+        supports=("The 2004/2005 revision itself: grades collapsed to 0R, 1R, "
+                  "2R, 3R specifically to improve standardisation.")),
 
-    "ischaemic_muscle_scoring_2023": dict(
-        citation=("A histopathological scoring system for ischaemic skeletal "
-                  "muscle scoring inflammation, fibrosis, necrosis, adipocyte "
-                  "infiltration and degeneration/regeneration separately "
-                  "(2023)."),
-        url=None, status="recalled",
-        check=("Authors, journal and exact title needed. Confirm the finding "
-               "that 4-5 levels per parameter was optimal and that agreement "
-               "was validated with Kendall's W."),
-        supports="The splitter-not-lumper design of damage_report."),
+    "ishlt_reproducibility_angelini": dict(
+        citation=("Angelini A et al. Has the 2004 revision of the "
+                  "International Society of Heart and Lung Transplantation "
+                  "grading system improved the reproducibility of the "
+                  "diagnosis and grading of cardiac transplant rejection? "
+                  "Cardiovascular Pathology."),
+        url="https://www.sciencedirect.com/science/article/abs/pii/S1054880708000598",
+        status="retrieved",
+        supports=("THE ACTUAL SOURCE for the claim the design rests on: the "
+                  "revision did NOT improve reproducibility, with a combined "
+                  "kappa of 0.39 across 18 pathologists and disagreement "
+                  "concentrated at the 1B/1R and 3A/2R boundaries. This is the "
+                  "argument for measuring continuously and binning last - "
+                  "disagreement lives at boundaries, and continuous measures "
+                  "have none."),
+        check="Confirm year, volume and pages; the abstract page was reached "
+              "but the full citation line was not captured."),
 
-    "ordinal_scale_misuse": dict(
-        citation=("Methodological critique of averaging ordinal "
-                  "histopathological grades and summing them into disease "
-                  "indices."),
-        url=None, status="recalled",
-        check=("Needs a specific citation. The claim used - that averaging "
-               "assumes equal spacing no scheme guarantees, and that a large "
-               "majority of papers do it anyway - should be attached to one "
-               "identifiable source before publication, or softened."),
-        supports="app/event_rhythm.ordinal_guard."),
+    "ischaemic_muscle_scoring": dict(
+        citation=("Sanz-Nogues C et al. Development and Validation of a "
+                  "Multiparametric Semiquantitative Scoring System for the "
+                  "Histopathological Assessment of Ischaemia Severity in "
+                  "Skeletal Muscle. PMC11918935."),
+        url="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC11918935/",
+        status="retrieved",
+        supports=("Splitter-not-lumper: inflammation, fibrosis, necrosis, "
+                  "adipocyte infiltration and fibre degeneration/regeneration "
+                  "scored SEPARATELY, with inter-appraiser agreement by "
+                  "Kendall's W - inflammation 0.92, fibrosis 0.94, necrosis "
+                  "0.77."),
+        unconfirmed=("An earlier note claimed this paper found 4-5 levels per "
+                     "parameter to be optimal. The retrieval did NOT confirm "
+                     "that; do not repeat it without reading the paper. The "
+                     "separate-parameters design and the Kendall's W values "
+                     "above ARE confirmed."),
+        check="Publication year: summarised as 2023, but the PMC identifier "
+              "suggests a later date. Confirm before citing a year."),
+
+    "gibson_corley_2013_scoring": dict(
+        citation=("Gibson-Corley KN, Olivier AK, Meyerholz DK. Principles for "
+                  "Valid Histopathologic Scoring in Research. Veterinary "
+                  "Pathology (2013). doi:10.1177/0300985813485099"),
+        url="https://journals.sagepub.com/doi/10.1177/0300985813485099",
+        status="retrieved",
+        supports=("Histopathologic scores are ORDINAL and semiquantitative - "
+                  "the interval between two grades cannot be objectively "
+                  "justified, so a rational-scale readout is impossible. This "
+                  "is the basis for app/event_rhythm.ordinal_guard.")),
+
+    "schafer_2018_severity_grades": dict(
+        citation=("Schafer KA, Eighmy J, Fikes JD, Halpern WG, Hukkanen RR, "
+                  "Long GG, Meseck EK, Patrick DJ, Thibodeau MS, Wood CE, "
+                  "Francke S. Use of Severity Grades to Characterize "
+                  "Histopathologic Changes. Toxicologic Pathology (2018). "
+                  "doi:10.1177/0192623318761348. PMID 29529947."),
+        url="https://journals.sagepub.com/doi/full/10.1177/0192623318761348",
+        status="retrieved",
+        supports=("Society of Toxicologic Pathology working-group guidance on "
+                  "assigning and reporting severity grades, and on analysing "
+                  "them non-parametrically rather than as measurements.")),
+
+    "klopfleisch_2013_scoring_review": dict(
+        citation=("Klopfleisch R. Multiparametric and semiquantitative scoring "
+                  "systems for the evaluation of mouse model histopathology - "
+                  "a systematic review. BMC Veterinary Research 9:123 (2013). "
+                  "doi:10.1186/1746-6148-9-123"),
+        url="https://bmcvetres.biomedcentral.com/articles/10.1186/1746-6148-9-123",
+        status="retrieved",
+        supports=("Systematic review of multiparametric semiquantitative "
+                  "scoring practice."),
+        unconfirmed=("An earlier note claimed ~70% of published papers report "
+                     "ordinal scores as means and standard deviations. NO "
+                     "SOURCE FOR THAT FIGURE HAS BEEN FOUND. This review is "
+                     "the most likely place such a prevalence would be "
+                     "reported - check it, and until then do not state the "
+                     "number. The principle stands without it.")),
 
     "sato_line_filter_1998": dict(
-        citation=("Sato Y et al. Three-dimensional multi-scale line filter for "
-                  "segmentation and visualization of curvilinear structures in "
-                  "medical images. Medical Image Analysis 2(2):143-168 (1998)."),
-        url=None, status="recalled",
-        check="Confirm volume, issue and pages.",
-        supports="The ridge filter used in tools/fibre_trace.trace_fibres."),
+        citation=("Sato Y, Nakajima S, Shiraga N, Atsumi H, Yoshida S, Koller "
+                  "T, Gerig G, Kikinis R. Three-dimensional multi-scale line "
+                  "filter for segmentation and visualization of curvilinear "
+                  "structures in medical images. Medical Image Analysis "
+                  "2(2):143-168 (1998). PMID 10646760."),
+        url="https://pubmed.ncbi.nlm.nih.gov/10646760/",
+        status="retrieved",
+        supports=("The Hessian-eigenvalue ridge filter used in "
+                  "tools/fibre_trace.trace_fibres, and its multi-scale "
+                  "formulation - which is why FIBRE_WIDTH_UM is a range.")),
 
     "pearl_1988_noisy_or": dict(
         citation=("Pearl J. Probabilistic Reasoning in Intelligent Systems: "
-                  "Networks of Plausible Inference. Morgan Kaufmann (1988)."),
-        url=None, status="recalled",
-        check=("Confirm the edition and the section defining the noisy-OR "
-               "gate. The construction used here is standard; the citation is "
-               "written from memory."),
-        supports=("Combining independent evidence for a binary proposition, "
-                  "used for the dorsoventral and pharynx cues.")),
+                  "Networks of Plausible Inference. Series in Representation "
+                  "and Reasoning. Morgan Kaufmann, San Mateo, xix + 552 pp "
+                  "(1988)."),
+        url="https://archive.org/details/probabilisticrea00pear",
+        status="retrieved",
+        supports=("The noisy-OR gate for combining independent causes of a "
+                  "binary outcome - used for the dorsoventral and pharynx "
+                  "cues, where each cue can independently establish the "
+                  "answer and agreement should therefore accumulate.")),
 
-    "neurite_damage_vocabulary_2019": dict(
-        citation=("Semi-automated quantification of C. elegans neurite damage: "
-                  "beading, blebbing, wavy neurites, soma volume and ectopic "
-                  "outgrowths (2019)."),
-        url=None, status="recalled",
-        check="Authors, journal and title needed.",
-        supports=("The established vocabulary to reuse when damage scoring is "
-                  "extended to neurons.")),
+    "neurite_morphology_2019": dict(
+        citation=("In-Vivo Quantitative Image Analysis of Age-Related "
+                  "Morphological Changes of C. elegans Neurons Reveals a "
+                  "Correlation between Neurite Bending and Novel Neurite "
+                  "Outgrowths. eNeuro 6(4) ENEURO.0014-19.2019 (2019)."),
+        url="https://www.eneuro.org/content/6/4/ENEURO.0014-19.2019",
+        status="retrieved",
+        supports=("A semi-automated pipeline measuring soma, neurite "
+                  "outgrowths, and the density of BEADS and SHARP BENDS on "
+                  "individual neurites - the established vocabulary to reuse "
+                  "when damage scoring extends to neurons, and a direct "
+                  "parallel to the fibre-bending measure already used for the "
+                  "pharynx.")),
 }
 
 
@@ -835,18 +903,34 @@ def check_references(refs=None):
                 problems.append(
                     f"{key}: recalled but does not say what to verify")
     cited = {ref for m in METHODS.values() for ref in m.get("refs", [])}
+    # A claim we made that the SOURCE DID NOT SUPPORT. This outranks an
+    # unverified citation: an unfetched reference is a gap a reader can see,
+    # whereas a retrieved reference attached to a claim it does not make reads
+    # as fully supported and is not visible to anyone.
+    unconfirmed = {k: r["unconfirmed"] for k, r in refs.items()
+                   if r.get("unconfirmed")}
+    still_to_check = {k: r["check"] for k, r in refs.items()
+                      if r.get("check") and r.get("status") == "retrieved"}
     return {
         "problems": problems,
         "n_references": len(refs),
         "retrieved": [k for k, r in refs.items() if r.get("status") == "retrieved"],
         "recalled": recalled,
         "uncited": sorted(set(refs) - cited),
+        "unconfirmed_claims": unconfirmed,
+        "details_still_to_check": still_to_check,
         "publication_blocker": (
-            f"{len(recalled)} of {len(refs)} references are RECALLED, not "
-            f"retrieved. Their findings are what the methods rest on, but the "
-            f"bibliographic details have not been re-fetched and must be "
-            f"verified before publication. Each names what to check."
-            if recalled else "All references were retrieved."),
+            (f"{len(recalled)} of {len(refs)} references are RECALLED, not "
+             f"retrieved, and must be verified before publication. "
+             if recalled else
+             f"All {len(refs)} references were retrieved from source. ")
+            + (f"{len(unconfirmed)} carry a claim the source did NOT confirm - "
+               f"these matter more, because a retrieved citation attached to a "
+               f"claim it does not make looks fully supported. See "
+               f"`unconfirmed_claims`."
+               if unconfirmed else "No unconfirmed claims outstanding.")
+            + (f" {len(still_to_check)} have a bibliographic detail still to "
+               f"pin down." if still_to_check else "")),
     }
 
 
@@ -859,16 +943,29 @@ def references_section(heading="## References"):
         r = REFERENCES[k]
         lines.append(f"- **[{k}]** {r['citation']}  \n  <{r['url']}>  \n"
                      f"  *Supports:* {r['supports']}")
-    lines += ["", "### Recalled — VERIFY BEFORE PUBLICATION", "",
-              "*The finding is what the method rests on; the bibliographic "
-              "detail is written from memory and has not been re-fetched. "
-              "A wrong citation sends a reader somewhere that does not support "
-              "the claim, which is worse than no citation.*", ""]
-    for k in c["recalled"]:
-        r = REFERENCES[k]
-        lines.append(f"- **[{k}]** {r['citation']}  \n"
-                     f"  *Supports:* {r['supports']}  \n"
-                     f"  *To verify:* {r['check']}")
+    if c["recalled"]:
+        lines += ["", "### Recalled — VERIFY BEFORE PUBLICATION", "",
+                  "*The finding is what the method rests on; the bibliographic "
+                  "detail is written from memory and has not been re-fetched. "
+                  "A wrong citation sends a reader somewhere that does not "
+                  "support the claim, which is worse than no citation.*", ""]
+        for k in c["recalled"]:
+            r = REFERENCES[k]
+            lines.append(f"- **[{k}]** {r['citation']}  \n"
+                         f"  *Supports:* {r['supports']}  \n"
+                         f"  *To verify:* {r['check']}")
+    if c["unconfirmed_claims"]:
+        lines += ["", "### Claims the sources did NOT confirm", "",
+                  "*Retrieved references attached to something we said that "
+                  "the paper does not actually establish. These are more "
+                  "dangerous than a missing citation, because the reference "
+                  "makes the claim look supported.*", ""]
+        for k, note in c["unconfirmed_claims"].items():
+            lines.append(f"- **[{k}]** {note}")
+    if c["details_still_to_check"]:
+        lines += ["", "### Bibliographic details outstanding", ""]
+        for k, note in c["details_still_to_check"].items():
+            lines.append(f"- **[{k}]** {note}")
     lines += ["", c["publication_blocker"], ""]
     return "\n".join(lines)
 

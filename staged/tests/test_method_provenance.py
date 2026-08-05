@@ -73,16 +73,33 @@ rc = mp.check_references()
 check("every reference is well formed", not rc["problems"],
       "; ".join(rc["problems"][:2]) if rc["problems"]
       else f"{rc['n_references']} references")
-check("retrieved and recalled sources are kept apart",
-      len(rc["retrieved"]) > 0 and len(rc["recalled"]) > 0,
+check("every source has been retrieved rather than recalled",
+      len(rc["retrieved"]) == rc["n_references"] and not rc["recalled"],
       f"{len(rc['retrieved'])} retrieved, {len(rc['recalled'])} recalled")
 check("...every retrieved source carries the URL it came from",
       all(mp.REFERENCES[k]["url"] for k in rc["retrieved"]))
-check("...and every recalled one says what must be verified",
+check("...and every recalled one, if any, says what must be verified",
       all(mp.REFERENCES[k].get("check") for k in rc["recalled"]))
-check("the unverified ones are flagged as a publication blocker",
-      "VERIFY" in mp.references_section()
-      and "before publication" in rc["publication_blocker"])
+
+# The sharper failure: a REAL reference attached to a claim it does not make.
+# Worse than a missing citation, because the reference makes it look supported.
+check("claims the sources did not confirm are recorded",
+      len(rc["unconfirmed_claims"]) >= 2,
+      f"{len(rc['unconfirmed_claims'])}: "
+      f"{', '.join(rc['unconfirmed_claims'])}")
+check("...and rendered under their own heading, not buried",
+      "Claims the sources did NOT confirm" in mp.references_section())
+check("...with the status line saying why they outrank a missing citation",
+      "looks fully supported" in rc["publication_blocker"])
+check("the '~70% of papers' figure is marked as unsourced, not repeated",
+      "NO SOURCE FOR THAT FIGURE HAS BEEN FOUND"
+      in mp.REFERENCES["klopfleisch_2013_scoring_review"]["unconfirmed"])
+check("...and no method text still asserts it",
+      not any("70%" in str(m.get("contribution", {}))
+              for m in mp.METHODS.values()))
+check("outstanding bibliographic details are listed separately",
+      len(rc["details_still_to_check"]) >= 1,
+      f"{', '.join(rc['details_still_to_check'])}")
 
 check("a method claiming literature support must cite something",
       not [p for p in mp.check_registry() if "cites nothing" in p])
