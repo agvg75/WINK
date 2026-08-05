@@ -89,14 +89,24 @@ def curvature_cmap():
     return cm
 
 
-def downsample_preserving_outliers(grid, max_columns):
-    """Compress the time axis WITHOUT losing the single odd frame.
+def downsample(grid, max_columns, keep="structure"):
+    """Compress the time axis. `keep` decides WHAT the compression protects.
 
-    A review display exists to make one bad frame jump out, so averaging frames
-    into a column is exactly the wrong reduction: a single spike divided by
-    twenty neighbours disappears into them. Each output column instead keeps the
-    value FURTHEST FROM THE COLUMN MEDIAN, so an outlier survives compression
-    and a quiet stretch still reads as quiet.
+    THIS DEFAULT WAS WRONG AND IS NOW CORRECTED. The first version preserved
+    point outliers, on the theory that a review display exists to make one bad
+    frame jump out. It does not. A recording survives one bad frame. What a
+    kymogram is for is spotting things that SPAN TIME - a bad section, a head
+    flip, a break in the continuity of the travelling wave - and preserving
+    extremes actively works against that, because it injects the spikiest
+    sample of every block into the picture and turns smooth structure into
+    noise. The wave is the signal; the outlier is not.
+
+      "structure"  (default) the column MEDIAN. Preserves the wave, so a break
+                   in it is visible as a break rather than lost in speckle. A
+                   bad SECTION still shows, because many bad frames move the
+                   median of their block.
+      "extreme"    the value furthest from the column median. Only for hunting
+                   isolated artefacts, which is a different job from review.
 
     Returns (grid, frames_per_column). At 1 the grid is untouched.
     """
@@ -109,17 +119,34 @@ def downsample_preserving_outliers(grid, max_columns):
         grid = np.concatenate(
             [grid, np.full((grid.shape[0], pad), np.nan)], axis=1)
     blocks = grid.reshape(grid.shape[0], -1, step)
-    with np.errstate(invalid="ignore"):
-        med = np.nanmedian(blocks, axis=2, keepdims=True)
-        dev = np.abs(blocks - med)
-        dev = np.where(np.isnan(blocks), -np.inf, dev)
-        pick = np.nanargmax(dev, axis=2)
-    out = np.take_along_axis(blocks, pick[:, :, None], axis=2)[:, :, 0]
-    # A block that is entirely missing must stay missing rather than inherit
-    # whatever nanargmax fell back on.
     allnan = np.all(np.isnan(blocks), axis=2)
+    import warnings
+    with np.errstate(invalid="ignore"), warnings.catch_warnings():
+        # An all-NaN block is an expected case - it is a gap - and is
+        # restored to NaN below, so the warning is noise.
+        warnings.simplefilter("ignore", RuntimeWarning)
+        med = np.nanmedian(blocks, axis=2)
+        if keep == "structure":
+            out = med
+        elif keep == "extreme":
+            dev = np.abs(blocks - med[:, :, None])
+            dev = np.where(np.isnan(blocks), -np.inf, dev)
+            out = np.take_along_axis(blocks, np.nanargmax(dev, axis=2)[:, :, None],
+                                     axis=2)[:, :, 0]
+        else:
+            raise KymogramError(
+                f"keep must be 'structure' or 'extreme', not {keep!r}.")
+    # A block that is entirely missing must stay missing rather than inherit
+    # whatever the reduction fell back on.
+    out = np.asarray(out, dtype=float).copy()
     out[allnan] = np.nan
     return out, step
+
+
+# Kept under the old name so nothing that called it breaks, but it is no longer
+# the default and the docstring above says why.
+def downsample_preserving_outliers(grid, max_columns):
+    return downsample(grid, max_columns, keep="extreme")
 
 
 def build(rows, value, n_seg=24, side=None, n_frames=None):
