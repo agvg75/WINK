@@ -40,6 +40,25 @@ from __future__ import annotations
 import numpy as np
 
 
+# How much of the cell each reporter occupies, which predicts how exposed it is
+# to where the optical plane fell. Andres's reasoning, and the measured ranking
+# on the first real animal matched it: cytoplasm fills the whole cell and is
+# forgiving; an organellar label is a thin structure within that volume and a
+# plane can catch a lot of it or very little.
+#
+# This ordering is therefore a QC EXPECTATION, not decoration. An animal where
+# the cytoplasmic channel is NOT the most robust is a prep worth looking at,
+# because the physics says it should be.
+REPORTER_EXTENT = {
+    "green": {"compartment": "cytoplasm", "extent": "fills the cell",
+              "expected_robustness": 3},
+    "blue": {"compartment": "ER", "extent": "a sheet within the cytoplasm",
+             "expected_robustness": 2},
+    "red": {"compartment": "mitochondria / pharyngeal marker",
+            "extent": "discrete organelles", "expected_robustness": 1},
+}
+
+
 class SectionError(Exception):
     """Refusals that name the consequence."""
 
@@ -266,3 +285,156 @@ def side_comparison(rows, channel="green", stat="p90", body_segments=(8, 24)):
             "sides to have been sectioned equivalently, which the geometry "
             "does not guarantee."),
     }
+
+# --------------------------------------------------------------------------- #
+# Per-animal record
+# --------------------------------------------------------------------------- #
+def qc_record(rows, animal_id, channels=("blue", "green", "red"), stat="p90",
+              body_segments=(8, 24), range_floor=0.75, width_r_ceiling=0.7,
+              extra=None):
+    """One sectioning-QC record per animal, for the archive and the manuscript.
+
+    COLLECTED PER ANIMAL BECAUSE IT IS A PROPERTY OF THE PREPARATION, not of
+    the strain or the protocol. How the animal lay, where the plane fell and
+    how flat the mount was all change between mounts, so a reassuring
+    measurement on one recording licenses nothing about the next.
+
+    Everything is reported whether or not it trips a threshold. A QC record
+    that appears only when something is wrong cannot be used to show that
+    things were right, which is exactly what a methods section has to do.
+    """
+    rec = {"animal_id": str(animal_id), "channels": {}, "flags": [],
+           "n_rows": len(rows)}
+    for ch in channels:
+        entry = {"reporter": REPORTER_EXTENT.get(ch, {})}
+        try:
+            entry["sides"] = side_comparison(rows, channel=ch, stat=stat,
+                                             body_segments=body_segments)
+        except SectionError as exc:
+            entry["sides"] = {"error": str(exc)}
+        try:
+            entry["gradient"] = optical_gradient_test(
+                rows, channel=ch, stat=stat, body_segments=body_segments)
+        except SectionError as exc:
+            entry["gradient"] = {"error": str(exc)}
+
+        s = entry.get("sides", {})
+        if "range_ratio" in s and s["range_ratio"] < range_floor:
+            rec["flags"].append({
+                "channel": ch, "kind": "asymmetric section",
+                "detail": (f"the {s['dimmer_side']} side keeps only "
+                           f"{s['range_ratio']:.0%} of the "
+                           f"{s['brighter_side']} side's range"),
+                "consequence": ("left-right comparisons in this channel are "
+                                "unsafe for this animal; use the same "
+                                "quadrant across animals instead")})
+        g = entry.get("gradient", {})
+        rbw = g.get("r_brightness_vs_width")
+        if rbw is not None and abs(rbw) > width_r_ceiling:
+            rec["flags"].append({
+                "channel": ch, "kind": "brightness tracks width",
+                "detail": f"r = {rbw:+.2f} between brightness and local width",
+                "consequence": ("an anterior-posterior gradient here cannot be "
+                                "separated from the section without "
+                                "controlling for width - unless this reporter "
+                                "is expected to scale with tissue volume, in "
+                                "which case it is the expected behaviour")})
+        rec["channels"][ch] = entry
+
+    rec["ordering"] = ordering_check(rec)
+    if rec["ordering"].get("checked") and not rec["ordering"]["as_expected"]:
+        rec["flags"].append({
+            "channel": "all", "kind": "unexpected robustness ordering",
+            "detail": rec["ordering"]["observed"],
+            "consequence": rec["ordering"]["why_it_matters"]})
+    rec["n_flags"] = len(rec["flags"])
+    rec["clean"] = not rec["flags"]
+    if extra:
+        rec.update(extra)
+    return rec
+
+
+def ordering_check(record):
+    """Is the cytoplasmic channel the most robust, as the geometry says?
+
+    A reporter that fills the cell should survive a badly-placed plane better
+    than a sheet or a scatter of organelles within it. When that ordering is
+    violated the preparation is behaving unusually, which is worth knowing
+    before the animal contributes to a group mean.
+    """
+    obs = []
+    for ch, entry in record.get("channels", {}).items():
+        rr = entry.get("sides", {}).get("range_ratio")
+        exp = REPORTER_EXTENT.get(ch, {}).get("expected_robustness")
+        if rr is not None and exp is not None:
+            obs.append((ch, rr, exp))
+    if len(obs) < 2:
+        return {"as_expected": True, "checked": False,
+                "why": "fewer than two channels had a usable range ratio"}
+    by_measured = [c for c, _, _ in sorted(obs, key=lambda t: -t[1])]
+    by_expected = [c for c, _, _ in sorted(obs, key=lambda t: -t[2])]
+    return {
+        "checked": True,
+        "as_expected": bool(by_measured[0] == by_expected[0]),
+        "observed": " > ".join(f"{c} {r:.0%}" for c, r, _ in
+                               sorted(obs, key=lambda t: -t[1])),
+        "expected": " > ".join(by_expected),
+        "why_it_matters": (
+            "The cytoplasmic reporter fills the cell and should tolerate a "
+            "badly-placed plane better than an organellar one. When it does "
+            "not, something about this preparation is unusual and the animal "
+            "is worth inspecting before it joins a group mean."),
+    }
+
+
+def aggregate(records):
+    """Across animals: the table a methods section needs, and the outliers.
+
+    Reports the DISTRIBUTION rather than a pass rate. A pass rate hides
+    whether the failures were marginal or catastrophic, and a reviewer asking
+    how sectioning was controlled wants the spread.
+    """
+    if not records:
+        raise SectionError("No records supplied.")
+    chans = sorted({c for r in records for c in r.get("channels", {})})
+    out = {"n_animals": len(records), "channels": {}}
+    for ch in chans:
+        rr = [r["channels"][ch]["sides"]["range_ratio"] for r in records
+              if "range_ratio" in r.get("channels", {}).get(ch, {}).get("sides", {})]
+        rw = [r["channels"][ch]["gradient"]["r_brightness_vs_width"]
+              for r in records
+              if r.get("channels", {}).get(ch, {}).get("gradient", {}).get(
+                  "r_brightness_vs_width") is not None]
+        e = {"n": len(rr), "reporter": REPORTER_EXTENT.get(ch, {})}
+        if rr:
+            a = np.asarray(rr, float)
+            e["range_ratio"] = {"median": round(float(np.median(a)), 3),
+                                "p10": round(float(np.percentile(a, 10)), 3),
+                                "p90": round(float(np.percentile(a, 90)), 3),
+                                "below_floor": int((a < 0.75).sum())}
+        if rw:
+            b = np.abs(np.asarray(rw, float))
+            e["abs_r_brightness_width"] = {
+                "median": round(float(np.median(b)), 3),
+                "p90": round(float(np.percentile(b, 90)), 3),
+                "above_ceiling": int((b > 0.7).sum())}
+        out["channels"][ch] = e
+
+    flagged = [r for r in records if r.get("flags")]
+    out["n_flagged"] = len(flagged)
+    out["flagged_animals"] = [r["animal_id"] for r in flagged]
+    out["ordering_violations"] = [
+        r["animal_id"] for r in records
+        if r.get("ordering", {}).get("checked")
+        and not r["ordering"]["as_expected"]]
+    out["for_methods"] = (
+        f"Sectioning geometry was quantified for every animal (n = "
+        f"{len(records)}). Per channel: the dimmer side's dynamic range as a "
+        f"fraction of the brighter side's, and the correlation between "
+        f"per-segment brightness and local body width. {len(flagged)} animals "
+        f"carried at least one flag.")
+    out["distribution_not_pass_rate"] = (
+        "The spread is reported rather than a pass rate. A pass rate hides "
+        "whether failures were marginal or catastrophic, and a reviewer "
+        "asking how sectioning was controlled wants the distribution.")
+    return out
