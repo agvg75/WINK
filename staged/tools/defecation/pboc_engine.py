@@ -179,7 +179,22 @@ def calibrated_pboc_score(flow_score, lengths, areas, calibration):
     return combined, contraction, area_error
 
 
-def candidate_events(score_z, fps, contraction_z, recovery_z):
+def candidate_events(score_z, fps, contraction_z, recovery_z, merge=True,
+                     merge_s=5.0):
+    """Detect pBoc events in a z-scored contraction signal.
+
+    `merge` FUSES events closer than `merge_s` seconds into one. It is on by
+    default because two supra-threshold islands from a single contraction
+    should not count twice - but it is the reason an animal whose defecation
+    cycle is shorter than 5 s is silently undercounted, with nothing in the
+    output to say so.
+
+    That is exactly why it is now optional. `sensitive_rescanner` below turns
+    it off inside the narrow windows where the animal's own rhythm says an
+    event went missing, which recovers the merged pairs without loosening
+    detection anywhere else - and without changing anything at all for an
+    animal whose record was already regular.
+    """
     above = np.isfinite(score_z) & (score_z >= contraction_z)
     labels, count = __import__("scipy").ndimage.label(above)
     peaks = []
@@ -203,16 +218,107 @@ def candidate_events(score_z, fps, contraction_z, recovery_z):
             "recovery_time_s": recovery / fps if recovery is not None else np.nan,
             "has_recovery": recovery is not None,
         })
-    # Merge duplicate supra-threshold islands that are part of the same event.
+    if not merge:
+        return peaks
+    # Merge duplicate supra-threshold islands that are part of the same event,
+    # AND RECORD EVERY MERGE. Inferring merges afterwards from over-long
+    # intervals only works when the absorbed event sat mid-cycle; a second
+    # contraction close to an existing one is absorbed without disturbing the
+    # interval structure at all, so the rhythm never reveals it. The detector
+    # does not have to infer what it just did - each surviving event carries
+    # the count and frames of what was folded into it.
     merged = []
-    merge_distance = int(round(5 * fps))
+    merge_distance = int(round(merge_s * fps))
     for event in peaks:
         if merged and event["peak_frame"] - merged[-1]["peak_frame"] < merge_distance:
-            if event["peak_z"] > merged[-1]["peak_z"]:
-                merged[-1] = event
+            keeper = dict(event) if event["peak_z"] > merged[-1]["peak_z"] \
+                else dict(merged[-1])
+            absorbed = list(merged[-1].get("absorbed_frames", []))
+            absorbed += list(event.get("absorbed_frames", []))
+            loser = (merged[-1] if keeper["peak_frame"] == event["peak_frame"]
+                     else event)
+            absorbed.append(int(loser["peak_frame"]))
+            keeper["absorbed_frames"] = sorted(set(absorbed))
+            keeper["n_absorbed"] = len(keeper["absorbed_frames"])
+            merged[-1] = keeper
         else:
-            merged.append(event)
+            e = dict(event)
+            e.setdefault("absorbed_frames", [])
+            e.setdefault("n_absorbed", 0)
+            merged.append(e)
     return merged
+
+
+def merge_report(events, fps, merge_s=5.0):
+    """What the merge step removed, so it can be reviewed rather than inferred.
+
+    THE SIGNAL THE RHYTHM CANNOT GIVE YOU. A rescan driven by over-long
+    intervals recovers events that were absorbed MID-CYCLE, because those
+    lengthen an interval. An extra contraction a second or two after a normal
+    one is absorbed with the interval structure untouched, and no amount of
+    looking at periodicity will surface it. This does, because the detector
+    recorded it at the time.
+
+    A recording with a non-zero merge count is a candidate for review whatever
+    its rhythm looks like - and the count is worth comparing across genotypes
+    on its own, since an animal that genuinely contracts in doublets would show
+    up here as a merge rate rather than as a phenotype.
+    """
+    absorbed = [f for e in events for f in e.get("absorbed_frames", [])]
+    per_event = [e for e in events if e.get("n_absorbed", 0) > 0]
+    return {
+        "n_events_reported": len(events),
+        "n_absorbed": len(absorbed),
+        "absorbed_frames": sorted(absorbed),
+        "events_that_absorbed_something": len(per_event),
+        "merge_window_s": float(merge_s),
+        "true_upper_bound": len(events) + len(absorbed),
+        "needs_review": bool(absorbed),
+        "why": (
+            f"{len(absorbed)} supra-threshold contraction(s) were folded into "
+            f"a neighbour within {merge_s} s. If those were separate events "
+            f"the true count is up to {len(events) + len(absorbed)}, not "
+            f"{len(events)}. Periodicity will NOT reveal these: an event "
+            f"absorbed next to an existing one leaves the interval structure "
+            f"unchanged." if absorbed else
+            f"No contractions were merged, so the reported count of "
+            f"{len(events)} is not affected by the {merge_s} s window."),
+    }
+
+
+def sensitive_rescanner(score_z, fps, contraction_z, recovery_z,
+                        threshold_factor=0.65):
+    """Build the second-pass detector for `app.adaptive_rescan.rescan`.
+
+    Returns `rescanner(start_frame, end_frame)` giving any additional peak
+    frames strictly inside that window. Two things are relaxed, and ONLY inside
+    the window:
+
+      merging is off      so a genuine second contraction less than 5 s after
+                          the first is kept rather than absorbed
+      threshold lowered   by `threshold_factor`, because an event that the
+                          first pass missed is by definition one that did not
+                          clear the original bar
+
+    Relaxing both everywhere would buy the missed events back at the cost of
+    false ones throughout, and would do it unevenly between genotypes if one
+    sits closer to the threshold than the other. Restricted to windows the
+    animal's OWN rhythm flagged, neither risk applies: a regular animal is
+    never rescanned at all.
+    """
+    z = np.asarray(score_z, dtype=float)
+
+    def rescanner(start_frame, end_frame):
+        a, b = int(start_frame), int(end_frame)
+        if b - a < 3:
+            return []
+        window = z[a:b + 1]
+        found = candidate_events(window, fps,
+                                 contraction_z * float(threshold_factor),
+                                 recovery_z, merge=False)
+        return [a + int(e["peak_frame"]) for e in found]
+
+    return rescanner
 
 
 def apply_distractor_identity_gate(target_states, target_masks,
