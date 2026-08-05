@@ -664,8 +664,14 @@ class CockpitApp(tk.Tk):
 
     def __init__(self, title, *, geometry="1100x740", process_title=None,
                  controls_label="Controls",
-                 hood_label="Hood: process and notes"):
+                 hood_label="Hood: process and notes",
+                 assistant_tool=None):
         super().__init__()
+        # `assistant_tool` is a key in app/assistant_context.ENVELOPES, e.g.
+        # "defecation". Supplying it adds an "ask" button beside "?  help".
+        # The two answer different questions and both are worth having: help
+        # says what to do next, ask says why the tool did what it did.
+        self._assistant_tool = assistant_tool
         self.title(title)
         try:
             self.geometry(geometry)
@@ -725,6 +731,7 @@ class CockpitApp(tk.Tk):
         self._help_button = ttk.Button(header, text="?  help",
                                         command=self.toggle_help)
         self._help_button.pack(side="right", padx=4)
+        self._add_assistant_button(header)
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=8, pady=5)
@@ -1010,6 +1017,41 @@ class CockpitApp(tk.Tk):
                 lines += [f"   {piece}" for piece in wrapped[1:]]
         lines += ["", "-" * 34, "Press '?  help' again for the process log."]
         return "\n".join(lines)
+
+    def _add_assistant_button(self, header):
+        """An 'ask' button, but ONLY when it would actually work.
+
+        Three things must hold: the tool named a key the assistant has
+        grounding for, the panel module is importable, and this machine has a
+        student config with an endpoint and token. If any is missing the button
+        is simply absent.
+
+        That is deliberate. A visible button that fails when pressed teaches a
+        student the tool is broken, and they will not press it again once the
+        assistant IS set up. No button at all is honest: WINK works exactly as
+        before without it.
+        """
+        if not self._assistant_tool:
+            return
+        try:
+            import assistant_panel as ap
+            import assistant_context as ctx
+        except ImportError:
+            return
+        if self._assistant_tool not in ctx.ENVELOPES:
+            return
+        try:
+            if ap.load_config() is None:
+                return
+        except Exception:
+            return
+
+        from tkinter import ttk
+        label = ctx.ENVELOPES[self._assistant_tool]["tool"]
+        self._assistant_button = ttk.Button(
+            header, text="ask",
+            command=lambda: ap.open_panel(self, self._assistant_tool, label))
+        self._assistant_button.pack(side="right", padx=4)
 
     def toggle_help(self):
         self._help_visible = not self._help_visible
