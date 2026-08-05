@@ -240,6 +240,12 @@ REGISTRY = [
          "Review candidate pBoc contractions using posterior axial motion, recovery, and editable cycle limits.",
          "Motor output - Rhythmic programs", "python", "ready", "tools/defecation/pboc_tool.py",
          requires="declared FPS, scale, exposure; visible posterior for 1 to 3 s"),
+    Tool("Pharynx template placement",
+         "Place, review and export the T12 pharynx template on a stack - the "
+         "student-facing step that turns an image into a scored pharynx.",
+         "Anatomy and morphology", "python", "ready",
+         "tools/pharynx_morphometry/pharynx_tool.py",
+         requires="a stack with a clearly resolved pharynx and a declared scale"),
     Tool("Endpoint egg counting", "Detect scale-matched eggs and correct the count in a mandatory visual review.",
          "Motor output - Rhythmic programs", "python", "ready", "tools/egg_counting/egg_counting_tool.py",
          requires="two-point scale calibration; image with resolved eggs"),
@@ -271,6 +277,18 @@ REGISTRY = [
          "Physiology - Calcium and cellular activity", "python", "ready",
          "tools/single_channel_gcamp/gcamp_tool.py",
          requires="declared FPS, scale, exposure, bit depth, and channel; for cell jobs, a soma and process-tip seed; reviewed low-signal intervals"),
+    Tool("GCaMP segmentation calibration",
+         "Pick a representative frame and set the background sigma for a "
+         "recording by watching the body/signal mask update live. Saves a "
+         "calibration record only - it does not track, measure, or classify "
+         "anything itself; the sigma chosen here is what the downstream "
+         "single-channel tools use.",
+         "Physiology - Calcium and cellular activity", "python", "ready",
+         "tools/single_channel_gcamp/gcamp_recoverable_tool.py",
+         requires="one representative frame from the acquisition being "
+                  "calibrated; the dial is a multiplier, not a raw sigma, "
+                  "because a raw value does not transfer between a bright and "
+                  "a dark acquisition"),
     Tool("AFD_MTP (Fiji)", "The Fiji-plugin version of the AFD tracker.",
          "Physiology - Calcium and cellular activity", "fiji", "ready", "tools/afd_neuron/fiji/AFD_MTP_v7_gap_patch.java"),
 
