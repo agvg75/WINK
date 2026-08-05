@@ -31,6 +31,14 @@ H, W, N = 200, 340, 60
 RADIUS = 9.0
 
 
+def _refused(fn):
+    try:
+        fn()
+        return False
+    except hs.HemisegmentError:
+        return True
+
+
 def _disc(mask, x, y, r):
     y0, y1 = max(int(y - r - 1), 0), min(int(y + r + 2), mask.shape[0])
     x0, x1 = max(int(x - r - 1), 0), min(int(x + r + 2), mask.shape[1])
@@ -55,7 +63,7 @@ straight_spine, straight_mask = make(0.0)
 bent_spine, bent_mask = make(55.0)
 
 # --- THE PARTITION, on a bent worm ---------------------------------------
-a = hs.assign(bent_mask, bent_spine, n_seg=12)
+a = hs.assign(bent_mask, bent_spine, n_seg=12, profile="uniform")
 body = bent_mask
 assigned = a["segment"] >= 0
 check("every body pixel is assigned to a segment",
@@ -79,7 +87,7 @@ check("...and the spread stays modest", counts.max() / counts.min() < 2.5,
 # --- anterior-posterior gradient -----------------------------------------
 xs = np.tile(np.arange(W, dtype=float), (H, 1))
 grad = 100.0 + xs           # brighter toward the tail (high x)
-m = hs.measure({"green": grad}, hs.assign(straight_mask, straight_spine, 12))
+m = hs.measure({"green": grad}, hs.assign(straight_mask, straight_spine, 12, profile="uniform"))
 means = [np.mean([r["green_mean"] for r in m["rows"] if r["segment"] == k])
          for k in range(12)]
 check("an anterior-posterior gradient comes out monotonic",
@@ -89,7 +97,7 @@ check("an anterior-posterior gradient comes out monotonic",
 # --- sides ----------------------------------------------------------------
 yy = np.tile(np.arange(H, dtype=float).reshape(-1, 1), (1, W))
 one_side = np.where(yy < 100, 200.0, 50.0)      # bright on the low-y side
-a_lr = hs.assign(straight_mask, straight_spine, 12)
+a_lr = hs.assign(straight_mask, straight_spine, 12, profile="uniform")
 m_lr = hs.measure({"green": one_side}, a_lr)
 by_side = {}
 for r in m_lr["rows"]:
@@ -107,14 +115,14 @@ check("...saying why a confident 'dorsal' would be worse",
       "nothing downstream could tell" in a_lr["side_note"])
 
 a_dv = hs.assign(straight_mask, straight_spine, 12, ventral_sign=1,
-                 dorsal_known=True)
+                 dorsal_known=True, profile="uniform")
 check("with a call, sides are dorsal and ventral",
       set(a_dv["labels"].values()) == {"dorsal", "ventral"}
       and a_dv["dorsal_known"] is True)
 check("...and the ventral sign picks which is which",
       a_dv["labels"][1] == "ventral"
       and hs.assign(straight_mask, straight_spine, 12, ventral_sign=-1,
-                    dorsal_known=True)["labels"][1] == "dorsal")
+                    dorsal_known=True, profile="uniform")["labels"][1] == "dorsal")
 check("dorsal_known travels on every measured row",
       all(r["dorsal_known"] is True
           for r in hs.measure({"g": grad}, a_dv)["rows"]))
@@ -123,8 +131,8 @@ check("dorsal_known travels on every measured row",
 uneven = np.column_stack([np.r_[np.linspace(50, 150, 40),
                                 np.linspace(152, 290, 8)],
                           np.full(48, 100.0)])
-idx, arc, edges = hs.segment_bounds(uneven, 6)
-check("segment boundaries are equally spaced in ARC LENGTH",
+idx, arc, edges = hs.segment_bounds(uneven, 6, profile="uniform")
+check("uniform segments are equally spaced in ARC LENGTH",
       np.allclose(np.diff(edges), edges[-1] / 6),
       f"edges {[round(e, 1) for e in edges]}")
 check("...and every point falls inside its own segment's arc bounds",
@@ -136,6 +144,33 @@ per_seg = [int((idx == k).sum()) for k in range(6)]
 check("...while point COUNTS per segment are unequal, as equal-index would not be",
       max(per_seg) > 4 * min(per_seg),
       f"points per segment {per_seg}")
+
+# --- ANATOMICAL SEGMENTS ARE NOT EQUAL, AND MUST NOT BE ------------------
+# Body-wall muscles are shorter at the ends and larger in the midbody. Equal
+# segments would put boundaries inside real cells while still numbering them
+# 0..23, so the numbering would mean something different from everywhere else.
+_, _, aedges = hs.segment_bounds(straight_spine, 24)     # anatomical default
+alen = np.diff(aedges)
+check("anatomical segments are NOT equal in length", np.ptp(alen) > 0.2 * alen.mean(),
+      f"shortest {alen.min():.1f}, longest {alen.max():.1f} px")
+check("...shorter at both ends, larger in the midbody",
+      alen[0] < alen[11] and alen[-1] < alen[12],
+      f"end {alen[0]:.1f} / mid {alen[11]:.1f} / end {alen[-1]:.1f}")
+check("...by about the 1.8x the shared profile specifies",
+      1.6 < alen.max() / alen.min() < 2.0,
+      f"ratio {alen.max() / alen.min():.2f}")
+check("the default n_seg is 24, one per myocyte", hs.N_SEG == 24)
+
+# It must come from the SAME definition the schematic draws from, or the
+# numbering a student checks against drifts from the numbering we measure with.
+sys.path.insert(0, str(ROOT / "app"))
+import myocyte_schematic as ms   # noqa: E402
+check("the profile is the schematic's, not a second copy",
+      np.allclose(hs.segment_bounds(straight_spine, 24)[2] / aedges[-1],
+                  ms.boundaries(24)))
+
+check("an unknown profile name is refused",
+      _refused(lambda: hs.segment_bounds(straight_spine, 24, "vibes")))
 
 # --- kinematics -----------------------------------------------------------
 kin = hs.segment_kinematics(bent_spine, 12)

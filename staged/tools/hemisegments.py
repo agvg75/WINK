@@ -35,12 +35,54 @@ class HemisegmentError(Exception):
     """Refusals that name the consequence."""
 
 
-def segment_bounds(spine, n_seg):
-    """Split the spine into n_seg parts of equal ARC LENGTH.
+N_SEG = 24          # one per body-wall myocyte. Anatomy, not a resolution knob.
 
-    Equal arc length, not equal index: a resampled spine is usually already
-    evenly spaced, but a raw traced one is not, and equal-index segments would
-    then be different physical lengths that still get compared with each other.
+
+def _muscle_fractions(n_seg):
+    """Cumulative cell boundaries as fractions of body length, from the one
+    definition of the muscle-size profile that already exists.
+
+    IMPORTED, NOT REIMPLEMENTED. `app/myocyte_schematic.boundaries` holds the
+    profile the RGBCaMP extractor measures with, and the schematic is drawn from
+    it precisely so the numbering a student checks against cannot drift from the
+    numbering the tools measure with. A second copy here would reintroduce that
+    drift silently: segments would still be produced, still be numbered 0..23,
+    and simply describe different pieces of the animal.
+    """
+    import sys
+    from pathlib import Path
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    if str(app_dir) not in sys.path:
+        sys.path.insert(0, str(app_dir))
+    try:
+        from myocyte_schematic import boundaries
+    except ImportError as exc:                            # pragma: no cover
+        raise HemisegmentError(
+            f"Could not load the muscle-size profile from "
+            f"app/myocyte_schematic.py ({exc}). Refusing to fall back on "
+            f"equal-length segments: they would still be numbered 0..23 and "
+            f"would simply describe different pieces of the animal than every "
+            f"other tool, with nothing to show for it.")
+    return np.asarray(boundaries(n_seg), dtype=float)
+
+
+def segment_bounds(spine, n_seg=N_SEG, profile="anatomical"):
+    """Split the spine into n_seg segments along its ARC LENGTH.
+
+    SEGMENTS ARE NOT EQUAL IN LENGTH, and that is the point. Body-wall muscles
+    are SHORTER AT THE ENDS AND LARGER IN THE MIDBODY, so cutting the body into
+    equal pieces would put segment boundaries in the middle of real cells - and
+    the numbering would then still read 0..23 while meaning something else than
+    it does everywhere else in WINK. On the shared profile the midbody cell is
+    about 1.8x the length of an end cell.
+
+    `profile="uniform"` gives equal arc length. It exists for measurements that
+    genuinely want even bins along the body and is NOT anatomical: its segments
+    do not correspond to myocytes and must not be labelled as though they do.
+
+    Arc length, not point index, in both cases: a raw traced spine is unevenly
+    sampled, and equal-index segments would be different physical lengths that
+    still get compared with each other.
     """
     s = np.asarray(spine, dtype=float)
     if s.ndim != 2 or s.shape[1] != 2 or s.shape[0] < 3:
@@ -53,14 +95,23 @@ def segment_bounds(spine, n_seg):
     total = arc[-1]
     if total <= 0:
         raise HemisegmentError("The spine has zero length.")
-    edges = np.linspace(0.0, total, n_seg + 1)
+
+    if profile == "anatomical":
+        edges = _muscle_fractions(n_seg) * total
+    elif profile == "uniform":
+        edges = np.linspace(0.0, total, n_seg + 1)
+    else:
+        raise HemisegmentError(
+            f"profile must be 'anatomical' or 'uniform', not {profile!r}.")
+
     # segment index of each spine point, clipped so the tail point lands in the
     # last segment rather than one past it
     idx = np.clip(np.searchsorted(edges, arc, side="right") - 1, 0, n_seg - 1)
     return idx, arc, edges
 
 
-def assign(mask, spine, n_seg, ventral_sign=None, dorsal_known=False):
+def assign(mask, spine, n_seg=N_SEG, ventral_sign=None,
+           dorsal_known=False, profile="anatomical"):
     """Label every body pixel with (segment, side).
 
     Returns a dict with `segment` and `side` arrays over the mask, where side is
@@ -68,7 +119,7 @@ def assign(mask, spine, n_seg, ventral_sign=None, dorsal_known=False):
     """
     m = np.asarray(mask, dtype=bool)
     s = np.asarray(spine, dtype=float)
-    seg_of_point, _, _ = segment_bounds(s, n_seg)
+    seg_of_point, _, _ = segment_bounds(s, n_seg, profile)
 
     ys, xs = np.nonzero(m)
     if ys.size == 0:
@@ -119,10 +170,11 @@ def assign(mask, spine, n_seg, ventral_sign=None, dorsal_known=False):
     }
 
 
-def segment_kinematics(spine, n_seg, um_per_px=None):
+def segment_kinematics(spine, n_seg=N_SEG, um_per_px=None,
+                       profile="anatomical"):
     """Per-segment angle and curvature, for the kinematics columns."""
     s = np.asarray(spine, dtype=float)
-    idx, arc, edges = segment_bounds(s, n_seg)
+    idx, arc, edges = segment_bounds(s, n_seg, profile)
     rows = []
     for k in range(n_seg):
         sel = np.flatnonzero(idx == k)
@@ -153,14 +205,29 @@ def segment_kinematics(spine, n_seg, um_per_px=None):
 
 
 def measure(channels, assignment, min_pixels=8):
-    """One row per (segment, side), with min/mean/max of each channel.
+    """One row per (segment, side), with the brightness statistics per channel.
 
-    `channels` maps a name to a 2-D image on the same frame - e.g.
-    {"green": g, "red": r}. Rows carry `roi_area_px` because a bent worm has
-    unequal segment areas by geometry: the outside of a bend simply contains
-    more pixels. That is a fact about posture, not about muscle, and comparing
-    raw areas across frames measures bending.
+    WHAT IS REPORTED, AND WHICH ONE TO USE.
+
+      mean    the average over the ROI. This is what the existing dF/F work
+              uses (`worm_rgbcamp_analysis.add_dff`), and what the Fiji column
+              contract carries. Sensitive to anything bright that is not muscle.
+      median  robust to a handful of bright pixels. ADDED HERE, and for a real
+              reason: a hemisegment ROI is a GEOMETRIC BAND of body pixels, not
+              a segmentation of muscle. It contains hypodermis, gut, and
+              whatever autofluorescence or coelomocyte happens to lie in it, so
+              the mean is pulled by tissue that is not the thing being measured.
+      p90     a robust peak. Use this rather than `max` when you want "how
+              bright did this muscle get".
+      max     the single brightest pixel. Kept because the contract has it, but
+              it is one pixel: a hot camera pixel, a cosmic ray or a gut granule
+              sets it, and it will not reproduce.
+      min     effectively the local background inside the ROI.
+
+    Both `median` and `p90` are additions; `min`, `mean` and `max` are
+    unchanged, so nothing downstream breaks.
     """
+
     seg, sid = assignment["segment"], assignment["side"]
     labels = assignment["labels"]
     shapes = {k: np.asarray(v).shape for k, v in channels.items()}
@@ -185,16 +252,34 @@ def measure(channels, assignment, min_pixels=8):
                 v = np.asarray(img, dtype=float)[sel]
                 v = v[np.isfinite(v)]
                 if v.size == 0:
-                    row[f"{name}_min"] = row[f"{name}_mean"] = None
-                    row[f"{name}_max"] = None
+                    for stat in ("min", "mean", "median", "p90", "max"):
+                        row[f"{name}_{stat}"] = None
                     continue
                 row[f"{name}_min"] = round(float(v.min()), 4)
                 row[f"{name}_mean"] = round(float(v.mean()), 4)
+                row[f"{name}_median"] = round(float(np.median(v)), 4)
+                row[f"{name}_p90"] = round(float(np.percentile(v, 90)), 4)
                 row[f"{name}_max"] = round(float(v.max()), 4)
             rows.append(row)
     return {
         "rows": rows, "n_rows": len(rows), "n_skipped": skipped,
         "min_pixels": min_pixels,
+        "statistics": {
+            "mean": "average over the ROI; what dF/F uses. Pulled by anything "
+                    "bright in the band that is not muscle.",
+            "median": "robust to a few bright pixels. Prefer it when gut "
+                      "autofluorescence or a coelomocyte lies in the band.",
+            "p90": "a robust peak - use instead of max for 'how bright did "
+                   "this get'.",
+            "max": "ONE pixel. A hot pixel or a gut granule sets it and it "
+                   "will not reproduce. Kept for contract compatibility.",
+            "min": "effectively the local background inside the ROI.",
+        },
+        "roi_is_geometric": (
+            "A hemisegment is a BAND OF BODY PIXELS on one side of the "
+            "midline, not a segmentation of muscle. It contains hypodermis, "
+            "gut and whatever else lies in it, which is why the median is "
+            "worth having alongside the mean."),
         "area_note": ("roi_area_px is reported because a bent worm has unequal "
                       "segment areas by geometry - the outside of a bend holds "
                       "more pixels. Comparing raw areas across frames measures "
@@ -207,8 +292,9 @@ def measure(channels, assignment, min_pixels=8):
     }
 
 
-def extract_frame(channels, mask, spine, n_seg=12, ventral_sign=None,
-                  dorsal_known=False, um_per_px=None, min_pixels=8):
+def extract_frame(channels, mask, spine, n_seg=N_SEG, ventral_sign=None,
+                  dorsal_known=False, um_per_px=None, min_pixels=8,
+                  profile="anatomical"):
     """Everything for one frame: ROIs, intensities and per-segment kinematics.
 
     The spine must already be ordered HEAD FIRST - see head_tail.identify_head
@@ -216,9 +302,10 @@ def extract_frame(channels, mask, spine, n_seg=12, ventral_sign=None,
     spine is a perfectly valid spine, and the error would be silent here and
     visible only as an inverted anterior-posterior gradient much later.
     """
-    a = assign(mask, spine, n_seg, ventral_sign, dorsal_known)
+    a = assign(mask, spine, n_seg, ventral_sign, dorsal_known, profile)
     m = measure(channels, a, min_pixels=min_pixels)
-    kin = {r["segment"]: r for r in segment_kinematics(spine, n_seg, um_per_px)}
+    kin = {r["segment"]: r
+           for r in segment_kinematics(spine, n_seg, um_per_px, profile)}
     for row in m["rows"]:
         row.update({k: v for k, v in kin[row["segment"]].items()
                     if k != "segment"})
