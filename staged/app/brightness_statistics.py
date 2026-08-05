@@ -108,9 +108,40 @@ REAL_DATA_FINDINGS = {
         "comparatively robust - the reverse of what a homogeneous synthetic "
         "ROI predicts. Do not report a mean against a postural variable "
         "without area_control()."),
-    "untested": ("median and p90 are absent from the Fiji extraction, so the "
-                 "two expected to be most robust have never been checked on "
-                 "real data."),
+    "untested": "superseded - see SECOND_RECORDING below.",
+}
+
+# The Python extractor was then run on a second, DYSTROPHIC recording
+# (DYS1AH DAY 3 CRAWL 2, 40 frames), which produced median and p90 for the
+# first time. THE EXPECTATION THAT MEDIAN WOULD BE MOST ROBUST WAS WRONG.
+SECOND_RECORDING = {
+    "source": ("L:/02_Duchenne Muscular Dystrophy/Mackenzie/14) RGB Sequences/"
+               "06.11.25/DYS1AH DAY 3 CRAWL 2 -done"),
+    "scope": "40 frames, 46 hemisegments, dystrophic",
+    "median_roi_area_px": 21,
+    "correlation_with_roi_area": {
+        "mean": -0.283, "median": -0.285, "p90": -0.044,
+        "max": +0.131, "min": -0.273},
+    "conclusion": (
+        "p90 IS THE STATISTIC TO USE. Its correlation with ROI area is -0.04 "
+        "against -0.28 for both the mean AND the median, which are "
+        "indistinguishable from each other. The expectation that the median "
+        "would be robust was wrong, and the reason is instructive: a ~21 px "
+        "band is mostly non-muscle, so the median sits in the dark part just "
+        "as the mean's centre does, and both move when the dark fraction "
+        "changes. p90 sits in the bright muscle and tracks calcium instead."),
+    "parity_with_fiji": {
+        "green_mean": 0.987, "green_max": 0.953, "green_min": None,
+        "note": ("Anterior-posterior profile correlation across all 24 "
+                 "segments between this extractor and WormRGBCaMPMap_v1 on "
+                 "the SAME recording. green_min is undefined because it is "
+                 "identically zero - the same degeneracy seen in the other "
+                 "file."),
+    },
+    "segmentation_profile": (
+        "The sidecar's muscle_boundary_frac matches myocyte_schematic."
+        "boundaries(24) to 1e-6 - the Python extractor cuts the body at "
+        "exactly the boundaries Fiji cut it at."),
 }
 
 
