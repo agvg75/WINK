@@ -61,15 +61,99 @@ def feasibility_pass(frames, centers_xy, neuron_radius_px, fps,
         "thresholds_provisional": True}
 
 
-def _otsu_threshold(values):
-    """Otsu split of a 1-D/2-D array (numpy only, no skimage dependency)."""
+def detect_episodes(frame_means, min_length=20, jump_factor=4.0):
+    """Split a session into separate RECORDINGS by illumination changes.
+
+    A folder is not always one recording. The usual protocol here is: find a
+    worm under transmitted light at low magnification, zoom in, turn the
+    transmitted light off, film under blue light, then move to the next worm.
+    So one folder holds alternating BRIGHT search sequences and DIM
+    fluorescence takes, several worms deep.
+
+    Treating that as a single recording is what produced 88% frame-to-frame
+    brightness variation and 106 abrupt level changes across 9000 frames, and
+    it makes every whole-session statistic meaningless - a dF/F0 computed with
+    a baseline drawn from transmitted-light frames is not a calcium
+    measurement.
+
+    Episodes are cut at abrupt level changes, since switching the illumination
+    is a step and biology is not. Each is classified bright or dim relative to
+    the session median, and only the dim ones are candidate fluorescence takes.
+    """
+    m = np.asarray(frame_means, dtype=float)
+    if m.size < max(min_length * 2, 8):
+        return [{"start": 0, "end": int(m.size) - 1, "n": int(m.size),
+                 "mean": float(m.mean()) if m.size else 0.0,
+                 "kind": "single", "stable": True}]
+    jumps = np.abs(np.diff(m))
+    typical = float(np.median(jumps))
+    cuts = [0] + [int(i) + 1 for i in np.nonzero(
+        jumps > max(jump_factor * typical, 1e-9))[0]] + [int(m.size)]
+
+    episodes = []
+    for a, b in zip(cuts[:-1], cuts[1:]):
+        if b - a < min_length:
+            continue
+        seg = m[a:b]
+        episodes.append({"start": int(a), "end": int(b) - 1, "n": int(b - a),
+                         "mean": float(np.mean(seg)),
+                         "sd_over_mean": float(np.std(seg) / max(np.mean(seg), 1e-9))})
+    if not episodes:
+        return [{"start": 0, "end": int(m.size) - 1, "n": int(m.size),
+                 "mean": float(m.mean()), "kind": "single", "stable": True}]
+
+    # Split at the largest RATIO gap between episode levels, not at the median.
+    # The median assumes half the episodes are bright, which is false - a
+    # session may hold one brief transmitted-light look per worm and a long
+    # fluorescence take. Measured on a real session: transmitted light sits at
+    # ~22000 and fluorescence at ~1400, a factor of 16, while the median of the
+    # episode levels landed at ~1400 and mislabelled four fluorescence takes as
+    # bright. A gap that large is unmistakable; a median is not.
+    levels = np.array(sorted(e["mean"] for e in episodes), dtype=float)
+    split = float("inf")
+    if levels.size >= 2:
+        ratios = levels[1:] / np.maximum(levels[:-1], 1e-9)
+        k = int(np.argmax(ratios))
+        if ratios[k] >= 2.0:                     # a real illumination change
+            split = float(np.sqrt(levels[k] * levels[k + 1]))
+    for e in episodes:
+        if np.isfinite(split):
+            e["kind"] = ("bright (transmitted light?)" if e["mean"] > split
+                         else "dim (fluorescence?)")
+        else:
+            # no clear gap: do not invent two classes where there is one
+            e["kind"] = "uniform illumination"
+        e["stable"] = bool(e["sd_over_mean"] < 0.05)
+    return episodes
+
+
+def _otsu_threshold(values, robust_percentiles=(0.1, 99.9)):
+    """Otsu split of a 1-D/2-D array (numpy only, no skimage dependency).
+
+    The histogram is built over a ROBUST range, not min-to-max. A 16-bit camera
+    frame with a few hot or saturated pixels spans 0 to 64000 while the actual
+    image content occupies a few hundred levels - so a 256-bin histogram over
+    the full range put all the real data into about 13 bins and Otsu chose a
+    threshold far above the object. Measured on a real GCaMP recording it
+    declared a plainly visible worm "not separable from background": 13% of
+    frames separable, contrast 1.55 against a floor of 2.0, on frames where the
+    worm is obvious to the eye at a 1-99.5 percentile display.
+
+    Clipping to percentiles keeps the resolution where the decision is actually
+    made. Outliers are still counted - they are clipped into the end bins, not
+    discarded - so a genuinely bimodal bright object is unaffected.
+    """
     v = np.asarray(values, dtype=float).ravel()
     v = v[np.isfinite(v)]
     if v.size == 0:
         return 0.0
-    lo, hi = float(v.min()), float(v.max())
+    lo = float(np.percentile(v, robust_percentiles[0]))
+    hi = float(np.percentile(v, robust_percentiles[1]))
+    if hi <= lo:
+        lo, hi = float(v.min()), float(v.max())
     if hi <= lo:
         return lo
+    v = np.clip(v, lo, hi)
     hist, edges = np.histogram(v, bins=256, range=(lo, hi))
     p = hist.astype(float)
     total = p.sum()
@@ -118,10 +202,21 @@ def body_visibility_pass(frames, *, min_area_frac=0.004, max_area_frac=0.5,
             if comp_area < min_area_frac * area or comp_area > max_area_frac * area:
                 continue
             comp = labels == k
-            fg = float(np.mean(frame[comp]))
+            fg = float(np.median(frame[comp]))
             rest = frame[~comp]
             bg = float(np.median(rest))
-            bgn = float(np.std(rest))
+            # ROBUST noise, not the standard deviation. On a 16-bit camera
+            # frame a handful of hot pixels sit three orders of magnitude above
+            # the background, and std over that range is dominated entirely by
+            # them - so contrast, which divides by it, collapses toward zero and
+            # a plainly visible worm is declared "not separable from
+            # background". Measured on a real GCaMP recording: contrast 1.55
+            # against a floor of 2.0, on frames where the worm is obvious.
+            # The MAD describes the typical fluctuation, which is what "noise"
+            # was always meant to mean here.
+            bgn = float(np.median(np.abs(rest - bg))) * 1.4826
+            if bgn <= 0:
+                bgn = float(np.std(rest))
             contrast = abs(fg - bg) / max(bgn, 1e-9)
             cand = {"polarity": polarity, "area_frac": comp_area / area,
                     "contrast": contrast, "separable": contrast >= contrast_floor}

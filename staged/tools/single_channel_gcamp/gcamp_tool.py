@@ -157,6 +157,30 @@ class App(CockpitApp):
         self.center_ax.text(0.5, 0.5, "Choose a source; the first frame appears here.",
                             ha="center", va="center", fontsize=10, color="#888888")
         self.center_canvas.draw()
+        dial = ttk.LabelFrame(self.center, text="Display brightness / contrast "
+                                                "(changes what you SEE, never "
+                                                "what is measured)", padding=6)
+        dial.pack(fill="x", padx=6, pady=(0, 4))
+        self.disp_lo = tk.DoubleVar(value=1.0)
+        self.disp_hi = tk.DoubleVar(value=99.5)
+        ttk.Label(dial, text="black point (percentile)").grid(row=0, column=0,
+                                                              sticky="w")
+        ttk.Scale(dial, from_=0.0, to=40.0, variable=self.disp_lo,
+                  orient="horizontal", length=170,
+                  command=self._rescale_display).grid(row=0, column=1, padx=6)
+        ttk.Label(dial, text="white point (percentile)").grid(row=1, column=0,
+                                                              sticky="w")
+        ttk.Scale(dial, from_=60.0, to=100.0, variable=self.disp_hi,
+                  orient="horizontal", length=170,
+                  command=self._rescale_display).grid(row=1, column=1, padx=6)
+        ttk.Button(dial, text="Auto (1 - 99.5)",
+                   command=lambda: (self.disp_lo.set(1.0), self.disp_hi.set(99.5),
+                                    self._rescale_display())
+                   ).grid(row=0, column=2, rowspan=2, padx=8)
+        ttk.Button(dial, text="Find recordings in this folder...",
+                   command=self.find_episodes
+                   ).grid(row=0, column=3, rowspan=2, padx=4)
+
         ttk.Label(self.center, textvariable=self.status, wraplength=560,
                   justify="left").pack(anchor="w", padx=6, pady=(0, 2))
         ttk.Label(self.center, wraplength=560, justify="left", foreground="#8a3b00",
@@ -167,12 +191,194 @@ class App(CockpitApp):
                         "searches only near the predicted position - it never jumps to the "
                         "brightest object elsewhere.")).pack(anchor="w", padx=6, pady=(0, 6))
 
+    def find_episodes(self):
+        """Split a session folder into separate recordings and let one be chosen.
+
+        A folder is often not one recording. The protocol here is: find a worm
+        under transmitted light, zoom, switch to blue light, film, move to the
+        next worm - so one folder holds many takes. Analysed whole it shows 88%
+        frame-to-frame brightness variation, and a baseline drawn across
+        transmitted-light frames would make dF/F0 meaningless.
+        """
+        import tkinter as tk
+        from tkinter import messagebox, ttk as _ttk
+        from gcamp import detect_episodes
+
+        try:
+            movie = open_movie(self.v["source"].get())
+        except Exception as exc:
+            messagebox.showerror("Could not open the recording", str(exc))
+            return
+        n = int(movie.n_frames)
+        step = max(1, n // 2500)
+        self.status.set(f"Scanning {n} frames for separate recordings...")
+        self.update_idletasks()
+        try:
+            means = np.array([float(np.mean(gray(movie.get_frame(int(i)))))
+                              for i in range(0, n, step)])
+        finally:
+            movie.close()
+        eps = detect_episodes(means, min_length=max(8, 40 // step))
+        for e in eps:
+            e["frame_start"] = e["start"] * step
+            e["frame_end"] = min(e["end"] * step + step - 1, n - 1)
+
+        win = tk.Toplevel(self)
+        win.title("Recordings found in this folder")
+        win.geometry("720x420")
+        _ttk.Label(win, padding=8, wraplength=690, justify="left",
+                   text=(f"{len(eps)} runs of steady illumination in {n} frames. "
+                         f"Dim runs are the likely fluorescence takes; bright "
+                         f"ones are probably transmitted-light looks while a "
+                         f"worm was found. Choose ONE - measuring across a "
+                         f"switch of illumination is not a calcium "
+                         f"measurement.")).pack(fill="x")
+        cols = ("frames", "count", "mean", "steady", "kind")
+        tree = _ttk.Treeview(win, columns=cols, show="headings", height=12)
+        for c, w in zip(cols, (150, 80, 90, 80, 220)):
+            tree.heading(c, text=c)
+            tree.column(c, width=w, anchor="w")
+        for i, e in enumerate(eps):
+            tree.insert("", "end", iid=str(i), values=(
+                f"{e['frame_start']} - {e['frame_end']}",
+                e["frame_end"] - e["frame_start"] + 1,
+                f"{e['mean']:.0f}",
+                "yes" if e.get("stable") else "no",
+                e["kind"]))
+        tree.pack(fill="both", expand=True, padx=8, pady=4)
+
+        def use():
+            sel = tree.selection()
+            if not sel:
+                return
+            e = eps[int(sel[0])]
+            self.episode_range = (e["frame_start"], e["frame_end"])
+            self.frames = None
+            self.status.set(
+                f"Using frames {e['frame_start']}-{e['frame_end']} "
+                f"({e['frame_end'] - e['frame_start'] + 1} frames, {e['kind']}). "
+                f"Re-run the feasibility pass.")
+            win.destroy()
+
+        bar = _ttk.Frame(win, padding=6)
+        bar.pack(fill="x")
+        _ttk.Button(bar, text="Use the selected recording", command=use
+                    ).pack(side="right")
+        _ttk.Button(bar, text="Cancel", command=win.destroy).pack(side="right",
+                                                                  padx=6)
+        win.transient(self)
+        win.grab_set()
+
+    def check_frame_brightness(self):
+        """Is frame-to-frame brightness variation biology, or the codec?
+
+        Andres reported that some frames look brighter and suspected an
+        encoding bug. That distinction is not cosmetic: this tool measures
+        calcium as intensity over time, so a codec that varies frame brightness
+        would produce a signal indistinguishable from activity - reproducible,
+        plausible, and entirely artefactual.
+
+        A compressed movie encodes occasional key frames and reconstructs the
+        rest, and quantisation differs between the two. The signature is
+        PERIODICITY at the key-frame interval - a spike every N frames - which
+        biology has no reason to produce. Real calcium transients are aperiodic
+        and last longer than one frame.
+        """
+        from tkinter import messagebox
+        try:
+            movie = open_movie(self.v["source"].get())
+        except Exception as exc:
+            messagebox.showerror("Could not open the recording", str(exc))
+            return
+        n = int(movie.n_frames)
+        take = min(n, 400)
+        idx = np.linspace(0, n - 1, take).astype(int)
+        means = []
+        try:
+            for i in idx:
+                means.append(float(np.mean(gray(movie.get_frame(int(i))))))
+        finally:
+            movie.close()
+        means = np.asarray(means, dtype=float)
+        if means.size < 16:
+            messagebox.showinfo("Too few frames",
+                                "Not enough frames to judge periodicity.")
+            return
+
+        d = means - np.mean(means)
+        rel = float(np.std(means) / max(np.mean(means), 1e-9))
+        spec = np.abs(np.fft.rfft(d * np.hanning(d.size)))
+        freqs = np.fft.rfftfreq(d.size, d=1.0)
+        spec[0] = 0.0
+        k = int(np.argmax(spec))
+        period = (1.0 / freqs[k]) if freqs[k] > 0 else float("inf")
+        peak_ratio = float(spec[k] / max(np.median(spec[1:]), 1e-12))
+
+        # a step change points at auto-exposure or gain, not compression
+        jumps = np.abs(np.diff(means))
+        big = int((jumps > 5 * np.median(jumps) + 1e-9).sum())
+
+        looks_periodic = peak_ratio > 8 and 1.5 < period < 60
+        verdict = (
+            "PERIODIC - consistent with a codec key-frame pattern rather than "
+            "biology. Intensity measured from this recording would carry that "
+            "pattern as if it were signal."
+            if looks_periodic else
+            "No strong periodicity. The variation looks aperiodic, which is "
+            "what real activity looks like - though that is not proof it is.")
+        messagebox.showinfo(
+            "Frame brightness check",
+            f"{take} frames sampled of {n}.\n\n"
+            f"Frame-mean variation: {100 * rel:.1f}% of the mean\n"
+            f"Strongest periodicity: every {period:.1f} frames "
+            f"({peak_ratio:.1f}x the background spectrum)\n"
+            f"Abrupt level changes: {big}\n\n"
+            f"{verdict}\n\n"
+            f"If it is the codec, re-export the recording without inter-frame "
+            f"compression - an uncompressed or lossless TIFF stack - before "
+            f"measuring anything from it.")
+
+    def _display_limits(self, image):
+        """vmin/vmax for DISPLAY ONLY - never for measurement.
+
+        Matplotlib's default autoscale stretches to the full data range, so a
+        dim GCaMP frame with a handful of hot pixels renders the worm almost
+        black and it looks undetectable when it is plainly there. These
+        percentiles change what a human sees and nothing else; every number
+        this tool reports comes from the raw frames.
+        """
+        a = np.asarray(image, dtype=float)
+        finite = a[np.isfinite(a)]
+        if finite.size == 0:
+            return None, None
+        lo = float(np.percentile(finite, float(self.disp_lo.get())))
+        hi = float(np.percentile(finite, float(self.disp_hi.get())))
+        if hi <= lo:
+            hi = lo + 1e-6
+        return lo, hi
+
+    def _imshow(self, axis, image, **kw):
+        lo, hi = self._display_limits(image)
+        return axis.imshow(image, cmap="gray", vmin=lo, vmax=hi, **kw)
+
+    def _rescale_display(self, *_):
+        if getattr(self, "_last_display_image", None) is None:
+            return
+        self.center_ax.clear()
+        self._imshow(self.center_ax, self._last_display_image)
+        self.center_ax.set_axis_off()
+        self.center_ax.set_title(getattr(self, "_last_display_title", ""),
+                                 fontsize=9)
+        self.center_canvas.draw()
+
     def _show_first_frame(self):
         try:
             m = open_movie(self.v["source"].get()); im = gray(m.get_frame(0)); m.close()
         except Exception as exc:
             self.status.set(f"Could not load frame: {exc}"); return
-        self.center_ax.clear(); self.center_ax.imshow(im, cmap="gray")
+        self._last_display_image = im
+        self._last_display_title = "First frame"
+        self.center_ax.clear(); self._imshow(self.center_ax, im)
         self.center_ax.set_axis_off(); self.center_ax.set_title("First frame", fontsize=9)
         self.center_canvas.draw()
 
@@ -259,7 +465,12 @@ class App(CockpitApp):
         # Which frames? Offer the choice BEFORE allocating anything. The
         # neuron tracker already works this way; this tool did not, and loaded
         # every frame of whatever it was given.
-        indices = list(range(count))
+        episode = getattr(self, "episode_range", None)
+        if episode:
+            indices = list(range(int(episode[0]),
+                                 min(int(episode[1]) + 1, count)))
+        else:
+            indices = list(range(count))
         per_frame = (y1 - y0) * (x1 - x0) * 4
         if per_frame * count > self.MAX_FRAME_BYTES:
             try:
