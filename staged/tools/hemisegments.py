@@ -171,10 +171,33 @@ def assign(mask, spine, n_seg=N_SEG, ventral_sign=None,
 
 
 def segment_kinematics(spine, n_seg=N_SEG, um_per_px=None,
-                       profile="anatomical"):
-    """Per-segment angle and curvature, for the kinematics columns."""
+                       profile="anatomical", baseline_frac=0.10):
+    """Per-segment angle and curvature, measured over a WIDE ENOUGH BASELINE.
+
+    THE FIRST VERSION PRODUCED NOISE, and the kymogram made it obvious: a
+    crawling worm should show clean diagonal banding as the body wave travels,
+    and instead the curvature panel was speckle. The cause was the baseline.
+    Turning was measured between the first and last tangent INSIDE each
+    segment - about four points of a hundred-point midline - so the estimate
+    was dominated by tracing jitter rather than by the animal's posture. Twenty
+    four segments of a resampled spine simply do not each contain enough points
+    to differentiate.
+
+    Curvature is now measured at each segment's CENTRE over a baseline that is
+    a fixed fraction of body length (`baseline_frac`, default a tenth), which
+    is a real physical distance rather than however many points happened to
+    fall in a segment. Segments still tile the body; the measurement window
+    overlaps between neighbours, which is correct - curvature is a property of
+    a place on the body, not of a bin.
+
+    Angle stays local to the segment: it is the segment's own orientation and
+    a wide baseline would blur exactly what it reports.
+    """
     s = np.asarray(spine, dtype=float)
     idx, arc, edges = segment_bounds(s, n_seg, profile)
+    total = float(arc[-1])
+    half = max(total * float(baseline_frac) / 2.0, 1e-6)
+
     rows = []
     for k in range(n_seg):
         sel = np.flatnonzero(idx == k)
@@ -186,18 +209,31 @@ def segment_kinematics(spine, n_seg=N_SEG, um_per_px=None,
         v = b - a
         ang = float(np.degrees(np.arctan2(v[1], v[0])))
         length = float(arc[sel[-1]] - arc[sel[0]])
-        # turning across the segment, in degrees
-        if sel.size >= 3:
-            t0 = s[sel[1]] - s[sel[0]]
-            t1 = s[sel[-1]] - s[sel[-2]]
-            cross = t0[0] * t1[1] - t0[1] * t1[0]
-            dot = float(np.dot(t0, t1))
-            curv = float(np.degrees(np.arctan2(cross, dot)))
+
+        # Centre of this segment in arc length, then a window of +/- half a
+        # baseline about it, clipped to the body.
+        centre = 0.5 * (arc[sel[0]] + arc[sel[-1]])
+        lo = np.searchsorted(arc, max(centre - half, arc[0]))
+        hi = np.searchsorted(arc, min(centre + half, arc[-1]))
+        lo, hi = int(np.clip(lo, 0, s.shape[0] - 1)), int(np.clip(hi, 0, s.shape[0] - 1))
+        if hi - lo >= 2:
+            mid = (lo + hi) // 2
+            t0 = s[mid] - s[lo]
+            t1 = s[hi] - s[mid]
+            n0, n1 = np.linalg.norm(t0), np.linalg.norm(t1)
+            if n0 > 0 and n1 > 0:
+                cross = t0[0] * t1[1] - t0[1] * t1[0]
+                dot = float(np.dot(t0, t1))
+                curv = float(np.degrees(np.arctan2(cross, dot)))
+            else:
+                curv = None
         else:
             curv = None
+
         row = {"segment": k, "seg_angle_deg": round(ang, 4),
                "seg_curv_deg": None if curv is None else round(curv, 4),
-               "seg_length_px": round(length, 3)}
+               "seg_length_px": round(length, 3),
+               "curv_baseline_px": round(2 * half, 2)}
         if um_per_px:
             row["seg_length_um"] = round(length * float(um_per_px), 3)
         rows.append(row)

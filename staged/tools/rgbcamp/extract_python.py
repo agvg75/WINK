@@ -37,6 +37,66 @@ class ExtractError(Exception):
     """Refusals that name the consequence."""
 
 
+def identify_channels(folder, pattern="ch*"):
+    """Work out which chNN folder is which fluorophore, by looking.
+
+    DO NOT ASSUME THE ORDER. On this lab's acquisitions the mapping is
+    ch00=blue, ch01=green, ch02=red, ch03=DIC - but that is a fact about the
+    microscope's configuration on a given day, not about the file names, and
+    naming a channel wrongly silently attributes one fluorophore's signal to
+    another. Every downstream measure would still compute, and the calcium
+    trace would be the wrong indicator.
+
+    Each frame is written as an RGB image with only ONE plane populated, so the
+    fluorophore is readable directly. DIC is the one where all three planes are
+    identical - it is greyscale transmitted light, not a fluorophore, and does
+    not belong in a fluorescence panel.
+
+    THE PARITY CHECK WILL NOT CATCH A MISLABELLING. Anterior-posterior profiles
+    agreed at r = 0.987 between this extractor and the Fiji plugin while the
+    channels were shifted by one, because the profile is dominated by worm
+    thickness, which every channel shares. Geometry parity and channel identity
+    are separate claims and need separate evidence.
+    """
+    import tifffile
+    folder = Path(folder)
+    out = {"channels": {}, "dic": None, "unassigned": []}
+    for sub in sorted(folder.glob(pattern)):
+        if not sub.is_dir():
+            continue
+        files = sorted(sub.glob("*.tif")) or sorted(sub.glob("*.tiff"))
+        if not files:
+            continue
+        a = np.asarray(tifffile.imread(str(files[0])), dtype=float)
+        if a.ndim != 3 or a.shape[2] < 3:
+            out["unassigned"].append({"folder": sub.name,
+                                      "why": f"not an RGB image ({a.shape})"})
+            continue
+        planes = [a[..., k] for k in range(3)]
+        if all(np.allclose(planes[0], p) for p in planes[1:]):
+            out["dic"] = {"folder": sub.name, "n_files": len(files),
+                          "why": "all three planes identical - transmitted light"}
+            continue
+        means = [float(p.mean()) for p in planes]
+        live = int(np.argmax(means))
+        if means[live] <= 0:
+            out["unassigned"].append({"folder": sub.name, "why": "no signal"})
+            continue
+        name = ("red", "green", "blue")[live]
+        out["channels"][name] = {"folder": sub.name, "n_files": len(files),
+                                 "plane": live,
+                                 "plane_means": [round(m, 3) for m in means]}
+    out["mapping"] = {v["folder"]: k for k, v in out["channels"].items()}
+    if out["dic"]:
+        out["mapping"][out["dic"]["folder"]] = "DIC"
+    out["detected_not_assumed"] = (
+        "Read from the pixel data, not from the folder order. The order is a "
+        "fact about the microscope on the day, and a wrong guess attributes "
+        "one fluorophore's signal to another with nothing downstream to "
+        "notice.")
+    return out
+
+
 def load_session(path):
     """Read a saved tracker session and return its per-frame states."""
     import json
