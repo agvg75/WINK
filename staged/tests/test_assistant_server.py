@@ -153,6 +153,33 @@ if True:
     check("the API key is never read at import time",
           "ANTHROPIC_API_KEY" not in os.environ or True)
 
+    # --- the encoding trap -------------------------------------------------
+    # Notepad and PowerShell both write a byte-order mark on Windows. Read as
+    # plain utf-8, the file fails on its FIRST character with an error naming
+    # an encoding rather than the file, so every student is rejected and the
+    # message points somewhere else entirely. Found live during setup.
+    bom = tmp / "tokens_bom.json"
+    bom.write_text(json.dumps(tokens), encoding="utf-8-sig")
+    old = os.environ["WINK_TOKENS"]
+    os.environ["WINK_TOKENS"] = str(bom)
+    srv.TOKENS_PATH = str(bom)
+    check("a token file saved with a BOM still loads",
+          len(srv.load_tokens()) == 2, f"{len(srv.load_tokens())} tokens")
+    check("...and authentication still works through it",
+          srv.authenticate("tok-bob") is not None)
+
+    broken = tmp / "tokens_broken.json"
+    broken.write_text('{"a": {"user": "x"},}', encoding="utf-8")
+    srv.TOKENS_PATH = str(broken)
+    try:
+        srv.load_tokens()
+        check("malformed JSON is refused with the likely cause", False)
+    except RuntimeError as exc:
+        check("malformed JSON is refused with the likely cause", True)
+        check("...naming the trailing comma", "trailing comma" in str(exc))
+    os.environ["WINK_TOKENS"] = old
+    srv.TOKENS_PATH = old
+
 print()
 failed = [n for n, ok, _ in results if not ok]
 print(f"{len(results) - len(failed)} of {len(results)} checks passed")

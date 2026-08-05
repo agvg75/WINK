@@ -61,12 +61,24 @@ def _today():
 
 
 def load_tokens():
-    """token -> {user, soft_cap, hard_cap}. Kept OUT of the repository."""
+    """token -> {user, soft_cap, hard_cap}. Kept OUT of the repository.
+
+    Read as utf-8-SIG, not utf-8. Notepad and PowerShell both write a byte-order
+    mark on Windows, and plain utf-8 then fails on the very first character with
+    a JSON error that names an encoding rather than the file - so the endpoint
+    rejects every student and the message points at the wrong thing entirely.
+    utf-8-sig reads files with and without the mark.
+    """
     try:
-        with open(TOKENS_PATH, encoding="utf-8") as fh:
+        with open(TOKENS_PATH, encoding="utf-8-sig") as fh:
             return json.load(fh)
     except FileNotFoundError:
         return {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"{TOKENS_PATH} is not valid JSON: {exc}. Every request will be "
+            f"rejected until this is fixed. A trailing comma after the last "
+            f"entry is the usual cause.") from None
 
 
 def authenticate(supplied):
