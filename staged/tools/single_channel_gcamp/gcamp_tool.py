@@ -178,8 +178,9 @@ class App(CockpitApp):
                                     self._rescale_display())
                    ).grid(row=0, column=2, rowspan=2, padx=8)
         ttk.Button(dial, text="Find recordings in this folder...",
-                   command=self.find_episodes
-                   ).grid(row=0, column=3, rowspan=2, padx=4)
+                   command=self.find_episodes).grid(row=0, column=3, padx=4)
+        ttk.Button(dial, text="Choose frames by hand...",
+                   command=self.choose_frame_subset).grid(row=1, column=3, padx=4)
 
         ttk.Label(self.center, textvariable=self.status, wraplength=560,
                   justify="left").pack(anchor="w", padx=6, pady=(0, 2))
@@ -233,9 +234,11 @@ class App(CockpitApp):
                          f"worm was found. Choose ONE - measuring across a "
                          f"switch of illumination is not a calcium "
                          f"measurement.")).pack(fill="x")
+        body = _ttk.Frame(win)
+        body.pack(fill="both", expand=True)
         cols = ("frames", "count", "mean", "steady", "kind")
-        tree = _ttk.Treeview(win, columns=cols, show="headings", height=12)
-        for c, w in zip(cols, (150, 80, 90, 80, 220)):
+        tree = _ttk.Treeview(body, columns=cols, show="headings", height=12)
+        for c, w in zip(cols, (130, 70, 80, 65, 200)):
             tree.heading(c, text=c)
             tree.column(c, width=w, anchor="w")
         for i, e in enumerate(eps):
@@ -245,7 +248,48 @@ class App(CockpitApp):
                 f"{e['mean']:.0f}",
                 "yes" if e.get("stable") else "no",
                 e["kind"]))
-        tree.pack(fill="both", expand=True, padx=8, pady=4)
+        tree.pack(side="left", fill="both", expand=True, padx=(8, 4), pady=4)
+
+        # PREVIEW. The classifier labels episodes with question marks because it
+        # infers illumination from brightness alone - a take filmed at another
+        # gain could be misfiled. Asking someone to choose without looking is
+        # asking them to trust that guess; showing four frames from the
+        # selected episode makes it checkable in a second.
+        prev_fig = Figure(figsize=(4.6, 3.6), dpi=100)
+        prev_axes = prev_fig.subplots(2, 2).ravel()
+        for a in prev_axes:
+            a.set_axis_off()
+        prev_canvas = FigureCanvasTkAgg(prev_fig, master=body)
+        prev_canvas.get_tk_widget().pack(side="left", fill="both", expand=True,
+                                         padx=(4, 8), pady=4)
+
+        def preview(_evt=None):
+            sel = tree.selection()
+            if not sel:
+                return
+            e = eps[int(sel[0])]
+            a, b = e["frame_start"], e["frame_end"]
+            picks = np.linspace(a, b, 4).astype(int)
+            try:
+                mv = open_movie(self.v["source"].get())
+                imgs = [gray(mv.get_frame(int(i))) for i in picks]
+                mv.close()
+            except Exception as exc:
+                self.status.set(f"Preview failed: {exc}")
+                return
+            for ax, im, i in zip(prev_axes, imgs, picks):
+                ax.clear(); ax.set_axis_off()
+                lo, hi = self._display_limits(im)
+                ax.imshow(im, cmap="gray", vmin=lo, vmax=hi)
+                ax.set_title(f"frame {i}  mean {np.mean(im):.0f}", fontsize=7)
+            prev_fig.suptitle(f"{a}-{b}   {e['kind']}", fontsize=8)
+            prev_fig.tight_layout()
+            prev_canvas.draw()
+
+        tree.bind("<<TreeviewSelect>>", preview)
+        if eps:
+            tree.selection_set("0")
+            preview()
 
         def use():
             sel = tree.selection()
@@ -373,14 +417,59 @@ class App(CockpitApp):
 
     def _show_first_frame(self):
         try:
-            m = open_movie(self.v["source"].get()); im = gray(m.get_frame(0)); m.close()
+            m = open_movie(self.v["source"].get())
+            n = int(m.n_frames)
+            im = gray(m.get_frame(0))
+            m.close()
         except Exception as exc:
             self.status.set(f"Could not load frame: {exc}"); return
+        # A new source invalidates any previously chosen range - carrying one
+        # over would silently analyse frames of a different recording.
+        self.episode_range = None
+        self.frames = None
         self._last_display_image = im
-        self._last_display_title = "First frame"
+        self._last_display_title = f"First frame (of {n})"
         self.center_ax.clear(); self._imshow(self.center_ax, im)
-        self.center_ax.set_axis_off(); self.center_ax.set_title("First frame", fontsize=9)
+        self.center_ax.set_axis_off()
+        self.center_ax.set_title(self._last_display_title, fontsize=9)
         self.center_canvas.draw()
+        if n > 400:
+            self.status.set(
+                f"{n} frames. A folder often holds several recordings - use "
+                f"'Find recordings in this folder...' to pick one, or 'Choose "
+                f"frames...' to set a range by hand. Analysing across a change "
+                f"of illumination is not a calcium measurement.")
+
+    def choose_frame_subset(self):
+        """Pick a frame range by hand, at load time rather than after.
+
+        The frame chooser previously appeared only when a load was already too
+        large to fit in memory - so a user with a merely awkward recording had
+        no way to say "just this part" until something failed.
+        """
+        from tkinter import messagebox
+        try:
+            movie = open_movie(self.v["source"].get())
+        except Exception as exc:
+            messagebox.showerror("Could not open the recording", str(exc))
+            return
+        try:
+            from frame_range_selector import select_frame_ranges
+            ranges = select_frame_ranges(self, movie,
+                                         "Choose the frames to analyse")
+        except Exception as exc:
+            movie.close()
+            messagebox.showerror("Frame chooser unavailable", str(exc))
+            return
+        movie.close()
+        if not ranges:
+            return
+        a = min(r[0] for r in ranges)
+        b = max(r[1] for r in ranges)
+        self.episode_range = (int(a), int(b))
+        self.frames = None
+        self.status.set(f"Using frames {a}-{b} ({b - a + 1} frames). "
+                        f"Re-run the feasibility pass.")
 
     def choose(self):
         path = filedialog.askopenfilename(
