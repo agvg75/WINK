@@ -205,5 +205,62 @@ if HAVE_FLASK:
              "tokens_loaded": len(load_tokens())}), 200
 
 
+def lan_address():
+    """This machine's address on the lab network, for students to point at.
+
+    Found by asking the OS which interface it would use to reach the outside
+    world, rather than by reading the hostname - a lab PC usually has several
+    addresses (VPN, virtual adapters, loopback) and the hostname resolves to
+    whichever one Windows feels like, which is often not the one on the lab
+    network.
+    """
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))       # no packet is sent; this just routes
+        return s.getsockname()[0]
+    except OSError:                                       # pragma: no cover
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def main(port=5000):                                      # pragma: no cover
+    if not HAVE_FLASK:
+        raise SystemExit(
+            "Flask is not installed in this runtime. Run:\n"
+            "  %LOCALAPPDATA%\\LabTools\\.venv\\Scripts\\python.exe "
+            "-m pip install flask anthropic")
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise SystemExit(
+            "No ANTHROPIC_API_KEY. The endpoint would start and then fail on "
+            "every question, which is harder to diagnose than not starting.\n"
+            "Put the key in:  %LOCALAPPDATA%\\LabTools\\assistant_key.txt")
+    tokens = load_tokens()
+    if not tokens:
+        raise SystemExit(
+            f"No student tokens at {TOKENS_PATH}. Every request would be "
+            f"rejected. Copy tokens.example.json to tokens.json and edit it.")
+
+    ip = lan_address()
+    print("=" * 62)
+    print("  WINK assistant - running on this PC")
+    print("=" * 62)
+    print(f"  Students point WINK at:  http://{ip}:{port}")
+    print(f"  Check it works:          http://{ip}:{port}/health")
+    print(f"  Students with a token:   {len(tokens)}")
+    print(f"  Question ledger:         {LEDGER_PATH}")
+    print()
+    print("  Leave this window open. Closing it stops the assistant.")
+    print("  Only reachable from the campus network, by design.")
+    print("=" * 62)
+    # 0.0.0.0 so other machines on the lab network can reach it; on 127.0.0.1
+    # it would work on this PC only and look like a firewall problem.
+    app.run(host="0.0.0.0", port=port, debug=False)
+
+
 if __name__ == "__main__":                                # pragma: no cover
-    app.run(debug=False, port=5000)
+    import argparse
+    ap = argparse.ArgumentParser(description="WINK assistant endpoint")
+    ap.add_argument("--port", type=int, default=5000)
+    main(ap.parse_args().port)
