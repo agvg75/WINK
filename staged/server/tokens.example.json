@@ -1,0 +1,6 @@
+{
+  "_comment": "Copy to tokens.json ON THE SERVER and edit. Never commit tokens.json. Tokens are any hard-to-guess string; do not use names. Caps are per day and count only questions that reach the model - answers served from the ledger are free and uncapped.",
+  "wink-REPLACE-WITH-RANDOM-HEX-1": {"user": "student_one", "soft_cap": 40, "hard_cap": 60},
+  "wink-REPLACE-WITH-RANDOM-HEX-2": {"user": "student_two", "soft_cap": 40, "hard_cap": 60},
+  "wink-REPLACE-WITH-RANDOM-HEX-3": {"user": "andres", "soft_cap": 200, "hard_cap": 300}
+}

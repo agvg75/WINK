@@ -25,6 +25,14 @@ venv/
 .DS_Store
 Thumbs.db
 
+# SECRETS. tokens.json holds the student access tokens for the help endpoint,
+# and the ledger holds real student questions. Neither belongs in a public
+# repository, and a token committed once stays in the history after deletion.
+# tokens.example.json IS tracked - it is the template with no real values.
+staged/server/tokens.json
+staged/server/*.sqlite
+staged/server/wink_ledger*
+
 # Large non-runtime source assets and locally generated docs.
 staged/resources/*.tif
 staged/resources/*_print_source.*
