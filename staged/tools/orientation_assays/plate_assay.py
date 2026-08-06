@@ -19,6 +19,24 @@ to chemotaxis.
 WHAT STAYS PER-ASSAY IS STIMULUS GEOMETRY, and only that: a magnetic vector
 field, a chemical point source, a thermal linear gradient.
 
+NEXT ROUND - PRESENTATION, NOT ASSAY (Andres, 2026-08-05). The three
+geometries here are one presentation each, and that is the wrong axis. Any of
+these assays can be run several ways:
+
+  - RADIAL rather than linear, with the stimulus homogeneous at one end
+  - a POINT SOURCE
+  - for magnetotaxis specifically: a linear field in a Helmholtz-style cage
+    versus a single N42 magnet, which are a uniform field and a steep
+    near-field dipole respectively
+
+"The stimulus presentation changes the geometry dramatically." So geometry
+belongs to the PRESENTATION, not to the assay - thermotaxis-radial and
+chemotaxis-radial share a geometry that thermotaxis-linear does not. The
+current three classes are the presentations this lab runs most, not a
+taxonomy, and naming them after assays would be a mistake to bake in. When
+this is built, expect the config to name a presentation and the assay to
+supply only what the stimulus IS.
+
 MOVED VERBATIM. The bodies below are byte-identical to the magnetotaxis
 originals, and magnetotaxis.py imports them back so every existing caller
 keeps working. tests/test_plate_assay_pin.py holds the complete pre-move
@@ -382,6 +400,7 @@ def population_layer(
     assay_start_clock=None, per_worm_food_offsets_s=None,
     initial_state_window_s=30.0, pick_state=None, min_worms_per_regime=3,
     enhanced_slowing_s=ENHANCED_SLOWING_S, stimulus=None,
+    n_placed=None, n_tracked=None, plate_area_cm2=None,
 ):
     """Everything a plate-migration assay gets for free. One call per assay.
 
@@ -462,6 +481,17 @@ def population_layer(
     if stimulus is not None or getattr(geometry, "kind", None) == "point_source":
         out["stimulus"] = describe_stimulus(stimulus)
         out["warnings"].extend(out["stimulus"]["warnings"])
+
+    # n tracked is OBSERVED, never declared - counting the distinct worm ids
+    # in the data is the only way the declared and actual numbers can disagree,
+    # and that disagreement is the whole point.
+    observed = len({(str(r.get("plate_id")), str(r.get("worm_id")))
+                    for r in tracks})
+    out["population"] = population_size(
+        n_placed=n_placed,
+        n_tracked=observed if n_tracked is None else n_tracked,
+        plate_area_cm2=plate_area_cm2)
+    out["warnings"].extend(out["population"]["warnings"])
     return out
 
 
@@ -473,6 +503,67 @@ def population_layer(
 # animal give opposite signs, so an index recorded without concentration cannot
 # be compared with anything, including a repeat of itself.
 STIMULUS_FIELDS = ("compound", "concentration", "concentration_units")
+
+
+# Andres: "Another variable that matters: number of animals in assay."
+#
+# It matters twice over, and the second way is the dangerous one.
+#
+# FIRST, DENSITY IS A TREATMENT. Worms on a plate are not independent - they
+# leave tracks others follow, deplete what they walk through, and at high
+# density their pheromone environment changes what they do. Twenty animals and
+# two hundred on the same plate are two different experiments.
+#
+# SECOND, AND WORSE: n PLACED and n TRACKED are different numbers, and the gap
+# between them is not noise. Worms that crawled off the agar, died, burrowed,
+# or were never detected are missing from the index - and they are not missing
+# at random, because the ones that leave are disproportionately the ones that
+# were moving fastest and furthest. An index computed over the survivors alone
+# is a survivorship-biased estimate that looks completely normal.
+def population_size(n_placed=None, n_tracked=None, plate_area_cm2=None,
+                    min_recovery=0.8):
+    """Declared vs observed animals, and what the gap between them costs."""
+    out = {"n_placed": n_placed, "n_tracked": n_tracked, "warnings": []}
+    if n_placed is None:
+        out["warnings"].append(
+            "The number of animals placed on the plate was not recorded, so "
+            "there is no way to tell how many are missing from the results. "
+            "Worms that crawl off, burrow or die are not lost at random - "
+            "the ones that leave are disproportionately the fastest and "
+            "furthest travelling, so an index over the survivors is biased "
+            "in the direction of the effect being measured.")
+        return out
+    n_placed = int(n_placed)
+    if n_placed <= 0:
+        raise ValueError(
+            f"n_placed={n_placed} is not a count of animals. A zero or "
+            f"negative population would make every per-animal rate infinite "
+            f"or negative.")
+    if plate_area_cm2:
+        out["density_per_cm2"] = round(n_placed / float(plate_area_cm2), 3)
+    if n_tracked is None:
+        out["warnings"].append(
+            f"{n_placed} animals were placed but the number actually tracked "
+            f"was not recorded, so recovery cannot be checked.")
+        return out
+    n_tracked = int(n_tracked)
+    out["recovery"] = round(n_tracked / n_placed, 3)
+    out["n_missing"] = n_placed - n_tracked
+    if n_tracked > n_placed:
+        out["warnings"].append(
+            f"{n_tracked} animals were tracked but only {n_placed} were "
+            f"placed. Either the count is wrong or the tracker is splitting "
+            f"one animal into several, which inflates every per-animal "
+            f"statistic downstream.")
+    elif out["recovery"] < min_recovery:
+        out["warnings"].append(
+            f"Only {n_tracked} of {n_placed} animals were tracked "
+            f"({out['recovery']:.0%}). The {out['n_missing']} missing are not "
+            f"a random sample - animals that crawl off or burrow are "
+            f"disproportionately the fastest and furthest travelling, so the "
+            f"index over the remainder is biased toward the effect being "
+            f"measured. Find out where they went before trusting it.")
+    return out
 
 
 def describe_stimulus(stimulus):

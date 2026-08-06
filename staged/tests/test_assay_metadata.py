@@ -132,6 +132,54 @@ check("every assay carries the deprivation threshold",
           ow.configuration_template(a).get("state", {})
           for a in ("chemotaxis", "thermotaxis")))
 
+# --- 4. number of animals --------------------------------------------------
+# Andres: "Another variable that matters: number of animals in assay."
+check("an unrecorded population is reported",
+      pa.population_size()["warnings"],
+      "no way to tell how many are missing")
+check("...naming that the missing are not a random sample",
+      "not lost at random" in pa.population_size()["warnings"][0])
+check("full recovery raises nothing",
+      pa.population_size(n_placed=50, n_tracked=50)["warnings"] == [])
+check("...and reports the recovery fraction",
+      pa.population_size(n_placed=50, n_tracked=40)["recovery"] == 0.8)
+
+lost = pa.population_size(n_placed=50, n_tracked=30)
+check("poor recovery is flagged", bool(lost["warnings"]))
+check("...naming the direction of the bias",
+      "biased toward the effect being measured" in lost["warnings"][0],
+      "the ones that leave are the fastest and furthest travelling")
+check("...and counting the missing", lost["n_missing"] == 20)
+
+more = pa.population_size(n_placed=10, n_tracked=14)
+check("more tracked than placed is flagged as a tracker fault",
+      "splitting one animal into several" in more["warnings"][0],
+      "which inflates every per-animal statistic downstream")
+
+check("density is computed when the plate area is known",
+      pa.population_size(n_placed=100, n_tracked=100,
+                         plate_area_cm2=50.0)["density_per_cm2"] == 2.0)
+try:
+    pa.population_size(n_placed=0)
+    check("a zero population is refused", False)
+except ValueError as exc:
+    check("a zero population is refused", True)
+    check("...naming that per-animal rates would be infinite",
+          "infinite" in str(exc))
+
+# n tracked is OBSERVED, which is the only way the two can disagree
+lay_n = pa.population_layer(tracks=tracks, segments=segs, n_placed=10,
+                            time_since_food_removal_s=60)
+check("tracked animals are counted from the data, not declared",
+      lay_n["population"]["n_tracked"] == 1,
+      "the fixture has one worm; declaring 10 must not hide that")
+check("...and the discrepancy surfaces as a warning",
+      any("were tracked" in w for w in lay_n["warnings"]))
+
+for assay in ("chemotaxis", "thermotaxis", "magnetotaxis"):
+    check(f"{assay} asks how many animals were placed",
+          "n_placed" in ow.configuration_template(assay).get("state", {}))
+
 print()
 failed = [n for n, ok, _ in results if not ok]
 print(f"{len(results) - len(failed)} of {len(results)} checks passed")

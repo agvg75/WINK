@@ -81,6 +81,14 @@ def configuration_template(assay):
         "enhanced_slowing_threshold_s": 1800,
         "initial_state_window_s": 30,
         "pick_state": None,
+        # Andres: "Another variable that matters: number of animals in assay."
+        # Both numbers, because the gap between them is the finding: animals
+        # that crawl off or burrow are disproportionately the fastest and
+        # furthest travelling, so an index over the survivors is biased toward
+        # the effect being measured. n_tracked is observed from the data, and
+        # this declared value is what it gets checked against.
+        "n_placed": None,
+        "plate_area_cm2": None,
     }
     common = {
         "stimulus_orientations_deg": {"plate_1": 0, "plate_2": 90},
@@ -99,12 +107,14 @@ def configuration_template(assay):
                 "distance_uncertainty_mm": 0.25,
                 "earth_field_xyz_t": [0.000020, 0, -0.000045],
             },
+            # Spread the shared block FIRST, then magnetotaxis's own additions.
+            # Replacing it wholesale is what left this assay without n_placed
+            # while the other two had it - the same divergence the shared layer
+            # exists to prevent, reappearing one level up in the config.
             "state": {
+                **food_state_block,
                 "humidity_percent": 45, "worm_age": "adult day 1",
-                "genotype": "N2", "time_since_food_removal_s": 300,
-                "food_removal_clock": None, "assay_start_clock": None,
-                "per_worm_food_removal_offsets_s": {},
-                "initial_state_window_s": 30, "pick_state": None},
+                "genotype": "N2", "time_since_food_removal_s": 300},
             "magnetic_pulse": {
                 "applied": False, "magnitude_mt": None,
                 "duration_s": None, "time_relative_to_recording_s": None},
