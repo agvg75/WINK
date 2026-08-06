@@ -244,22 +244,83 @@ except ValueError as exc:
           "Earth cancelled, not a weak field")
 
 # --- oscillating fields ------------------------------------------------------
+# Andres: "Oscillations are usually 60 degrees around the mean (30 each way)."
+# The DIRECTION sweeps at constant strength - not a polarity reversal.
 osc = UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_mt=1.0,
                            oscillation_hz=1.0, **common)
-check("an oscillating field is zero at t=0 for a sine",
-      abs(osc.sample(0, 0, 0.0).magnitude) < 1e-12)
-check("...peaks a quarter cycle later",
-      abs(osc.sample(0, 0, 0.25).magnitude - 0.001) < 1e-9)
-check("...and reverses direction at three quarters",
-      osc.applied_at(0.25)[0] > 0 > osc.applied_at(0.75)[0],
-      "the direction reverses every half cycle")
+check("a direction sweep is the default oscillation",
+      osc.oscillation_mode == "direction" and
+      osc.oscillation_amplitude_deg == 30.0,
+      "60 degrees around the mean is what this lab runs")
+check("the field STRENGTH is constant while it sweeps",
+      abs(osc.sample(0, 0, 0.0).magnitude -
+          osc.sample(0, 0, 0.25).magnitude) < 1e-15,
+      "this is what makes it a sweep and not a reversal")
+check("at t=0 the field is on the mean direction",
+      abs(osc.applied_at(0.0)[1]) < 1e-12)
+check("...swinging 30 degrees one way a quarter cycle later",
+      abs(np.degrees(np.arctan2(osc.applied_at(0.25)[1],
+                                osc.applied_at(0.25)[0])) - 30.0) < 1e-6)
+check("...and 30 degrees the other way at three quarters",
+      abs(np.degrees(np.arctan2(osc.applied_at(0.75)[1],
+                                osc.applied_at(0.75)[0])) + 30.0) < 1e-6,
+      "60 degrees swept in total")
+check("the mean direction is NOT cancelled by a sweep",
+      osc.applied_at(0.25)[0] > 0 and osc.applied_at(0.75)[0] > 0,
+      "unlike a polarity reversal, which would flip the sign")
+
+att = osc.direction_attenuation()
+check("the resultant attenuation is computed, not just warned about",
+      abs(att["factor"] - 0.9326) < 0.001, f"J0(30 deg) = {att['factor']:.4f}")
+check("...reporting the total swept angle", att["swept_deg"] == 60.0)
+check("...and what ignoring it would cost",
+      "understated" in att["why"])
+check("a wider sweep attenuates more",
+      UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_mt=1.0,
+                           oscillation_hz=1.0, oscillation_amplitude_deg=60.0,
+                           **common).direction_attenuation()["factor"] <
+      att["factor"])
+check("a static field is not attenuated at all",
+      exp.direction_attenuation()["factor"] == 1.0)
+
 check("an oscillating field is flagged as time varying",
       osc.is_time_varying and osc.constant_direction is False)
-check("...warning that a pooled statistic measures against a moving reference",
-      "reference that" in
+check("...warning that the mean survives but the resultant shrinks",
+      "MEAN direction survives" in
       osc.sample(0, 0, 0.1).uncertainty["time_varying_warning"])
-check("...and carrying the frequency",
-      osc.sample(0, 0, 0.1).uncertainty["oscillation_hz"] == 1.0)
+check("...and carrying the frequency and the swept angle",
+      osc.sample(0, 0, 0.1).uncertainty["oscillation_hz"] == 1.0 and
+      osc.sample(0, 0, 0.1).uncertainty["swept_deg"] == 60.0)
+
+# polarity reversal is still available, and is a different stimulus
+rev = UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_mt=1.0,
+                           oscillation_hz=1.0, oscillation_mode="polarity",
+                           **common)
+check("a polarity reversal passes through zero strength",
+      abs(rev.sample(0, 0, 0.0).magnitude) < 1e-12,
+      "which a sweep never does")
+check("...and does reverse the vector",
+      rev.applied_at(0.25)[0] > 0 > rev.applied_at(0.75)[0])
+check("...warning that the reference cancels rather than shrinks",
+      "cancels" in rev.sample(0, 0, 0.1).uncertainty["time_varying_warning"])
+try:
+    UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_mt=1.0,
+                         oscillation_hz=1.0, oscillation_mode="wobble",
+                         **common)
+    check("an unknown oscillation mode is refused", False)
+except ValueError as exc:
+    check("an unknown oscillation mode is refused", True)
+    check("...naming that the two modes are different stimuli",
+          "preserves the mean direction and the other cancels" in str(exc))
+try:
+    UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_mt=1.0,
+                         oscillation_hz=1.0, oscillation_amplitude_deg=None,
+                         **common)
+    check("a sweep with no amplitude is refused", False)
+except ValueError as exc:
+    check("a sweep with no amplitude is refused", True)
+    check("...naming that the swept angle sets the attenuation",
+          "how much the measured resultant is attenuated" in str(exc))
 try:
     UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_mt=1.0,
                          oscillation_hz=0, **common)
@@ -307,7 +368,9 @@ for bad, phrase in (({"at_s": 10}, "not a rotation"),
 
 check("the description names the condition and modulation",
       "sham_current" in sham.describe() and
-      "oscillating 1.0 Hz" in osc.describe())
+      "sweeping 60 deg at 1.0 Hz" in osc.describe() and
+      "reversing at 1.0 Hz" in rev.describe(),
+      "a sweep and a reversal must not read the same in a results file")
 check("every condition documents what it means",
       all(len(v) > 40 for v in COIL_CONDITIONS.values()))
 

@@ -173,6 +173,8 @@ class UniformFieldProvider(StimulusFieldProvider):
     def __init__(self, *, direction_xyz=None, magnitude_t=None,
                  magnitude_mt=None, condition="field",
                  oscillation_hz=None, oscillation_phase_deg=0.0,
+                 oscillation_mode="direction",
+                 oscillation_amplitude_deg=30.0,
                  rotation_schedule=None,
                  earth_field_xyz_t=(0, 0, 0), earth_field_xyz_mt=None,
                  uniformity_tolerance_percent=None,
@@ -238,6 +240,32 @@ class UniformFieldProvider(StimulusFieldProvider):
                 "field, which is a different condition and should say so.")
         self.oscillation_phase_deg = float(oscillation_phase_deg)
 
+        # Andres: "Oscillations are usually 60 degrees around the mean (30
+        # each way)." So the DIRECTION sweeps and the magnitude is constant.
+        # That is a different stimulus from a polarity reversal, and getting
+        # it wrong matters: a swept direction keeps its mean, while a reversing
+        # one time-averages to nothing. Both are supported, "direction" is the
+        # default because it is what this lab runs.
+        if oscillation_mode not in {"direction", "polarity"}:
+            raise ValueError(
+                f"oscillation_mode must be 'direction' (the field sweeps "
+                f"through an angle at constant strength) or 'polarity' (the "
+                f"vector reverses through zero), not {oscillation_mode!r}. "
+                f"They are different stimuli - one preserves the mean "
+                f"direction and the other cancels it.")
+        self.oscillation_mode = oscillation_mode
+        self.oscillation_amplitude_deg = (
+            None if oscillation_amplitude_deg is None
+            else float(oscillation_amplitude_deg))
+        if (self.oscillation_hz and self.oscillation_mode == "direction"
+                and not self.oscillation_amplitude_deg):
+            raise ValueError(
+                "A direction oscillation needs its amplitude in degrees "
+                "either side of the mean (30 gives the 60-degree sweep this "
+                "lab usually runs). Without it the swept angle is unknown, "
+                "and the swept angle is what sets how much the measured "
+                "resultant is attenuated.")
+
         self.rotation_schedule = self._check_schedule(rotation_schedule)
 
     @staticmethod
@@ -286,6 +314,14 @@ class UniformFieldProvider(StimulusFieldProvider):
             return np.zeros(3, dtype=float)
         vec = np.asarray(self.direction, dtype=float) * self.magnitude_t
         deg = self.rotation_at(time_s)
+        if self.oscillation_hz and self.oscillation_mode == "direction":
+            # The field SWEEPS: constant strength, direction swinging either
+            # side of the mean. Folded in with the scheduled rotation because
+            # both are rotations in the plate plane and applying them
+            # separately would compose them in the wrong order.
+            phase = np.radians(self.oscillation_phase_deg)
+            deg += self.oscillation_amplitude_deg * float(np.sin(
+                2 * np.pi * self.oscillation_hz * float(time_s) + phase))
         if deg:
             rad = np.radians(deg)
             c, s = np.cos(rad), np.sin(rad)
@@ -293,11 +329,49 @@ class UniformFieldProvider(StimulusFieldProvider):
             # because the cage turns the field within the plate, not about it.
             vec = np.asarray([vec[0] * c - vec[1] * s,
                               vec[0] * s + vec[1] * c, vec[2]])
-        if self.oscillation_hz:
+        if self.oscillation_hz and self.oscillation_mode == "polarity":
             phase = np.radians(self.oscillation_phase_deg)
             vec = vec * float(np.sin(2 * np.pi * self.oscillation_hz *
                                      float(time_s) + phase))
         return vec
+
+    def direction_attenuation(self):
+        """How much a swept field shrinks a measured resultant.
+
+        A sinusoidally swept direction is phase modulation, so the time-average
+        of the unit field vector is J0(amplitude in radians) - the same Bessel
+        result as in FM. The mean direction survives; what shrinks is the
+        concentration.
+
+        This is worth having as a number rather than a warning: at the usual
+        30 degrees either way the attenuation is about 0.93, so an animal
+        tracking the field perfectly cannot score a resultant above that, and
+        comparing an oscillating run against a static one without accounting
+        for it understates the oscillating condition by around 7%.
+
+        J0 by quadrature rather than scipy, to avoid adding a dependency for
+        one number.
+        """
+        if not self.oscillation_hz or self.oscillation_mode != "direction":
+            return {"factor": 1.0, "swept_deg": 0.0,
+                    "why": "The field direction is constant, so nothing is "
+                           "averaged away."}
+        a = np.radians(self.oscillation_amplitude_deg)
+        theta = np.linspace(0.0, np.pi, 2001)
+        j0 = float(np.trapezoid(np.cos(a * np.sin(theta)), theta) / np.pi)
+        return {
+            "factor": round(j0, 6),
+            "amplitude_deg": self.oscillation_amplitude_deg,
+            "swept_deg": 2 * self.oscillation_amplitude_deg,
+            "why": (f"The field sweeps {2 * self.oscillation_amplitude_deg:.0f} "
+                    f"degrees. An animal tracking it perfectly, sampled across "
+                    f"the cycle, yields a resultant of {j0:.3f} rather than 1 - "
+                    f"the mean direction is preserved but the concentration is "
+                    f"attenuated. Compare oscillating runs against static ones "
+                    f"only after allowing for this, or the oscillating "
+                    f"condition is understated by "
+                    f"{(1 - j0) * 100:.0f}%."),
+        }
 
     def total_field(self, time_s=0.0):
         applied = self.applied_at(time_s)
@@ -333,12 +407,28 @@ class UniformFieldProvider(StimulusFieldProvider):
         }
         if self.oscillation_hz:
             unc["oscillation_hz"] = self.oscillation_hz
-            unc["time_varying_warning"] = (
-                f"The field oscillates at {self.oscillation_hz} Hz, so its "
-                f"direction reverses every half cycle and its time-average is "
-                f"zero. Any statistic pooling heading relative to the field "
-                f"over the whole track is measuring against a reference that "
-                f"moved; align to phase or analyse per half-cycle.")
+            unc["oscillation_mode"] = self.oscillation_mode
+            if self.oscillation_mode == "direction":
+                att = self.direction_attenuation()
+                unc["oscillation_amplitude_deg"] = self.oscillation_amplitude_deg
+                unc["swept_deg"] = att["swept_deg"]
+                unc["resultant_attenuation"] = att["factor"]
+                unc["time_varying_warning"] = (
+                    f"The field sweeps {att['swept_deg']:.0f} degrees at "
+                    f"{self.oscillation_hz} Hz. The MEAN direction survives, "
+                    f"so a pooled resultant is not meaningless - but it is "
+                    f"attenuated to {att['factor']:.3f} of what the same "
+                    f"animal would score in a static field. Compare against "
+                    f"static runs only after allowing for that, and compute "
+                    f"heading relative to the field at each timepoint rather "
+                    f"than to the mean.")
+            else:
+                unc["time_varying_warning"] = (
+                    f"The field REVERSES polarity at {self.oscillation_hz} Hz, "
+                    f"so its time-average is zero. Any statistic pooling "
+                    f"heading relative to the field over the whole track is "
+                    f"measuring against a reference that cancels; align to "
+                    f"phase or analyse per half-cycle.")
         if self.rotation_schedule:
             unc["rotation_schedule"] = list(self.rotation_schedule)
             unc["rotation_applied_deg"] = self.rotation_at(time_s)
@@ -357,7 +447,12 @@ class UniformFieldProvider(StimulusFieldProvider):
         if self.magnitude_t and self.condition == "field":
             bits.append(f"{self.magnitude_t * 1000:.4g} mT")
         if self.oscillation_hz:
-            bits.append(f"oscillating {self.oscillation_hz} Hz")
+            if self.oscillation_mode == "direction":
+                bits.append(f"sweeping "
+                            f"{2 * self.oscillation_amplitude_deg:.0f} deg at "
+                            f"{self.oscillation_hz} Hz")
+            else:
+                bits.append(f"reversing at {self.oscillation_hz} Hz")
         if self.rotation_schedule:
             bits.append(f"{len(self.rotation_schedule)} rotation(s)")
         return ", ".join(bits)
