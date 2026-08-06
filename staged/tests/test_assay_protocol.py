@@ -44,6 +44,10 @@ GOOD = {
     "bacterial_strain": "OP50",
     "plate_age_days": 1,
     "time_of_day": "10:15",
+    "immobilisation_agent": "0.1 M sodium azide",
+    "immobilisation_geometry": "painted circumference",
+    "culture_density": "sparse, single plate per assay",
+    "heading_interval_s": 5.0,
 }
 
 clean = apr.summarise(GOOD)
@@ -159,6 +163,32 @@ check("findings are ordered worst first",
 check("every finding names its source",
       all("Bainbridge" in f["source"] for f in mixed),
       "a checklist a student does not believe is one they click through")
+
+# --- the trap geometry IS the endpoint measurement --------------------------
+im = has(apr.check({k: v for k, v in GOOD.items()
+                    if not k.startswith("immobilisation")}), "immobilisation")
+check("an unrecorded immobilisation setup is flagged", im is not None)
+check("...naming that a rim and spots ask different questions",
+      "different indices" in im["message"] and "six radial spots" in im["message"])
+half_im = has(apr.check({**GOOD, "immobilisation_geometry": None}),
+              "immobilisation")
+check("an agent without a placement is still incomplete",
+      half_im["state"] == "geometry_unrecorded")
+check("...naming that geometry matters more than concentration",
+      "concentration matters far less than the geometry" in half_im["message"])
+check("a placement without an agent is the lesser gap",
+      has(apr.check({**GOOD, "immobilisation_agent": None}),
+          "immobilisation")["severity"] == "unquantified",
+      "it changes how far past the line an animal travels, not what is scored")
+
+# --- crowding during development is not crowding on the assay ---------------
+cd = has(apr.check({**GOOD, "culture_density": None}), "culture_density")
+check("culture-plate crowding is asked for separately",
+      cd is not None and cd["severity"] == "reverses_result")
+check("...naming that it is distinct from assay-plate density",
+      "not the assay plate" in cd["message"])
+check("...and that a well-spaced assay does not undo it",
+      "still a crowded-animal experiment" in cd["message"])
 
 print()
 failed = [n for n, ok, _ in results if not ok]

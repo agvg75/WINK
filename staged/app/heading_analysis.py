@@ -71,6 +71,80 @@ def _field_angle(field, time_s):
     raise HeadingError(f"Cannot get a field direction from {type(field)}.")
 
 
+def sampling_record(fps, heading_interval_s=None, *, worm_speed_mm_s=0.10,
+                    localisation_sd_mm=0.05, undulation_hz=0.4):
+    """The interval headings are computed over, which is NOT the frame rate.
+
+    Bainbridge 2019 filmed at 1 fps and sampled every fifth frame - 0.2 Hz -
+    for heading analysis. Two different numbers, and only one of them is
+    usually recorded.
+
+    IT SETS WHICH TURNS EXIST. Too short and the animal has barely moved, so
+    the heading is dominated by where the centroid happened to sit; too long
+    and real turns are averaged away inside the interval. Both failures look
+    like a poorly oriented animal rather than a poorly chosen number.
+
+    THE SHORT END HAS A HARD FLOOR that can be computed rather than guessed:
+    the animal must travel further between samples than the position is
+    uncertain. At 0.10 mm/s with 0.05 mm localisation, a 1 s interval moves
+    the animal 0.10 mm against 0.07 mm of noise on the difference - a
+    signal-to-noise of about 1.4, which is not a heading, it is a coin flip
+    with an angle attached.
+
+    THE LONG END IS SET BY THE BODY WAVE. Sampling slower than the undulation
+    aliases it, and a 0.4 Hz crawl aliases above about 1.25 s. Measured on a
+    real 1 fps recording: turning angle rose toward 90 degrees - pure
+    randomness - as the interval lengthened, which is the signature of a
+    sampling problem rather than a turning one.
+    """
+    if not fps:
+        raise HeadingError(
+            "A frame rate is required before a heading interval means "
+            "anything - 'every fifth frame' is a different duration at 1 fps "
+            "and at 30 fps.")
+    fps = float(fps)
+    interval = float(heading_interval_s) if heading_interval_s else 1.0 / fps
+    out = {"fps": fps, "heading_interval_s": interval,
+           "heading_rate_hz": 1.0 / interval,
+           "frames_per_heading": interval * fps,
+           "declared": heading_interval_s is not None,
+           "warnings": []}
+    if heading_interval_s is None:
+        out["warnings"].append(
+            "No heading interval was declared, so it defaults to the frame "
+            "interval. That is a choice, not an absence of one, and it is "
+            "usually the wrong one - the published protocol for this assay "
+            "samples every fifth frame, not every frame.")
+
+    travel = float(worm_speed_mm_s) * interval
+    noise = float(localisation_sd_mm) * np.sqrt(2)
+    out["travel_per_sample_mm"] = round(travel, 4)
+    out["displacement_snr"] = round(travel / noise, 2) if noise else None
+    if out["displacement_snr"] is not None and out["displacement_snr"] < 3:
+        out["warnings"].append(
+            f"At {interval:.2f} s an animal moving {worm_speed_mm_s} mm/s "
+            f"travels {travel:.3f} mm, against {noise:.3f} mm of localisation "
+            f"noise - a signal-to-noise of {out['displacement_snr']:.1f}. "
+            f"Headings below about 3 are a coin flip with an angle attached, "
+            f"and they read as an animal that turns at random.")
+
+    nyquist = 1.0 / (2.0 * float(undulation_hz))
+    out["undulation_nyquist_s"] = round(nyquist, 3)
+    if interval > nyquist:
+        out["warnings"].append(
+            f"Sampling every {interval:.2f} s is slower than the "
+            f"{nyquist:.2f} s Nyquist limit for a {undulation_hz} Hz body "
+            f"wave, so the undulation aliases into apparent random "
+            f"reorientation. Measured on a real recording: turning angle rose "
+            f"toward 90 degrees as the interval lengthened.")
+    if not out["warnings"]:
+        out["why"] = (
+            f"{interval:.2f} s gives {out['displacement_snr']:.1f}x more "
+            f"travel than localisation noise and stays inside the "
+            f"{nyquist:.2f} s undulation limit.")
+    return out
+
+
 def track_directional_vectors(rows, field, n_segments=SEGMENTS_PER_TRACK,
                               t0=None):
     """One heading per 5% of a track, each relative to the field at its start.

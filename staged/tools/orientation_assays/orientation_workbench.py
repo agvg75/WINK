@@ -136,6 +136,20 @@ def configuration_template(assay):
             "bacterial_strain": None,
             "plate_age_days": None,
             "time_of_day": None,
+            # The trap geometry IS the endpoint measurement: a painted rim
+            # scores "reached the edge", six radial spots score "chose this
+            # direction", and the same animals give different indices.
+            "immobilisation_agent": None,      # e.g. "0.1 M sodium azide"
+            "immobilisation_geometry": None,   # e.g. "painted circumference"
+            # Crowding during DEVELOPMENT, separate from density on the assay
+            # plate - a well-spaced assay of crowded-reared animals is still a
+            # crowded-animal experiment.
+            "culture_density": None,
+            # Headings are computed over this, NOT over the frame interval.
+            # The published protocol films at 1 fps and samples every fifth
+            # frame; recording only fps loses the number that decides which
+            # turns exist.
+            "heading_interval_s": None,
         },
     }
     if assay == "magnetotaxis":

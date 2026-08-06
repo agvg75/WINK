@@ -35,6 +35,8 @@ a field is added - it is what the field is for:
   stimulus_fields.py    field_geometry_layout, sham_and_zero_field_controls
   plate_assay.py        time_off_food_before_assay, crowding (assay side)
   censoring.py          field_of_view_censoring
+  heading_analysis.py   heading_sample_interval (sampling_record)
+  assay_protocol.py     immobilisation_agent, crowding (culture side)
 
 CAPTURED MEANS ASKED FOR, NOT ANSWERED. Every one of these defaults to None
 meaning unrecorded, and an unrecorded control is reported as such rather than
@@ -183,7 +185,7 @@ PARAMETERS = [
     {
         "name": "crowding",
         "group": "animal_state",
-        "captured": "partial",
+        "captured": "yes",
         "severity": "reverses_result",
         "source": "bainbridge2019",
         "finding": "Crowding is listed among the factors that sway preference.",
@@ -380,7 +382,7 @@ PARAMETERS = [
     {
         "name": "heading_sample_interval",
         "group": "analysis",
-        "captured": "partial",
+        "captured": "yes",
         "severity": "changes_result",
         "source": "bainbridge2019",
         "finding": ("Filmed at 1 fps for 100 min but SAMPLED at 0.2 Hz - every "
@@ -405,7 +407,7 @@ PARAMETERS = [
     {
         "name": "immobilisation_agent",
         "group": "preparation",
-        "captured": "no",
+        "captured": "yes",
         "severity": "changes_result",
         "source": "bainbridge2019",
         "finding": ("Sodium azide, 0.1 M painted around the circumference in "

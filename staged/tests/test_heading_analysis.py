@@ -238,6 +238,48 @@ check("a segment with no displacement contributes no heading",
       ha.track_directional_vectors(still, 0.0) == [],
       "recording it as zero degrees would vote for the field direction")
 
+# --- the heading interval is not the frame interval -------------------------
+# The published protocol films at 1 fps and samples every FIFTH frame. Two
+# numbers; only one of them is usually recorded.
+und = ha.sampling_record(fps=1.0, heading_interval_s=None)
+check("an undeclared heading interval falls back to the frame interval",
+      und["heading_interval_s"] == 1.0 and und["declared"] is False)
+check("...and says that is a choice, not the absence of one",
+      any("a choice, not an absence" in w for w in und["warnings"]))
+
+paper = ha.sampling_record(fps=1.0, heading_interval_s=5.0)
+check("the published 0.2 Hz sampling is expressible",
+      paper["heading_rate_hz"] == 0.2 and paper["frames_per_heading"] == 5.0)
+
+fast = ha.sampling_record(fps=30.0, heading_interval_s=1 / 30)
+check("too short an interval is flagged on signal-to-noise",
+      any("coin flip with an angle attached" in w for w in fast["warnings"]),
+      "the animal has barely moved between samples")
+check("...with the SNR computed rather than asserted",
+      fast["displacement_snr"] < 3, f"SNR {fast['displacement_snr']}")
+
+slow = ha.sampling_record(fps=1.0, heading_interval_s=10.0)
+check("too long an interval is flagged against the body wave",
+      any("Nyquist" in w for w in slow["warnings"]))
+check("...naming the aliasing seen on real data",
+      any("turning angle rose toward 90 degrees" in w for w in slow["warnings"]))
+check("the Nyquist limit is computed from the undulation frequency",
+      abs(slow["undulation_nyquist_s"] - 1.25) < 1e-9, "0.4 Hz crawl")
+
+ok_i = ha.sampling_record(fps=10.0, heading_interval_s=1.0,
+                          worm_speed_mm_s=0.15, localisation_sd_mm=0.01,
+                          undulation_hz=0.4)
+check("a well-chosen interval raises nothing and says why",
+      ok_i["warnings"] == [] and "stays inside" in ok_i["why"],
+      str(ok_i["warnings"]))
+try:
+    ha.sampling_record(fps=None, heading_interval_s=5.0)
+    check("an interval without a frame rate is refused", False)
+except ha.HeadingError as exc:
+    check("an interval without a frame rate is refused", True)
+    check("...naming that 'every fifth frame' is not a duration",
+          "different duration at 1 fps" in str(exc))
+
 print()
 failed = [n for n, ok, _ in results if not ok]
 print(f"{len(results) - len(failed)} of {len(results)} checks passed")

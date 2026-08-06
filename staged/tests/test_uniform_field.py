@@ -177,6 +177,9 @@ FULL_PROTOCOL = {
     "faraday_shielded": True, "thermal_gradient_c": 0.1,
     "illumination_gradient_checked": True, "food_on_assay_surface": False,
     "bacterial_strain": "OP50", "plate_age_days": 1, "time_of_day": "10:15",
+    "immobilisation_agent": "0.1 M sodium azide",
+    "immobilisation_geometry": "painted circumference",
+    "culture_density": "sparse", "heading_interval_s": 5.0,
 }
 signed_lay = pa.population_layer(
     tracks=tracks, segments=segs, assay="magnetotaxis", n_placed=1,

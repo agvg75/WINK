@@ -248,6 +248,47 @@ def check(protocol, *, assay="magnetotaxis"):
             "Bacterial strain was not recorded. The two labs in the source "
             "used OP50 and HB101 respectively while running 'the same' "
             "assay."))
+    # The trap geometry IS the endpoint measurement. Bainbridge 2019 used
+    # 0.1 M azide painted around the whole circumference in one assay and 1 M
+    # in six radial droplets in another - those are different measurements of
+    # different things, and an index from one cannot be compared with an index
+    # from the other.
+    agent = p.get("immobilisation_agent")
+    geom = p.get("immobilisation_geometry")
+    if agent is None and geom is None:
+        out.append(_flag(
+            "immobilisation", "unrecorded", "changes_result",
+            "Neither the immobilisation agent nor where it was placed was "
+            "recorded. The trap geometry IS the endpoint measurement - a "
+            "painted rim scores 'reached the edge' while six radial spots "
+            "score 'chose this direction', and the same animals give "
+            "different indices. The source used 0.1 M azide on the "
+            "circumference in one assay and 1 M in six droplets in another."))
+    elif geom is None:
+        out.append(_flag(
+            "immobilisation", "geometry_unrecorded", "changes_result",
+            f"Agent recorded as {agent!r} but not where it was placed. The "
+            f"concentration matters far less than the geometry: a rim and a "
+            f"set of spots ask different questions of the animal."))
+    elif agent is None:
+        out.append(_flag(
+            "immobilisation", "agent_unrecorded", "unquantified",
+            f"Placement recorded as {geom!r} but not what was used. Azide "
+            f"concentration affects how quickly an arriving animal stops, "
+            f"which sets how far past the line it travels first."))
+
+    # Crowding on the CULTURE plate during development, which is separate from
+    # density on the assay plate - plate_assay records the latter.
+    if p.get("culture_density") is None:
+        out.append(_flag(
+            "culture_density", "unrecorded", "reverses_result",
+            "Crowding during development was not recorded. The source lists "
+            "crowding among the factors that can sway a population from "
+            "positive to negative magnetotaxis. This is the CULTURE plate, "
+            "not the assay plate - n_placed and density on the assay are "
+            "recorded separately, and a well-spaced assay run with animals "
+            "reared crowded is still a crowded-animal experiment."))
+
     if p.get("plate_age_days") is None:
         out.append(_flag(
             "plate_age_days", "unrecorded", "unquantified",
