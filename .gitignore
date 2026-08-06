@@ -33,6 +33,10 @@ staged/server/tokens.json
 staged/server/*.sqlite
 staged/server/wink_ledger*
 
+# Local Claude Code permissions. Machine-specific and not part of the app;
+# settings.json (shared, if one is ever added) is NOT ignored.
+staged/.claude/settings.local.json
+
 # Large non-runtime source assets and locally generated docs.
 staged/resources/*.tif
 staged/resources/*_print_source.*
