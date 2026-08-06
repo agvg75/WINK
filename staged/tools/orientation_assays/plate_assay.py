@@ -326,6 +326,75 @@ def build_segment_covariates(
             output.append(enriched)
     return output, events
 
+def population_layer(
+    *, tracks, segments, geometry=None, departure_rows=(),
+    time_since_food_removal_s=None, food_removal_clock=None,
+    assay_start_clock=None, per_worm_food_offsets_s=None,
+    initial_state_window_s=30.0, pick_state=None, min_worms_per_regime=3,
+):
+    """Everything a plate-migration assay gets for free. One call per assay.
+
+    This is the point of the whole exercise: chemotaxis and thermotaxis each
+    call this once and receive the time-off-food clock, the movement state at
+    plate opening, per-segment covariates and the toward/away split - all of
+    which existed only inside magnetotaxis. Wiring the four functions into
+    each assay separately would have rebuilt the duplication this removes.
+
+    NOTHING HERE IS SILENTLY OPTIONAL. A missing food clock does not simply
+    omit a column; it records that the column is missing and what that costs,
+    because "time_off_op50_s: null" in a results file is indistinguishable
+    from a worm that was never off food.
+    """
+    out = {"geometry": geometry.describe() if geometry else None,
+           "geometry_kind": getattr(geometry, "kind", None),
+           "warnings": []}
+
+    food_offset_s = resolve_time_off_op50_offset(
+        elapsed_s=time_since_food_removal_s,
+        food_removal_clock=food_removal_clock,
+        assay_start_clock=assay_start_clock)
+    out["time_off_op50_at_start_s"] = food_offset_s
+    if food_offset_s is None:
+        out["warnings"].append(
+            "No time off OP50 was given, so every covariate row carries a "
+            "null food clock. Worms change behaviour steadily after removal "
+            "from food, so plates run at different delays are not comparable "
+            "and the difference will look like a treatment effect.")
+
+    out["initial_states"] = {
+        f"{k[0]}|{k[1]}": v for k, v in sorted(
+            _initial_states(tracks, opening_s=initial_state_window_s).items())}
+
+    rows, events = build_segment_covariates(
+        tracks, segments, list(departure_rows), food_offset_s,
+        per_worm_food_offsets_s=per_worm_food_offsets_s,
+        initial_state_window_s=initial_state_window_s,
+        pick_state=pick_state)
+    out["covariate_rows"] = rows
+    out["covariate_events"] = events
+
+    if geometry is None:
+        out["regimes"] = None
+        out["warnings"].append(
+            "No stimulus geometry was supplied, so worms were not split into "
+            "toward and away. The covariates above are still valid; only the "
+            "directional comparison is missing.")
+    else:
+        out["regimes"] = regime_comparison(
+            segments, geometry=geometry,
+            min_worms_per_regime=min_worms_per_regime)
+
+    # A gradient whose preferred temperature is off the plate still produces a
+    # perfectly good-looking index, which is exactly why it is checked here
+    # rather than left for someone to notice.
+    if hasattr(geometry, "within_range"):
+        rng = geometry.within_range()
+        out["stimulus_range_check"] = rng
+        if not rng["within"]:
+            out["warnings"].append(rng["why"])
+    return out
+
+
 def regime_comparison(segment_rows, source_xy_mm=None, min_worms_per_regime=3,
                       rotation_tolerance_deg=30.0,
                       concentration_tolerance=0.2, geometry=None):
