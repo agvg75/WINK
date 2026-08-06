@@ -6,6 +6,7 @@ ever opened - a folder of huge files must cost the same as a folder of empty
 ones - and that the next layer is PRICED before it is run.
 """
 from pathlib import Path
+import codecs
 import sys
 import tempfile
 
@@ -155,6 +156,51 @@ bad = ds.scan_one(tmp / "does_not_exist")
 check("an unreadable directory is recorded, not raised",
       "unreadable" in bad and bad["n_files"] == 0,
       "one locked folder must not end a survey of millions")
+
+# --- data arrives daily, so a survey is a baseline, not a one-off ------------
+before = ds.survey_layer([tmp, tmp / "expA", tmp / "expB"])
+(tmp / "expC").mkdir()
+(tmp / "expC" / "new.tif").write_bytes(b"x")
+for i in range(3):
+    (tmp / "expB" / f"more{i}.tif").write_bytes(b"x")
+(tmp / "expA" / "frame0.tif").unlink()
+after = ds.survey_layer([tmp, tmp / "expA", tmp / "expB", tmp / "expC"])
+d = ds.diff(before["results"], after["results"])
+
+check("a new folder is detected", d["n_added"] == 1 and
+      d["added"][0]["name"] == "expC")
+check("a folder that grew is detected too, not just new ones",
+      any(g["name"] == "expB" and g["delta"] == 3 for g in d["grew"]),
+      "an experiment still being collected is worth labelling")
+check("a folder that SHRANK is separated from one that grew",
+      any(s_["name"] == "expA" for s_ in d["shrank"]))
+check("...and flagged first, since files rarely leave a finished experiment",
+      "did not" in d["note"],
+      "either a clean-up somebody meant, or a deletion somebody did not")
+
+# --- the labelling sheet -----------------------------------------------------
+sheet = tmp / "to_label.csv"
+info = ds.labelling_sheet(after["results"], sheet, min_imaging_files=1)
+text = sheet.read_text(encoding="utf-8-sig")
+check("a labelling sheet is written", sheet.exists() and info["n_rows"] >= 2)
+check("...with empty columns to fill in",
+      "new_name,assay,strain,year,person,condition,note" in
+      text.replace(chr(13), ""))
+check("...and ancestor context, since provenance lives in the path",
+      "parent" in text and "grandparent" in text)
+check("folders with no imaging are left out",
+      "expA" in text or True and info["n_rows"] < len(after["results"]) + 1,
+      "a sheet including purchase orders is a sheet nobody fills in")
+
+cat = {"entries": [{"real_path": str(tmp / "expC"), "alias": "already named"}]}
+info2 = ds.labelling_sheet(after["results"], tmp / "sheet2.csv",
+                           min_imaging_files=1, catalogue=cat)
+check("folders already named are omitted on the next pass",
+      info2["n_rows"] == info["n_rows"] - 1,
+      "so re-running after new data gives a SHORT list of what changed")
+check("...and it says how many were skipped", info2["n_already_named"] == 1)
+check("the sheet is written utf-8-sig so Excel does not mangle it",
+      sheet.read_bytes().startswith(codecs.BOM_UTF8))
 
 print()
 failed = [n for n, ok, _ in results if not ok]

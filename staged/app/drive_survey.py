@@ -229,6 +229,118 @@ def load(path):
             f"reached.")
 
 
+def diff(old_results, new_results):
+    """What appeared, vanished or grew since the last survey.
+
+    Data arrives daily, so a survey is not a one-off - it is a baseline. This
+    compares two by path and reports the three things that matter: folders
+    that are new and need labelling, folders that have gone, and folders whose
+    contents changed.
+
+    GROWTH IS REPORTED, NOT JUST APPEARANCE. A folder that gained 400 files
+    since last week is an experiment that was still being collected, and it
+    may now be worth labelling even though it is not new. Only counting new
+    folders would miss it.
+    """
+    old = {r["path"].lower(): r for r in old_results if not r.get("unreadable")}
+    new = {r["path"].lower(): r for r in new_results if not r.get("unreadable")}
+
+    added = [new[k] for k in new.keys() - old.keys()]
+    removed = [old[k] for k in old.keys() - new.keys()]
+    grew, shrank = [], []
+    for k in old.keys() & new.keys():
+        before, after = old[k].get("n_files", 0), new[k].get("n_files", 0)
+        if after > before:
+            grew.append({**new[k], "was": before, "now": after,
+                         "delta": after - before})
+        elif after < before:
+            shrank.append({**new[k], "was": before, "now": after,
+                           "delta": after - before})
+    return {
+        "n_added": len(added), "n_removed": len(removed),
+        "n_grew": len(grew), "n_shrank": len(shrank),
+        "added": sorted(added, key=lambda r: -r.get("n_files", 0)),
+        "removed": removed,
+        "grew": sorted(grew, key=lambda r: -r["delta"]),
+        "shrank": shrank,
+        "note": (
+            "Folders that SHRANK are worth a look before anything else - files "
+            "do not usually leave a finished experiment, so this is either a "
+            "clean-up somebody meant, or a deletion somebody did not."),
+    }
+
+
+def labelling_sheet(results, out_csv, *, min_imaging_files=1, catalogue=None,
+                    fields=("new_name", "assay", "strain", "year", "person",
+                            "condition", "note")):
+    """Write a sheet with only the folders worth labelling, and blanks to fill.
+
+    ONLY WHAT NEEDS ATTENTION. A sheet of 1233 rows including purchase orders
+    is a sheet nobody fills in. Folders already named in `catalogue` are left
+    out, so re-running after new data arrives produces a SHORT list of exactly
+    what changed.
+
+    ANCESTOR CONTEXT IS INCLUDED because Andres pointed out that provenance is
+    often inferable from the containing folders - the person, the project and
+    often the date live in the path rather than in the folder's own name.
+    """
+    known = set()
+    if catalogue:
+        known = {e.get("real_path", "").lower()
+                 for e in catalogue.get("entries", [])}
+
+    rows = []
+    for r in results:
+        if r.get("unreadable"):
+            continue
+        imaging = sum(r.get("families", {}).get(k, 0)
+                      for k in ("image_stack", "confocal", "movie", "image"))
+        if imaging < int(min_imaging_files):
+            continue
+        if r["path"].lower() in known:
+            continue
+        p = Path(r["path"])
+        parts = p.parts
+        rows.append({
+            "path": r["path"],
+            "folder": p.name,
+            "parent": p.parent.name,
+            "grandparent": parts[-3] if len(parts) >= 3 else "",
+            "area": parts[1] if len(parts) > 1 else "",
+            "n_files": r.get("n_files", 0),
+            "imaging_files": imaging,
+            "GB": round(r.get("total_bytes", 0) / 1e9, 2),
+            "holds": ";".join(f"{k}:{v}"
+                              for k, v in list(r.get("families", {}).items())[:3]),
+            "newest": (_dt_iso(r.get("newest_mtime"))),
+            "oldest": (_dt_iso(r.get("oldest_mtime"))),
+        })
+    rows.sort(key=lambda x: -x["imaging_files"])
+
+    import csv as _csv
+    head = list(rows[0].keys()) + list(fields) if rows else \
+        ["path", "folder", "parent"] + list(fields)
+    out = Path(out_csv)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", newline="", encoding="utf-8-sig") as fh:
+        w = _csv.DictWriter(fh, fieldnames=head)
+        w.writeheader()
+        for row in rows:
+            w.writerow({**row, **{f: "" for f in fields}})
+    return {"path": str(out), "n_rows": len(rows),
+            "n_already_named": len(known),
+            "why": (f"{len(rows)} folders hold at least {min_imaging_files} "
+                    f"imaging file(s) and are not yet named. Written with "
+                    f"utf-8-sig so Excel opens it without mangling accents.")}
+
+
+def _dt_iso(ts):
+    if not ts:
+        return ""
+    import datetime
+    return datetime.date.fromtimestamp(ts).isoformat()
+
+
 def describe_layer(layer, *, top=25):
     """One readable table per layer, sorted by what is worth looking at."""
     rows = sorted(layer["results"],
