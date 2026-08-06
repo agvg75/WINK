@@ -96,6 +96,18 @@ class Tool:
 
 REGISTRY = [
     # --- Motor and behavioral output: locomotion ---
+    # Andres: this should live in the Hub - a tab just for him showing the
+    # whole lab, and every student seeing their own data arranged their way.
+    # Registered as a tool rather than a new pane because the Hub's rail is
+    # categories, not tabs, and adding a category is a much smaller change
+    # than restructuring the body.
+    Tool("My data",
+         "Your experiments, arranged the way you arranged them. The lab lead "
+         "sees the whole lab. Reads the shared folder catalogue; opens "
+         "nothing and moves nothing.",
+         "Acquisition and utilities", "python", "ready",
+         "app/my_data.py",
+         requires="initials set on the Hub; a shared folder catalogue"),
     Tool("Track one worm (crawl, swim, burrow)",
          "Track one visible worm and export signed body kinematics using an assay-specific mode.",
          "Motor output - Locomotion", "python", "ready",
