@@ -301,6 +301,23 @@ REGISTRY = [
                   "calibrated; the dial is a multiplier, not a raw sigma, "
                   "because a raw value does not transfer between a bright and "
                   "a dark acquisition"),
+    Tool("Cultured cell calcium (probe-aware) (Experimental)",
+         "Calcium, redox and abundance in cultured human muscle cells, from "
+         "myoblasts to myofibres and from striated to smooth. Asks which probe "
+         "was used and refuses the measurements that probe cannot support - "
+         "an irreversible indicator such as MitoSOX gets an accumulation rate "
+         "and no decay constant; antibody staining gets abundance and no "
+         "kinetics at all. For the shRNA layout it compares transfected "
+         "against untransfected cells in the SAME field, normalising each "
+         "treated cell to its own field's untransfected median, and reports "
+         "the untransfected spread as the null band that a difference has to "
+         "clear.",
+         "Physiology - Calcium and cellular activity", "python", "ready",
+         "tools/cell_calcium/cell_calcium_tool.py",
+         requires="one subfolder per condition; declared probe, bit depth and "
+                  "channel suffixes; a DIC or nuclear channel to segment on if "
+                  "there is one, since segmenting on the calcium channel "
+                  "biases the sample towards bright cells"),
     Tool("AFD_MTP (Fiji)", "The Fiji-plugin version of the AFD tracker.",
          "Physiology - Calcium and cellular activity", "fiji", "ready", "tools/afd_neuron/fiji/AFD_MTP_v7_gap_patch.java"),
 

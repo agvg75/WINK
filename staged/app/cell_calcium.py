@@ -566,7 +566,14 @@ def check_two_channel_design(*, signal_channel, marker_channel,
     is biased towards high calcium, and the bias need not be equal in the two
     groups - a knockdown that raises resting calcium would also make its cells
     easier to find, inflating the very difference being measured. Segment on
-    something independent: transmitted light, or a nuclear stain.
+    something independent: DIC, or a nuclear stain.
+
+    DIC IS NOT THRESHOLDED THE WAY A FLUORESCENCE CHANNEL IS. Its contrast is
+    a shading gradient along one shear direction, so a cell appears bright on
+    one edge and dark on the opposite one with interior close to background. A
+    grey-level threshold returns edge fragments rather than cells. It wants
+    gradient magnitude, or a learned segmenter such as Cellpose, and it wants
+    the shear direction recorded because the apparent shape depends on it.
     """
     notes, warnings = [], []
     if segmentation_channel is None:
@@ -580,10 +587,12 @@ def check_two_channel_design(*, signal_channel, marker_channel,
             f"({signal_channel}). Bright cells are then easier to find than "
             f"dim ones, so the sample is biased towards high signal - and if "
             f"the treatment shifts the signal, the bias differs between "
-            f"groups and adds to the effect. Segment on transmitted light or "
-            f"a nuclear stain instead. The lab's Leica exports carry a third "
-            f"channel (ch02, LUT 'Gray') that was acquired for this and did "
-            f"not get copied to the L: drive with the other two.")
+            f"groups and adds to the effect. Segment on DIC or a nuclear "
+            f"stain instead. The lab's Leica exports carry a third channel "
+            f"(ch02, LUT 'Gray'), almost certainly DIC, which did not get "
+            f"copied to the L: drive with the other two. DIC needs gradient-"
+            f"based or learned segmentation rather than a grey-level "
+            f"threshold, which on shear-shaded cells returns edges not cells.")
     elif segmentation_channel == marker_channel:
         warnings.append(
             f"Cells were segmented on the marker channel ({marker_channel}), "
