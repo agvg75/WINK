@@ -163,6 +163,207 @@ try:
 except cc.CalciumError:
     check("an absent control is refused", True)
 
+# --- the probe registry --------------------------------------------------------
+# Andres: Fura-2 sometimes and Fluo-4 as well, plus mitochondrial oxidation
+# indicators which may or may not be ratiometric, plus antibody staining in the
+# same cultures. A boolean cannot express the last two.
+fura = cc.check_recording(n_frames=600, probe="Fura-2", bit_depth=16,
+                          typical_signal=800)
+check("Fura-2 supports a resting level",
+      fura["measurements"]["resting"]["supported"])
+check("...and says the ratio is not a concentration until calibrated",
+      "calibrated" in fura["probe_note"])
+
+fluo = cc.check_recording(n_frames=600, probe="fluo-4", bit_depth=16,
+                          typical_signal=800)
+check("Fluo-4 refuses a resting level",
+      not fluo["measurements"]["resting"]["supported"])
+check("...but supports dF/F0", fluo["measurements"]["auc"]["supported"])
+
+check("probe names are matched loosely",
+      cc.normalise_probe("FURA 2") == "fura-2" and
+      cc.normalise_probe("fura2") == "fura-2")
+try:
+    cc.check_recording(n_frames=10, probe="calcium-green")
+    check("an unregistered probe is refused", False)
+except cc.CalciumError as exc:
+    check("an unregistered probe is refused", True)
+    check("...naming the three axes that must not be guessed",
+          "reversible" in str(exc) and "loading-independent" in str(exc))
+
+# The axis a boolean flag cannot see. MitoSOX's product is stuck in the DNA, so
+# a decay constant fits perfectly and describes nothing.
+sox = cc.check_recording(n_frames=600, probe="MitoSOX", bit_depth=16)
+check("an irreversible probe is refused a decay constant",
+      not sox["measurements"]["decay_tau"]["supported"])
+check("...and an FWHM", not sox["measurements"]["fwhm"]["supported"])
+check("...but IS given an accumulation rate",
+      sox["measurements"]["accumulation_rate"]["supported"],
+      "the measure that replaces the kinetic panel rather than joining it")
+check("...warning that the wrong measures would still fit",
+      any("will still FIT this data" in w for w in sox["warnings"]))
+check("a ratiometric flag alone would have allowed that decay constant",
+      cc.check_recording(n_frames=600, ratiometric=False, bit_depth=16)
+      ["measurements"]["decay_tau"]["supported"],
+      "which is why the registry exists")
+
+roGFP = cc.check_recording(n_frames=600, probe="grx1-roGFP2", bit_depth=16,
+                           typical_signal=800)
+check("a reversible redox sensor keeps its kinetics",
+      roGFP["measurements"]["decay_tau"]["supported"])
+check("...and is asked about oxidation, not calcium",
+      "oxidation_ratio" in roGFP["measurements"] and
+      "resting" not in roGFP["measurements"])
+check("...with the pH confound named", "pH" in roGFP["probe_note"])
+
+ab = cc.check_recording(n_frames=1, probe="antibody", bit_depth=16)
+check("a fixed sample supports abundance",
+      ab["measurements"]["expression_level"]["supported"])
+check("...and is asked nothing kinetic at all",
+      set(ab["measurements"]) == {"expression_level"})
+ab_kin = cc.check_recording(n_frames=600, probe="antibody", bit_depth=16,
+                            wants=["decay_tau", "resting"])
+check("a fixed sample refuses kinetics even with 600 frames",
+      not ab_kin["measurements"]["decay_tau"]["supported"],
+      "frames of a fixed slide are not time")
+check("...naming that there is no time in the sample",
+      any("no time in it" in f
+          for f in ab_kin["measurements"]["decay_tau"]["fails"]))
+
+check("TMRM's sign ambiguity is recorded",
+      "quench" in cc.PROBES["tmrm"]["note"] and
+      "brighter" in cc.PROBES["tmrm"]["note"])
+
+# --- transfected against untransfected ------------------------------------------
+# Andres: one channel shows calcium, the other mCherry showing which cells were
+# transfected; transfected vs non-transfected is the experiment.
+design = cc.check_two_channel_design(
+    signal_channel="ch00", marker_channel="ch01",
+    segmentation_channel="ch00", conditions=["Dp427", "Dp71", "scramble"])
+check("segmenting on the measurement channel warns",
+      any("biased towards high signal" in w for w in design["warnings"]),
+      "bright cells are easier to find, and the treatment moves brightness")
+check("...pointing at the transmitted channel that exists for it",
+      any("ch02" in w for w in design["warnings"]))
+ok_design = cc.check_two_channel_design(
+    signal_channel="ch00", marker_channel="ch01",
+    segmentation_channel="ch02", conditions=["Dp427", "scramble"])
+check("an independent segmentation channel does not warn",
+      not ok_design["warnings"])
+no_ctrl = cc.check_two_channel_design(
+    signal_channel="ch00", marker_channel="ch01",
+    segmentation_channel="ch02", conditions=["Dp427", "Dp71"])
+check("a missing scramble warns",
+      any("scrambled/control" in w for w in no_ctrl["warnings"]))
+check("segmenting on the marker loses the internal control",
+      any("untransfected cells cannot be found" in w for w in
+          cc.check_two_channel_design(signal_channel="ch00",
+                                      marker_channel="ch01",
+                                      segmentation_channel="ch01")["warnings"]))
+
+rng = np.random.default_rng(7)
+bimodal = np.concatenate([rng.normal(10, 2, 60), rng.normal(120, 15, 20)])
+cls = cc.classify_by_marker(bimodal)
+check("a bimodal marker splits into the right counts",
+      cls["n_positive"] == 20 and cls["n_negative"] == 60,
+      f"{cls['n_positive']}+/{cls['n_negative']}- at {cls['threshold']:.0f}")
+check("...and is not warned about", not cls["warnings"])
+
+# A single normal distribution cut in half explains 0.64 of its variance. The
+# first version of this check measured the gap in units of spread AFTER the
+# ambiguous band was removed, which scored unimodal data at 7 sigma.
+unimodal = rng.normal(50, 10, 300)
+uni = cc.classify_by_marker(unimodal)
+check("a unimodal marker is flagged as not bimodal", bool(uni["warnings"]))
+check("...at close to the 0.64 a split normal gives",
+      0.5 < uni["separability"] < 0.75, f"{uni['separability']:.2f}")
+check("a bimodal marker scores far above that",
+      cls["separability"] > 0.9, f"{cls['separability']:.2f}")
+boundary = cc.classify_by_marker(
+    np.array([10.0, 12, 14, 54, 56, 58, 100, 102, 104]), threshold=55)
+check("cells at the boundary are held out rather than forced",
+      boundary["n_ambiguous"] == 3 and boundary["n_positive"] == 3 and
+      boundary["n_negative"] == 3,
+      "a graded marker means a graded knockdown, so these are the least "
+      "certain cells")
+
+# With a clean gap between the clusters, every threshold inside it ties. Taking
+# the lowest put the boundary on the shoulder of the untransfected cluster and
+# the exclusion band then swallowed 12 real negatives.
+check("the threshold lands in the middle of an empty gap, not at its edge",
+      30 < cls["threshold"] < 100, f"{cls['threshold']:.0f}")
+
+# Bleed-through: the artefact that points the same way as the hypothesis.
+marker = np.concatenate([rng.uniform(0, 5, 30), rng.uniform(50, 200, 20)])
+positive = marker > 25
+clean = np.concatenate([rng.normal(100, 10, 30), rng.normal(140, 10, 20)])
+bled = clean.copy()
+bled[positive] = 100 + 0.3 * marker[positive] + rng.normal(0, 3, positive.sum())
+check("a real all-or-none effect is not called bleed-through",
+      not cc.marker_bleedthrough(clean, marker, positive)["suspect"],
+      "knockdown either happened or did not; it does not scale with mCherry")
+bt = cc.marker_bleedthrough(bled, marker, positive)
+check("signal scaling with marker brightness IS called bleed-through",
+      bt["suspect"], f"r = {bt['r']:+.2f}")
+check("...naming the control that would settle it",
+      any("dye-free" in w for w in bt["warnings"]))
+thin = cc.marker_bleedthrough(clean[:4], marker[:4],
+                              np.ones(4, dtype=bool))
+check("too few cells is reported as 'did not run', not as a pass",
+      not thin["suspect"] and
+      any("did not run" in w for w in thin["warnings"]),
+      "silence from a check that never ran reads as reassurance")
+
+# The field is the unit, not the cell.
+def field(name, cond, pos_level, n_pos=8, n_neg=25):
+    return {"field": name, "condition": cond,
+            "signal": np.concatenate([rng.normal(pos_level, 8, n_pos),
+                                      rng.normal(100, 8, n_neg)]),
+            "marker": np.concatenate([rng.uniform(80, 200, n_pos),
+                                      rng.uniform(0, 5, n_neg)])}
+
+
+paired = cc.paired_field_comparison([
+    field("f1", "Dp427", 150), field("f2", "Dp427", 145),
+    field("f3", "Dp427", 155), field("f4", "scramble", 101),
+    field("f5", "scramble", 99), field("f6", "scramble", 100),
+])
+check("each field yields one paired comparison",
+      len(paired["per_field"]) == 6)
+check("the knockdown condition shows a raised ratio",
+      paired["by_condition"]["Dp427"]["median_ratio"] > 1.3,
+      f"{paired['by_condition']['Dp427']['median_ratio']:.2f}")
+check("the scramble sits at unity",
+      abs(paired["by_condition"]["scramble"]["median_ratio"] - 1) < 0.1)
+check("the unit is stated as the field, with the cell count behind it",
+      "unit here is the field" in paired["note"] and
+      "6 paired comparisons" in paired["note"])
+check("...and pairing is credited with cancelling loading",
+      "cancels loading" in paired["note"])
+
+# The check that makes the scramble worth running.
+bad_ctrl = cc.paired_field_comparison([
+    field("g1", "scramble", 130), field("g2", "scramble", 135),
+    field("g3", "scramble", 128),
+])
+check("a scramble that is NOT at unity is called out",
+      any("transfection itself moving calcium" in w
+          for w in bad_ctrl["warnings"]),
+      "lipid stress, bleed-through, or which cells take up plasmid")
+check("...saying the knockdowns must be read against it, not against 1.0",
+      any("not against 1.0" in w for w in bad_ctrl["warnings"]))
+
+thin_field = cc.paired_field_comparison([
+    field("h1", "Dp71", 150, n_pos=1, n_neg=30),
+    field("h2", "Dp71", 150, n_pos=9, n_neg=30),
+])
+check("a field with too few transfected cells is skipped",
+      len(thin_field["per_field"]) == 1 and
+      len(thin_field["skipped_fields"]) == 1)
+check("...and listed, because losing them is itself a selection",
+      any("selection" in w for w in thin_field["warnings"]),
+      "the worst-transfected fields are the ones that drop out")
+
 print()
 failed = [n for n, ok, _ in results if not ok]
 print(f"{len(results) - len(failed)} of {len(results)} checks passed")
