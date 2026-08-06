@@ -30,6 +30,7 @@ sys.path[:0] = [str(HERE), str(ROOT / "app")]
 
 import cell_calcium as cc                    # noqa: E402
 import cell_calcium_images as cci            # noqa: E402
+import cell_calcium_lif as ccl               # noqa: E402
 from process_ui import CockpitApp            # noqa: E402
 
 TOOL_NAME = "Cultured cell calcium (probe-aware)"
@@ -52,6 +53,7 @@ class App(CockpitApp):
         }
         self.result = None
         self.capability = None
+        self.source_info = None
         self._build_controls()
         self._build_center()
         self.set_status("Choose the folder holding one subfolder per "
@@ -60,11 +62,18 @@ class App(CockpitApp):
     # -- controls ------------------------------------------------------
     def _build_controls(self):
         c = self.controls
-        ttk.Button(c, text="Choose data folder...",
-                   command=self._choose).pack(fill="x", pady=(2, 2))
+        row = ttk.Frame(c); row.pack(fill="x", pady=(2, 2))
+        ttk.Button(row, text="Folder...",
+                   command=self._choose).pack(side="left", fill="x",
+                                              expand=True)
+        ttk.Button(row, text=".lif file...",
+                   command=self._choose_file).pack(side="left", fill="x",
+                                                   expand=True)
         ttk.Entry(c, textvariable=self.v["folder"]).pack(fill="x", pady=(0, 6))
-        ttk.Label(c, text="One subfolder per condition; the folder names "
-                          "become the condition labels.",
+        ttk.Label(c, text="A folder with one subfolder per condition (names "
+                          "become condition labels), or a Leica .lif holding "
+                          "one series per condition. Frame count, frame rate "
+                          "and bit depth are read from the data, never typed.",
                   wraplength=205, justify="left",
                   foreground="#555555").pack(fill="x", pady=(0, 6))
 
@@ -141,12 +150,45 @@ class App(CockpitApp):
                                           "subfolders", parent=self)
         if d:
             self.v["folder"].set(d)
+            self.source_info = None
+
+    def _choose_file(self):
+        f = filedialog.askopenfilename(
+            title="Leica .lif recording", parent=self,
+            filetypes=[("Leica", "*.lif *.lifext"), ("All files", "*.*")])
+        if f:
+            self.v["folder"].set(f)
+            self.source_info = None
 
     # -- step 1 --------------------------------------------------------
     def run_capability(self):
+        """What can this data support? Read from the DATA, not from the form.
+
+        This used to answer from the typed 'Frames per cell' box, which
+        defaults to 1. Pointed at a 224-frame Leica movie it duly reported that
+        every kinetic measurement was impossible because the recording was a
+        single frame. A tool whose whole job is to say what the data supports
+        must not take the operator's word for what the data is.
+        """
         probe = self.v["probe"].get()
-        n_frames = int(float(self.v["n_frames"].get() or 1))
-        bits = int(float(self.v["bit_depth"].get() or 8))
+        source = self.v["folder"].get()
+        described = None
+        if source:
+            try:
+                described = ccl.describe_source(
+                    source, signal_suffix=self.v["signal_suffix"].get())
+            except cc.CalciumError as exc:
+                self._say(f"Could not read {source}:\n\n{exc}")
+                return
+        if described:
+            n_frames = described["max_frames"]
+            bits = described["bit_depth"]
+            self.v["n_frames"].set(str(n_frames))
+            self.v["bit_depth"].set(str(bits))
+            self.source_info = described
+        else:
+            n_frames = int(float(self.v["n_frames"].get() or 1))
+            bits = int(float(self.v["bit_depth"].get() or 8))
         cap = cc.check_recording(n_frames=n_frames, probe=probe,
                                  bit_depth=bits)
         design = cc.check_two_channel_design(
@@ -155,8 +197,27 @@ class App(CockpitApp):
             segmentation_channel=self.v["seg_suffix"].get() or None)
         self.capability = {"recording": cap, "design": design}
 
-        lines = [f"PROBE: {probe}  ({cap['readout']})",
-                 f"{cap['n_frames']} frame(s), {cap['bit_depth']}-bit\n"]
+        lines = [f"PROBE: {probe}  ({cap['readout']})"]
+        if described:
+            lines.append(f"SOURCE: {described['kind']} - read from the file, "
+                         f"not from the form")
+            if described["kind"] == "lif":
+                lines.append(f"  {described['n_series']} series, "
+                             f"{described['n_movies']} of them time series")
+                lines.append(f"  {'series':28s} {'frames':>6s} {'fps':>6s} "
+                             f"{'dur s':>6s} {'size':>10s} {'ch':>3s}")
+                for s in described["series"]:
+                    fps = f"{s['fps']:.2f}" if s["fps"] else "-"
+                    dur = f"{s['duration_s']:.1f}" if s["duration_s"] else "-"
+                    size = "%dx%d" % (s["n_x"], s["n_y"])
+                    lines.append(
+                        f"  {s['name'][:28]:28s} {s['n_t']:6d} {fps:>6s} "
+                        f"{dur:>6s} {size:>10s} {s['n_channels']:3d}")
+            else:
+                lines.append(f"  {described['n_series']} image(s), "
+                             f"{described['max_frames']} frame(s) each")
+            lines.append("")
+        lines.append(f"{cap['n_frames']} frame(s), {cap['bit_depth']}-bit\n")
         ok = [k for k, m in cap["measurements"].items() if m["supported"]]
         no = [k for k, m in cap["measurements"].items() if not m["supported"]]
         lines.append(f"SUPPORTED ({len(ok)}): "
@@ -183,8 +244,11 @@ class App(CockpitApp):
         import tifffile
         folder = self.v["folder"].get()
         if not folder:
-            messagebox.showwarning("No folder", "Choose a data folder first.",
-                                   parent=self)
+            messagebox.showwarning("No source", "Choose a folder or a .lif "
+                                                "file first.", parent=self)
+            return
+        if Path(folder).suffix.lower() in (".lif", ".lifext"):
+            self.run_timeseries()
             return
         seg_suffix = self.v["seg_suffix"].get() or None
         pairs, unpaired = cci.load_field_pairs(
@@ -276,24 +340,131 @@ class App(CockpitApp):
         self.set_status(f"{n_cells} cells across {len(res['per_field'])} "
                         f"fields; {n_pos} marker-positive.")
 
+    # -- step 2, time-series branch ------------------------------------
+    def run_timeseries(self):
+        """One series per condition: per-cell transients, refused where empty.
+
+        Every series is reported, including the ones where nothing can be
+        measured. A drug that produced no measurable response and a recording
+        too dark to measure are different findings, and a table that silently
+        omits the second reads as if only the first happened.
+        """
+        path = self.v["folder"].get()
+        series = ccl.series_list(path)
+        movies = [s for s in series if s["n_t"] > 1]
+        if not movies:
+            self._say("No series in this file has a time dimension, so there "
+                      "are no transients to measure.")
+            return
+
+        rows, refused, per_cell = [], [], []
+        for s in movies:
+            if s["fps"] is None:
+                refused.append(f"{s['name']}: no frame interval in the header, "
+                               f"so every timing would be in unknown units")
+                continue
+            frames = ccl.read_series(path, s["index"])
+            _labels, traces = ccl.cell_traces(frames)
+            if traces.shape[0] == 0:
+                refused.append(f"{s['name']}: no cell-sized object found")
+                continue
+            detected, amps, ttp, taus, blocked = 0, [], [], [], 0
+            for k, tr in enumerate(traces):
+                try:
+                    res = cc.transient(tr, s["fps"])
+                except cc.CalciumError:
+                    # The baseline guard: a trace whose resting level is
+                    # indistinguishable from zero. Counted, not skipped.
+                    blocked += 1
+                    continue
+                amps.append(res["amplitude_dff"])
+                if res["detected"]:
+                    detected += 1
+                    ttp.append(res["time_to_peak_s"])
+                    if res.get("decay_tau_s") is not None:
+                        taus.append(res["decay_tau_s"])
+                per_cell.append({
+                    "series": s["name"], "cell": k, "fps": s["fps"],
+                    "amplitude_dff": res["amplitude_dff"],
+                    "detected": res["detected"],
+                    "time_to_peak_s": res.get("time_to_peak_s"),
+                    "decay_tau_s": res.get("decay_tau_s"),
+                    "fwhm_s": res.get("fwhm_s"),
+                    "auc_dff_s": res.get("auc_dff_s"), "f0": res.get("f0")})
+            rows.append({
+                "series": s["name"], "n_cells": int(traces.shape[0]),
+                "n_measurable": len(amps), "n_blocked": blocked,
+                "n_detected": detected, "fps": s["fps"],
+                "duration_s": s["duration_s"],
+                "median_amplitude": float(np.median(amps)) if amps else None,
+                "median_time_to_peak": float(np.median(ttp)) if ttp else None,
+                "median_tau": float(np.median(taus)) if taus else None,
+            })
+
+        self.result = {"timeseries": rows, "per_cell": per_cell,
+                       "refused": refused, "capability": self.capability}
+        lines = [f"{len(movies)} time series in {Path(path).name}\n",
+                 f"{'series':26s} {'fps':>5s} {'cells':>5s} {'usable':>7s} "
+                 f"{'resp':>5s} {'dF/F0':>7s} {'t_peak':>7s} {'tau s':>7s}"]
+        for r in rows:
+            amp = f"{r['median_amplitude']:.2f}" if r["median_amplitude"] is not None else "-"
+            tp = f"{r['median_time_to_peak']:.1f}" if r["median_time_to_peak"] is not None else "-"
+            tau = f"{r['median_tau']:.1f}" if r["median_tau"] is not None else "-"
+            lines.append(f"{r['series'][:26]:26s} {r['fps']:5.1f} "
+                         f"{r['n_cells']:5d} {r['n_measurable']:7d} "
+                         f"{r['n_detected']:5d} {amp:>7s} {tp:>7s} {tau:>7s}")
+        blocked_total = sum(r["n_blocked"] for r in rows)
+        if blocked_total:
+            lines.append(
+                f"\n! {blocked_total} cell trace(s) were REFUSED because the "
+                f"baseline could not be told apart from zero. dF/F0 divides by "
+                f"that baseline, so those cells would have reported large "
+                f"amplitudes made of quantisation noise. This is an exposure "
+                f"problem: more light per frame, more bit depth, wider "
+                f"pinhole. No analysis recovers a signal that was not "
+                f"collected.")
+        for r in rows:
+            if r["n_measurable"] and r["n_detected"] == r["n_measurable"] \
+                    and r["n_measurable"] > 4:
+                lines.append(
+                    f"\n! Every one of {r['n_measurable']} cells in "
+                    f"'{r['series']}' scored as responding. Real responses are "
+                    f"rarely unanimous; check the traces before believing it.")
+        for w in refused:
+            lines.append(f"\n! {w}")
+        lines.append("\nUnit note: cells within one series share a dish, a "
+                     "loading and a field of view. They describe how much was "
+                     "measured, not how many independent replicates there are.")
+        self._say("\n".join(lines))
+        self.log("Time series measured",
+                 f"{len(rows)} series, {len(per_cell)} cells", status="edit")
+        self.set_status(f"{len(rows)} series measured; "
+                        f"{blocked_total} trace(s) refused as unmeasurable.")
+
     # -- step 3 --------------------------------------------------------
     def save_results(self):
         if not self.result:
             messagebox.showwarning("Nothing to save", "Run step 2 first.",
                                    parent=self)
             return
-        out_dir = Path(self.v["folder"].get()) / "cell_calcium_results"
+        src = Path(self.v["folder"].get())
+        out_dir = (src.parent if src.is_file() else src) / "cell_calcium_results"
         out_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        cells = self.result["analysis"]["cells"]
+        if "timeseries" in self.result:
+            cells = self.result["per_cell"]
+            summary = {"series": self.result["timeseries"],
+                       "refused": self.result["refused"]}
+        else:
+            cells = self.result["analysis"]["cells"]
+            summary = dict(self.result["analysis"])
+            summary.pop("cells", None)
         csv_path = out_dir / f"cells_{stamp}.csv"
         with csv_path.open("w", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=list(cells[0]) if cells else
                                ["field", "condition", "transfected"])
             w.writeheader()
             w.writerows(cells)
-        summary = dict(self.result["analysis"])
-        summary.pop("cells", None)
         json_path = out_dir / f"summary_{stamp}.json"
         json_path.write_text(json.dumps(
             {"tool": TOOL_NAME, "version": TOOL_VERSION,
