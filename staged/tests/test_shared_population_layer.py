@@ -67,8 +67,17 @@ check("worms are split toward and away", lay["regimes"]["per_plate"]["p0"])
 check("the geometry is named in the result",
       "point source" in lay["geometry"] and
       lay["geometry_kind"] == "point_source")
+check("the only warning left is the missing stimulus record",
+      [w for w in lay["warnings"] if "stimulus" not in w.lower()] == [],
+      "a point source is a chemotaxis spot, so compound and concentration "
+      "are asked for even when nothing was passed")
+full = pa.population_layer(
+    tracks=tracks, segments=segments, geometry=spot,
+    time_since_food_removal_s=300, min_worms_per_regime=1,
+    stimulus={"compound": "diacetyl", "concentration": 0.001,
+              "concentration_units": "v/v"})
 check("nothing is warned about when everything was supplied",
-      lay["warnings"] == [], str(lay["warnings"]))
+      full["warnings"] == [], str(full["warnings"]))
 
 # --- what is missing is SAID, not silently dropped -------------------------
 bare = pa.population_layer(tracks=tracks, segments=segments)

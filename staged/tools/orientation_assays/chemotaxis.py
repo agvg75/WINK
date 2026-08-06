@@ -40,6 +40,7 @@ def analyze_chemotaxis_tracks(
     assay_start_clock=None, per_worm_food_offsets_s=None,
     departure_rows=(), initial_state_window_s=30.0, pick_state=None,
     min_worms_per_regime=3, include_population_layer=True,
+    stimulus=None, enhanced_slowing_s=None,
 ):
     result = analyze_tracks(
         tool_name=TOOL_NAME, tool_version=TOOL_VERSION, tracks=tracks,
@@ -72,5 +73,8 @@ def analyze_chemotaxis_tracks(
                 per_worm_food_offsets_s=per_worm_food_offsets_s,
                 initial_state_window_s=initial_state_window_s,
                 pick_state=pick_state,
-                min_worms_per_regime=min_worms_per_regime)
+                min_worms_per_regime=min_worms_per_regime,
+                stimulus=stimulus,
+                **({} if enhanced_slowing_s is None
+                   else {"enhanced_slowing_s": enhanced_slowing_s}))
     return result

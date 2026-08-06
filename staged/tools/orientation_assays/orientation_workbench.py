@@ -68,10 +68,25 @@ DISPLAY = {
 
 
 def configuration_template(assay):
+    # Andres: time off food "affects other assays. Basically any assay where
+    # worms are off food." Basal slowing becomes ENHANCED basal slowing past
+    # the deprivation threshold - a different behaviour on a different
+    # pathway - so this block belongs to every plate assay, not just
+    # magnetotaxis, which is the only one that had it.
+    food_state_block = {
+        "time_since_food_removal_s": None,
+        "food_removal_clock": None,
+        "assay_start_clock": None,
+        "per_worm_food_removal_offsets_s": {},
+        "enhanced_slowing_threshold_s": 1800,
+        "initial_state_window_s": 30,
+        "pick_state": None,
+    }
     common = {
         "stimulus_orientations_deg": {"plate_1": 0, "plate_2": 90},
         "source_xy_mm": [0, 0],
         "endpoint_only": False,
+        "state": dict(food_state_block),
     }
     if assay == "magnetotaxis":
         return {
@@ -105,6 +120,18 @@ def configuration_template(assay):
             "spatial_temperature_calibration": {
                 "method": "measured probe map", "units": "degC/mm"},
             "absolute_temperature_calibrated": False,
+            # Andres: "thermotaxis should have temperature field at either end
+            # so the gradient can be calculated across it."
+            #
+            # Both ENDS and both TEMPERATURES, because the gradient is what is
+            # actually being computed across the plate - the slope alone does
+            # not say where the worms sit within it, and cultivation
+            # temperature only means something relative to the two ends. If
+            # cultivation temperature falls outside them the plate offers no
+            # choice at all, which cannot be detected from a slope.
+            "gradient_ends": {
+                "cold_xy_mm": [0, 0], "hot_xy_mm": [100, 0],
+                "cold_c": 17.0, "hot_c": 23.0},
         }
     return {
         **common,
@@ -112,6 +139,20 @@ def configuration_template(assay):
             "source_xy_mm": [0, 0], "model": "gaussian",
             "amplitude": 1, "sigma_mm": 5, "relative_uncertainty": 0.5},
         "endpoint_counts": {"toward": 0, "away": 0, "neutral": 0},
+        # Andres: chemotaxis "should also request stimulus nature and
+        # concentration (diacetyl, ethanol, OP50 etc)."
+        #
+        # An index without them is uninterpretable and, worse, looks fine.
+        # Diacetyl attracts at low concentration and repels at high, so the
+        # same compound and the same animal give opposite signs - two plates
+        # recorded without concentration cannot be compared even to each other.
+        "stimulus": {
+            "compound": None,              # e.g. diacetyl, ethanol, OP50
+            "concentration": None,         # e.g. 0.001, or 1 for undiluted
+            "concentration_units": None,   # e.g. "v/v", "M", "mg/mL"
+            "solvent": None,               # what the control spot should be
+            "counter_stimulus": None,      # if the plate has two spots
+        },
     }
 
 

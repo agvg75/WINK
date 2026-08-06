@@ -326,11 +326,62 @@ def build_segment_covariates(
             output.append(enriched)
     return output, events
 
+# Andres: "Time off food also affects other assays. Basically any assay where
+# worms are off food. Basal slowing becomes enhanced basal slowing after
+# [~30] minutes off food."
+#
+# The threshold is not cosmetic - it changes which behaviour is being measured
+# and which pathway produces it. Sawin, Ranganathan & Horvitz (2000) report
+# basal slowing in well-fed animals (dopamine-dependent) and ENHANCED slowing
+# after food deprivation (serotonin-dependent). Crossing it mid-experiment
+# means the early and late plates are not measuring the same thing.
+#
+# A PARAMETER, NOT A CONSTANT, because it is an empirical figure that belongs
+# to the assay and the strain rather than to the software.
+ENHANCED_SLOWING_S = 30 * 60
+
+
+def food_state(offset_s, threshold_s=ENHANCED_SLOWING_S):
+    """Which feeding regime an animal is in, given time off food.
+
+    Returns "unknown" rather than assuming "fed" when nothing was recorded.
+    Defaulting to fed would silently assert the most common case, and the
+    plates that break an experiment are the unusual ones.
+    """
+    if offset_s is None or offset_s == "":
+        return {
+            "regime": "unknown", "time_off_food_s": None,
+            "threshold_s": threshold_s,
+            "why": ("Time off food was not recorded, so the feeding regime "
+                    "is unknown. It is not assumed to be 'fed' - that would "
+                    "assert the common case over exactly the plates most "
+                    "likely to be anomalous."),
+        }
+    value = float(offset_s)
+    past = value >= threshold_s
+    return {
+        "regime": "food_deprived" if past else "recently_fed",
+        "time_off_food_s": value,
+        "threshold_s": threshold_s,
+        "minutes_off_food": round(value / 60.0, 1),
+        "why": (f"{value / 60.0:.1f} min off food, "
+                f"{'past' if past else 'short of'} the "
+                f"{threshold_s / 60.0:.0f} min threshold. "
+                + ("Enhanced slowing is expected here; comparing these plates "
+                   "with recently-fed ones compares two different behaviours "
+                   "produced by two different pathways."
+                   if past else
+                   "Basal slowing is expected. Plates that cross the "
+                   "threshold mid-experiment change regime partway through.")),
+    }
+
+
 def population_layer(
     *, tracks, segments, geometry=None, departure_rows=(),
     time_since_food_removal_s=None, food_removal_clock=None,
     assay_start_clock=None, per_worm_food_offsets_s=None,
     initial_state_window_s=30.0, pick_state=None, min_worms_per_regime=3,
+    enhanced_slowing_s=ENHANCED_SLOWING_S, stimulus=None,
 ):
     """Everything a plate-migration assay gets for free. One call per assay.
 
@@ -354,6 +405,21 @@ def population_layer(
         food_removal_clock=food_removal_clock,
         assay_start_clock=assay_start_clock)
     out["time_off_op50_at_start_s"] = food_offset_s
+    out["food_state"] = food_state(food_offset_s,
+                                   threshold_s=enhanced_slowing_s)
+    # A plate that STARTS below the threshold and ENDS above it changed
+    # behavioural regime partway through, which no single label can express.
+    if food_offset_s is not None and tracks:
+        last_s = max(float(r.get("time_s", 0)) for r in tracks)
+        if (food_offset_s < enhanced_slowing_s <= food_offset_s + last_s):
+            crossing = (enhanced_slowing_s - food_offset_s)
+            out["food_state"]["crosses_threshold_at_s"] = crossing
+            out["warnings"].append(
+                f"This plate crosses the {enhanced_slowing_s / 60:.0f} min "
+                f"food-deprivation threshold {crossing / 60:.1f} min into the "
+                f"recording, so it is recently-fed at the start and food-"
+                f"deprived at the end. A single regime label would be wrong "
+                f"for one half of it; split the analysis or note the change.")
     if food_offset_s is None:
         out["warnings"].append(
             "No time off OP50 was given, so every covariate row carries a "
@@ -392,6 +458,47 @@ def population_layer(
         out["stimulus_range_check"] = rng
         if not rng["within"]:
             out["warnings"].append(rng["why"])
+
+    if stimulus is not None or getattr(geometry, "kind", None) == "point_source":
+        out["stimulus"] = describe_stimulus(stimulus)
+        out["warnings"].extend(out["stimulus"]["warnings"])
+    return out
+
+
+# Andres: chemotaxis "should also request stimulus nature and concentration
+# (diacetyl, ethanol, OP50 etc)."
+#
+# A chemotaxis index of 0.4 means nothing without them. Diacetyl is attractive
+# at low concentration and repulsive at high; the same compound and the same
+# animal give opposite signs, so an index recorded without concentration cannot
+# be compared with anything, including a repeat of itself.
+STIMULUS_FIELDS = ("compound", "concentration", "concentration_units")
+
+
+def describe_stimulus(stimulus):
+    """Record what the worms were offered. Warn, do not refuse.
+
+    Deliberately not a hard refusal: someone re-analysing an old plate whose
+    notebook is lost should still be able to run it, with the gap recorded.
+    Refusing outright would push people to type a placeholder, and an invented
+    concentration is worse than an acknowledged missing one.
+    """
+    given = dict(stimulus or {})
+    missing = [f for f in STIMULUS_FIELDS
+               if given.get(f) in (None, "", [])]
+    out = {"given": given, "missing": missing,
+           "complete": not missing, "warnings": []}
+    if not given:
+        out["warnings"].append(
+            "No stimulus was recorded. A chemotaxis index is uninterpretable "
+            "without the compound and its concentration - diacetyl attracts "
+            "at low concentration and repels at high, so the same compound "
+            "and the same animal can give opposite signs.")
+    elif missing:
+        out["warnings"].append(
+            f"The stimulus record is missing: {', '.join(missing)}. "
+            f"Without concentration in particular the index cannot be "
+            f"compared with another plate, including a repeat of this one.")
     return out
 
 

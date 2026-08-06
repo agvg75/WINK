@@ -29,7 +29,7 @@ def analyze_thermotaxis(
     food_removal_clock=None, assay_start_clock=None,
     per_worm_food_offsets_s=None, departure_rows=(),
     initial_state_window_s=30.0, pick_state=None, min_worms_per_regime=3,
-    include_population_layer=True,
+    include_population_layer=True, enhanced_slowing_s=None,
 ):
     if feeding_state not in {"fed", "starved"}:
         raise ValueError("feeding_state must be fed or starved.")
@@ -78,7 +78,9 @@ def analyze_thermotaxis(
             assay_start_clock=assay_start_clock,
             per_worm_food_offsets_s=per_worm_food_offsets_s,
             initial_state_window_s=initial_state_window_s,
-            pick_state=pick_state, min_worms_per_regime=min_worms_per_regime)
+            pick_state=pick_state, min_worms_per_regime=min_worms_per_regime,
+            **({} if enhanced_slowing_s is None
+               else {"enhanced_slowing_s": enhanced_slowing_s}))
         if grad is None:
             result["population"]["warnings"].append(
                 "gradient_ends was not supplied, so the two plate ends and "
