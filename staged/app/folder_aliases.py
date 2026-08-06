@@ -106,13 +106,21 @@ def read_names_csv(csv_path, *, path_col="path", name_col="new_name",
             name = (row.get(name_col) or "").strip()
             if not name:
                 continue
-            entries.append({
+            rec = {
                 "row": i,
                 "real_path": (row.get(path_col) or "").strip(),
                 "alias": name,
                 "group": (row.get(group_col) or "").strip(),
                 "note": (row.get(note_col) or "").strip(),
-            })
+            }
+            # Every other column is carried through as a field, so the sheet
+            # can grow columns - assay, strain, year, person, condition - and
+            # build_tree can arrange by any of them without this module
+            # knowing their names in advance.
+            for k, v in row.items():
+                if k and k not in (path_col, name_col, group_col, note_col):
+                    rec[k.strip()] = (v or "").strip()
+            entries.append(rec)
     return entries
 
 
@@ -176,6 +184,68 @@ def catalogue_from_names(entries, existing=None):
 # --------------------------------------------------------------------------- #
 # The view tree: generated locally, disposable, regenerable
 # --------------------------------------------------------------------------- #
+def build_tree(catalogue, view_root, *, by=("assay",), dry_run=True,
+               method="symlink", overwrite=False, name_from="alias",
+               missing="_unspecified", require_all=False):
+    """Generate a view tree grouped by CATALOGUE FIELDS, not by the sheet.
+
+    Andres: the way the data is organised on the drive may not be the best way
+    to look at it. This is the answer - the view tree has no relationship to
+    the real layout, and several trees can exist at once over the same data.
+
+    `by` is a tuple of field names, and the tree nests in that order:
+
+        by=("assay", "year")        assay/2024/<alias>
+        by=("strain", "assay")      strain/assay/<alias>
+        by=("person",)              person/<alias>
+
+    THE POINT IS THAT THE SHEET IS FILLED IN ONCE. Structured fields - assay,
+    strain, year, person, condition - are recorded per folder, and then ANY
+    arrangement is a regeneration rather than a re-edit. Asking for a different
+    tree costs seconds and changes nothing on the drive.
+
+    A FOLDER WITH A MISSING FIELD IS NOT DROPPED. It goes under `missing`,
+    visibly, because a view that silently omits the rows nobody got round to
+    labelling looks complete and is not - and the unlabelled ones are exactly
+    the ones that need finding again. Pass require_all=True to exclude them
+    instead, which is then a deliberate choice.
+    """
+    cat = dict(catalogue)
+    grouped = []
+    for e in cat.get("entries", []):
+        parts = []
+        incomplete = False
+        for field in by:
+            val = str(e.get(field, "") or "").strip()
+            if not val:
+                incomplete = True
+                val = missing
+            parts.append(_safe_component(val))
+        if incomplete and require_all:
+            continue
+        grouped.append({**e, "group": "/".join(parts),
+                        "alias": e.get(name_from) or e.get("alias")})
+    out = build_views({"entries": grouped}, view_root, dry_run=dry_run,
+                      method=method, overwrite=overwrite)
+    out["grouped_by"] = list(by)
+    out["n_incomplete"] = sum(1 for g in grouped if missing in g["group"])
+    if out["n_incomplete"] and not require_all:
+        out["incomplete_note"] = (
+            f"{out['n_incomplete']} folder(s) are missing one of {list(by)} "
+            f"and were placed under {missing!r} rather than dropped. A view "
+            f"that silently omits unlabelled rows looks complete and is not, "
+            f"and those rows are the ones most in need of finding again.")
+    return out
+
+
+def _safe_component(text):
+    """A field value turned into one folder name, without inventing nesting."""
+    s = str(text)
+    for ch in ILLEGAL | {"/", "\\"}:
+        s = s.replace(ch, "-")
+    return s.strip(" .") or "_"
+
+
 def build_views(catalogue, view_root, *, dry_run=True, method="symlink",
                 overwrite=False):
     """Create the nickname tree. Nothing is created unless dry_run is False.
@@ -208,8 +278,11 @@ def build_views(catalogue, view_root, *, dry_run=True, method="symlink",
     made, skipped, failed = [], [], []
     for e in entries:
         real = Path(e["real_path"])
-        link = root / e["group"] / e["alias"] if e.get("group") else \
-            root / e["alias"]
+        # A group may be a nested path ("by_assay/swimming/2024"), so the view
+        # tree can be as deep as the arrangement needs while the real drive
+        # stays exactly as it is.
+        link = root.joinpath(*Path(e["group"]).parts, e["alias"]) \
+            if e.get("group") else root / e["alias"]
         rec = {"alias": e["alias"], "group": e.get("group", ""),
                "link": str(link), "real_path": str(real)}
         if link.exists() or link.is_symlink():

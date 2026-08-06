@@ -165,6 +165,82 @@ check("...and so are notes and groups",
       len(fa.find(multi, "first pass")) == 1,
       "which is the whole point of naming them")
 
+# --- the view tree need not resemble the drive at all -----------------------
+# Andres: the way the data is organised on L: may not be the best way to look
+# at it. Fill structured fields in ONCE, then any arrangement is a
+# regeneration rather than a re-edit.
+for n in ("a1", "a2", "a3"):
+    (data / n).mkdir(exist_ok=True)
+rich = {"entries": [
+    {"real_path": str(data / "a1"), "alias": "swim_N2_run1",
+     "assay": "swimming", "strain": "N2", "year": "2024", "person": "Ella"},
+    {"real_path": str(data / "a2"), "alias": "swim_VC40699_run1",
+     "assay": "swimming", "strain": "VC40699", "year": "2025",
+     "person": "Danny"},
+    {"real_path": str(data / "a3"), "alias": "crawl_N2_run1",
+     "assay": "crawling", "strain": "N2", "year": "2024", "person": "Ella"},
+]}
+
+t1 = tmp / "by_assay"
+r1 = fa.build_tree(rich, t1, by=("assay", "year"), dry_run=False)
+check("a tree can be grouped by assay then year", r1["n_made"] == 3)
+check("...nesting in the order given",
+      (t1 / "swimming" / "2024" / "swim_N2_run1").is_symlink() and
+      (t1 / "crawling" / "2024" / "crawl_N2_run1").is_symlink())
+
+t2 = tmp / "by_strain"
+r2 = fa.build_tree(rich, t2, by=("strain",), dry_run=False)
+check("the SAME data can carry a second, different tree at once",
+      (t2 / "N2" / "swim_N2_run1").is_symlink() and
+      (t2 / "VC40699" / "swim_VC40699_run1").is_symlink())
+check("...and both trees are live simultaneously",
+      (t1 / "swimming" / "2024" / "swim_N2_run1").exists() and
+      (t2 / "N2" / "swim_N2_run1").exists(),
+      "one folder, two arrangements, nothing duplicated")
+
+t3 = tmp / "by_person"
+fa.build_tree(rich, t3, by=("person", "assay"), dry_run=False)
+check("a third arrangement costs a regeneration, not a re-edit",
+      (t3 / "Ella" / "swimming" / "swim_N2_run1").is_symlink() and
+      (t3 / "Danny" / "swimming" / "swim_VC40699_run1").is_symlink())
+check("the real drive is untouched by any of it",
+      (data / "a1").exists() and not (data / "a1").is_symlink())
+
+# --- unlabelled rows are visible, not dropped --------------------------------
+gappy = {"entries": rich["entries"] + [
+    {"real_path": str(data / "w6"), "alias": "unlabelled_one", "assay": ""}]}
+t4 = tmp / "gappy"
+r4 = fa.build_tree(gappy, t4, by=("assay",), dry_run=False)
+check("a row missing its grouping field still appears",
+      (t4 / "_unspecified" / "unlabelled_one").is_symlink())
+check("...and is counted", r4["n_incomplete"] == 1)
+check("...naming that a silently-complete view is the danger",
+      "looks complete and is not" in r4["incomplete_note"],
+      "the unlabelled rows are the ones most in need of finding")
+t5 = tmp / "strict"
+r5 = fa.build_tree(gappy, t5, by=("assay",), dry_run=False, require_all=True)
+check("excluding them is possible but must be asked for",
+      r5["n_made"] == 3 and not (t5 / "_unspecified").exists())
+
+# --- a field value that looks like a path does not invent nesting ------------
+odd = {"entries": [{"real_path": str(data / "a1"), "alias": "x",
+                    "assay": "swim/crawl mix"}]}
+t6 = tmp / "odd"
+fa.build_tree(odd, t6, by=("assay",), dry_run=False)
+check("a slash inside a field value becomes one folder, not two",
+      (t6 / "swim-crawl mix" / "x").is_symlink(),
+      "otherwise a stray character silently restructures the tree")
+
+# --- extra spreadsheet columns are carried through ---------------------------
+sheet2 = tmp / "rich.csv"
+sheet2.write_text(
+    "path,new_name,assay,strain,year\n"
+    f"{data / 'a1'},run_one,swimming,N2,2024\n", encoding="utf-8")
+e2 = fa.read_names_csv(sheet2)
+check("columns the module has never heard of are kept",
+      e2[0]["assay"] == "swimming" and e2[0]["strain"] == "N2",
+      "so the sheet can grow fields without changing the code")
+
 print()
 failed = [n for n, ok_, _ in results if not ok_]
 print(f"{len(results) - len(failed)} of {len(results)} checks passed")
