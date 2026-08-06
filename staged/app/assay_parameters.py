@@ -34,6 +34,7 @@ a field is added - it is what the field is for:
                         food_present_during_assay
   stimulus_fields.py    field_geometry_layout, sham_and_zero_field_controls
   plate_assay.py        time_off_food_before_assay, crowding (assay side)
+  censoring.py          field_of_view_censoring
 
 CAPTURED MEANS ASKED FOR, NOT ANSWERED. Every one of these defaults to None
 meaning unrecorded, and an unrecorded control is reported as such rather than
@@ -365,7 +366,7 @@ PARAMETERS = [
     {
         "name": "field_of_view_censoring",
         "group": "analysis",
-        "captured": "no",
+        "captured": "yes",
         "severity": "biases_result",
         "source": "bainbridge2019",
         "finding": ("Animals were tracked from 5 mm out until they left a "
