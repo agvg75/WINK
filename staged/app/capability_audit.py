@@ -50,7 +50,16 @@ CAPABILITIES = {
                 "someone is actually on."),
     },
     "error_reporting": {
-        "markers": ["install_error_reporting"],
+        # CockpitApp sets report_callback_exception in __init__, so every tool
+        # that subclasses it HAS this without naming the installer. The first
+        # run of this audit missed that and reported 4/44 when the true figure
+        # was far higher - a marker list that only knows the explicit call
+        # counts inheritance as absence, which is the one direction this audit
+        # claims to be reliable in. Inherited capability is the standing
+        # exception, so every "applies_to: all" capability must list the base
+        # class as well as the direct call.
+        "markers": ["install_error_reporting", "CockpitApp",
+                    "report_callback_exception"],
         "means": "errors reported against WINK's own code, not library internals",
         "applies_to": "all",
         "why": ("Two fixes were once shipped against the wrong theory because "
@@ -122,7 +131,43 @@ def classify(text):
     return kinds
 
 
-def audit_file(path, envelope_keys=()):
+def resolve_shim(path, search_roots, max_lines=15):
+    """Follow a thin wrapper to the module that does the work.
+
+    `chemotaxis_tool.py` is four lines: `from orientation_workbench import
+    main`. Auditing the four lines reports it as missing every capability, and
+    three such shims sat near the top of the first gap ranking looking like the
+    worst tools in the project. The capability lives in what they delegate to.
+
+    Only follows files short enough to be doing nothing else, and only to a
+    single unambiguous local import - a shim that pulls in three modules is not
+    a shim and gets audited as itself.
+    """
+    p = Path(path)
+    try:
+        text = p.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return p, None
+    code = [ln for ln in text.splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")]
+    if len(code) > max_lines:
+        return p, None
+    mods = set(re.findall(r"^\s*from\s+([A-Za-z_][A-Za-z_0-9]*)\s+import",
+                          text, re.M))
+    mods |= set(re.findall(r"^\s*import\s+([A-Za-z_][A-Za-z_0-9]*)\s*$",
+                           text, re.M))
+    hits = []
+    for m in sorted(mods):
+        for rootdir in search_roots:
+            for cand in Path(rootdir).rglob(f"{m}.py"):
+                hits.append(cand)
+    hits = sorted(set(hits))
+    if len(hits) == 1:
+        return hits[0], p.name
+    return p, None
+
+
+def audit_file(path, envelope_keys=(), delegated_from=None):
     p = Path(path)
     try:
         text = p.read_text(encoding="utf-8", errors="ignore")
@@ -130,9 +175,13 @@ def audit_file(path, envelope_keys=()):
         return {"tool": p.name, "path": str(p), "error": str(exc)}
     kinds = classify(text)
     stem = p.stem.replace("_tool", "").replace("_launcher", "")
-    row = {"tool": p.name, "path": str(p), "kinds": sorted(kinds),
-           "lines": len(text.splitlines()), "have": {}, "missing": [],
-           "not_applicable": []}
+    row = {"tool": delegated_from or p.name, "path": str(p),
+           "kinds": sorted(kinds), "lines": len(text.splitlines()),
+           "have": {}, "missing": [], "not_applicable": []}
+    if delegated_from:
+        row["audited_as"] = p.name
+        row["note"] = (f"{delegated_from} is a shim; its capabilities are "
+                       f"whatever {p.name} has.")
     for name, spec in CAPABILITIES.items():
         applies = spec["applies_to"] in kinds
         if name == "envelope":
@@ -178,7 +227,9 @@ def run(root, hub="app/lab_hub.py", follow_launchers=True):
             sib = p.parent / p.name.replace("_launcher", "")
             if sib.exists():
                 p = sib
-        rows.append(audit_file(p, envelope_keys))
+        # A thin shim delegates; audit what it delegates to.
+        target, shim = resolve_shim(p, [root / "tools", root / "app"])
+        rows.append(audit_file(target, envelope_keys, delegated_from=shim))
 
     rows.sort(key=lambda r: -r.get("n_missing", 0))
     by_cap = {}

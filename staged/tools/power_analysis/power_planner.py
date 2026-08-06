@@ -20,6 +20,11 @@ def main():
             import tkinter as tk
             from tkinter import messagebox
             root = tk.Tk()
+            try:                      # error reporting
+                from process_ui import install_error_reporting
+                install_error_reporting(root)
+            except Exception as _e:   # never break the tool for this
+                print('error reporting unavailable:', _e)
             root.withdraw()
             messagebox.showerror(
                 "Power analysis / sample planner",

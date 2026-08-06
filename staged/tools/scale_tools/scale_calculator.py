@@ -62,6 +62,11 @@ def _show_result(root, result):
 
 def main():
     root = tk.Tk()
+    try:                      # error reporting
+        from process_ui import install_error_reporting
+        install_error_reporting(root)
+    except Exception as _e:   # never break the tool for this
+        print('error reporting unavailable:', _e)
     root.withdraw()
     path = filedialog.askopenfilename(
         title="Choose an image or movie for the scale bar (Cancel to skip)",

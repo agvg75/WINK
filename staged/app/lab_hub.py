@@ -595,6 +595,18 @@ class Hub(_BASE):
                                 command=self._load))
         controls.add(ttk.Button(controls, text="Plan a recording",
                                 command=lambda: show_acquisition_advisor(self)))
+        # Who is at this station. Set once here, stamped onto every run, so a
+        # result found in 2031 resolves to a person rather than to a machine.
+        # Placed on the Hub rather than in each tool because a student should
+        # answer it once a session, not once a tool.
+        try:
+            import operator_identity
+            field_widget = operator_identity.add_field(
+                controls, on_change=lambda op: self._operator_changed(op))
+            if field_widget is not None:
+                controls.add(field_widget)
+        except Exception as exc:      # never keep the Hub from opening
+            print("operator field unavailable:", exc)
         self.movie_lbl = ttk.Label(controls, text="No movie loaded", width=26)
         controls.add(self.movie_lbl)
         controls.add(ttk.Label(controls, text="Filter"))
@@ -1011,6 +1023,17 @@ class Hub(_BASE):
             self._external_path(tool) if tool.kind == "external"
             else resolve_tool_path(tool))
         self._launch(tool, path)
+
+    def _operator_changed(self, op):
+        """Note the change to the console. The field itself shows the name.
+
+        Deliberately not a dialog: the visible feedback is the full name
+        sitting beside the initials, which stays on screen for the whole
+        session. The failure to catch is a student working under the last
+        person's initials, and only a persistent display catches that.
+        """
+        print("operator:", op.get("initials") or "unset",
+              op.get("full_name") or "")
 
     def _all_tools_selected(self, _=None):
         value = self.all_tools_value.get()

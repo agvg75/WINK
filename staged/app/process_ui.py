@@ -393,6 +393,46 @@ def track_colour(track_id):
     return palette[int(track_id) % len(palette)]
 
 
+def describe_exception(exc_type, value, tb):
+    """One readable line naming the deepest frame in OUR code, plus the line.
+
+    NOT simply the last frame. When a numpy or pandas call raises, the last
+    frame is inside that library - "arraylike.py:402 in array_ufunc" - which
+    names the messenger and not the caller. A real report of exactly that kind
+    once cost most of an afternoon in guesses about which of our lines was
+    responsible, and two fixes were shipped against the wrong theory.
+
+    The library frame is still reported, in parentheses, because where it
+    finally broke is genuinely useful once you know whose call did it.
+
+    Shared by `install_error_reporting` and `CockpitApp`, which had drifted:
+    the cockpit path reported frames[-1] and so pointed fifteen tools at the
+    wrong file.
+    """
+    import traceback
+    from pathlib import Path
+
+    here = str(Path(__file__).resolve().parents[1]).replace("\\", "/").lower()
+    detail = f"{exc_type.__name__}: {value}"
+    try:
+        frames = traceback.extract_tb(tb)
+        if frames:
+            ours = [f for f in frames
+                    if str(f.filename).replace("\\", "/").lower().startswith(here)]
+            pick = ours[-1] if ours else frames[-1]
+            name = str(pick.filename).replace("\\", "/").rsplit("/", 1)[-1]
+            detail += f"  [{name}:{pick.lineno} in {pick.name}]"
+            if pick.line:
+                detail += f"\n    {pick.line.strip()}"
+            if ours and frames[-1] is not pick:
+                lib = str(frames[-1].filename).replace("\\", "/").rsplit("/", 1)[-1]
+                detail += (f"\n    (raised inside {lib}:{frames[-1].lineno} "
+                           f"in {frames[-1].name})")
+    except Exception:
+        pass
+    return detail
+
+
 def install_error_reporting(root, title="Action failed", log=None, status=None):
     """Make Tk callback failures visible in a window that has no process hood.
 
@@ -404,35 +444,10 @@ def install_error_reporting(root, title="Action failed", log=None, status=None):
     ``log`` and ``status`` are optional one-argument callables.
     """
     import traceback
-    from pathlib import Path
     from tkinter import messagebox
 
-    here = str(Path(__file__).resolve().parents[1]).replace("\\", "/").lower()
-
     def handler(exc_type, value, tb):
-        detail = f"{exc_type.__name__}: {value}"
-        try:
-            frames = traceback.extract_tb(tb)
-            if frames:
-                # Report the deepest frame in OUR code, not simply the last
-                # one. When a numpy or pandas call raises, the last frame is
-                # inside that library - "arraylike.py:402 in array_ufunc" -
-                # which names the messenger and not the caller. A real report
-                # of exactly that kind cost most of an afternoon in guesses
-                # about which of our lines was responsible.
-                ours = [f for f in frames
-                        if str(f.filename).replace("\\", "/").lower().startswith(here)]
-                pick = ours[-1] if ours else frames[-1]
-                name = str(pick.filename).replace("\\", "/").rsplit("/", 1)[-1]
-                detail += f"  [{name}:{pick.lineno} in {pick.name}]"
-                if pick.line:
-                    detail += f"\n    {pick.line.strip()}"
-                if ours and frames[-1] is not pick:
-                    lib = str(frames[-1].filename).replace("\\", "/").rsplit("/", 1)[-1]
-                    detail += (f"\n    (raised inside {lib}:{frames[-1].lineno} "
-                               f"in {frames[-1].name})")
-        except Exception:
-            pass
+        detail = describe_exception(exc_type, value, tb)
         for sink in (log, status):
             if sink is not None:
                 try:
@@ -693,15 +708,10 @@ class CockpitApp(tk.Tk):
 
     def _report_callback_exception(self, exc_type, value, tb):
         import traceback
-        detail = f"{exc_type.__name__}: {value}"
-        try:
-            frames = traceback.extract_tb(tb)
-            if frames:
-                last = frames[-1]
-                name = str(last.filename).replace("\\", "/").rsplit("/", 1)[-1]
-                detail += f"  [{name}:{last.lineno} in {last.name}]"
-        except Exception:
-            pass
+        # Shared with install_error_reporting. This used to report frames[-1],
+        # which names the library that raised rather than the line of ours
+        # that called it - the exact failure the shared helper exists to fix.
+        detail = describe_exception(exc_type, value, tb)
         try:
             self.log("Action failed", detail, status="failed")
         except Exception:

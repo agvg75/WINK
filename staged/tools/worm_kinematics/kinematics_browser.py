@@ -140,6 +140,11 @@ class KinematicsBrowser(rb.ResultsBrowser):
 
     def __init__(self, csv_path: Path):
         tk.Tk.__init__(self)                      # init the Tk root directly
+        try:                      # error reporting
+            from process_ui import install_error_reporting
+            install_error_reporting(self)
+        except Exception as _e:   # never break the tool for this
+            print('error reporting unavailable:', _e)
         self.title(f"Worm Kinematics Results Browser: {Path(csv_path).name}")
         self.geometry("1150x720")
 

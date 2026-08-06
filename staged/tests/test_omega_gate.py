@@ -30,9 +30,16 @@ def rec(name):
     p.write_text("x", encoding="utf-8")
     return p
 
+# --- three states, not two ------------------------------------------------
+check("the menu offers three answers", len(og.MENU) == 3)
+check("...with blank first, because it is the resting state",
+      og.MENU[0][0] == "" and og.MENU[0][1] == "unknown")
+check("...and blank reads as 'not inspected', not as 'no'",
+      og.MENU[0][2] == "not inspected")
+
 # --- the default ---------------------------------------------------------
 a = rec("a.csv")
-check("the checkbox is unchecked by default", og.DEFAULT_CONTAINS_OMEGAS is False)
+check("blank falls to no-omegas by default", og.DEFAULT_CONTAINS_OMEGAS is False)
 g = og.may_autocorrect(a)
 check("an unasked RGBCaMP recording may be corrected automatically",
       g["allowed"] is True, "which is the workflow: crawling and reversing only")
@@ -76,6 +83,38 @@ check("...and says the value is an assumption, not evidence",
       "nobody asserted this" in og.load(d)["confirmation_note"])
 check("a deliberately-set answer says so",
       "set this deliberately" in og.load(c)["confirmation_note"])
+
+# --- left blank is not "no" -----------------------------------------------
+g = rec("g.csv")
+og.record(g, "unknown", frames_viewed=0)
+gg = og.may_autocorrect(g)
+check("a recording left blank still follows the workflow default",
+      gg["allowed"] is True,
+      "refusing would stop a 24-file batch 24 times")
+check("...but is marked as not inspected",
+      gg["inspected"] is False and gg["confirmed"] is False)
+check("...and says the permission came from the protocol, not the file",
+      "evidence about the protocol, not about this file" in gg["why"])
+check("...while a confirmed 'no' is marked inspected",
+      og.may_autocorrect(c)["inspected"] is True)
+check("blank cannot be recorded as confirmed even if a caller asks",
+      og.load(g)["confirmed"] is False,
+      "OK on a blank menu must not manufacture evidence")
+check("...and blank flips with the default like any uninspected file",
+      og.may_autocorrect(g, default_contains=True)["allowed"] is False)
+
+# --- the aggregate that makes blank-follows-default safe -------------------
+s = og.batch_summary([a, c, g, b])
+check("the batch counts how many were corrected on nobody's word",
+      s["auto_corrected_uninspected"] == 2, f"{s['auto_corrected_uninspected']}")
+check("...separately from how many were corrected at all",
+      s["auto_corrected"] == 3)
+check("...and names the files, so a spot-check is possible",
+      len(s["uninspected_files"]) == 2)
+check("...with a headline that provokes a decision",
+      "before the numbers leave this session" in s["headline"])
+check("...and says so plainly when everyone did look",
+      "were inspected first" in og.batch_summary([c])["headline"])
 
 # --- the floor ------------------------------------------------------------
 check("the biological floor is one undulation period",

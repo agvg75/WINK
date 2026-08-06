@@ -42,6 +42,11 @@ def _arguments(argv=None):
 def main(argv=None):
     args = _arguments(argv)
     root = tk.Tk()
+    try:                      # error reporting
+        from process_ui import install_error_reporting
+        install_error_reporting(root)
+    except Exception as _e:   # never break the tool for this
+        print('error reporting unavailable:', _e)
     root.withdraw()
     source = args.source
     if source is None:

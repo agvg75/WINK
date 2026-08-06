@@ -34,6 +34,11 @@ def read_table(path, **kwargs):
 
 
 root=tk.Tk();root.withdraw()
+try:                      # error reporting
+    from process_ui import install_error_reporting
+    install_error_reporting(root)
+except Exception as _e:   # never break the tool for this
+    print('error reporting unavailable:', _e)
 files=filedialog.askopenfilenames(title="Choose plate_resultant.csv files",filetypes=[("Plate result CSV","*.csv")])
 if files:
  try:

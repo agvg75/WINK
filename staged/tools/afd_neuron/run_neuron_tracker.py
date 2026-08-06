@@ -33,6 +33,11 @@ except ModuleNotFoundError:
         import tkinter as tk
         from tkinter import messagebox
         r = tk.Tk(); r.withdraw()
+        try:                      # error reporting
+            from process_ui import install_error_reporting
+            install_error_reporting(r)
+        except Exception as _e:   # never break the tool for this
+            print('error reporting unavailable:', _e)
         messagebox.showerror("Wrong Python environment",
             "This tool needs the Lab tools Python environment.\n\n"
             "Start it with Track_Neuron.bat, or from the Lab Tools hub opened via "

@@ -77,6 +77,11 @@ def _run_gui():
     TONE_FG = {"ok": "#0f5132", "behaviour": "#664d03", "warn": "#58151c"}
 
     root = tk.Tk()
+    try:                      # error reporting
+        from process_ui import install_error_reporting
+        install_error_reporting(root)
+    except Exception as _e:   # never break the tool for this
+        print('error reporting unavailable:', _e)
     root.title("Probe a Movie")
     root.geometry("560x430")
 

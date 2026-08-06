@@ -18,17 +18,24 @@ A REVERSAL IS NOT AN OMEGA and does not threaten the correction. Backing up
 changes the direction the wave travels while the head stays the head. It leaves
 a different signature entirely and is detected separately.
 
-THE CHECKBOX IS UNCHECKED BY DEFAULT, which matches this lab's RGBCaMP
-workflow: students are instructed to analyse forward crawling and reversing
-only, so the common case really is "no omegas" and making them tick a box every
-time would be friction that teaches people to tick without looking.
+THREE ANSWERS, NOT TWO, per Andres: yes, no, and left blank meaning not
+inspected. A checkbox cannot express the third, and that is exactly the state
+most recordings are in - it collapses "I looked and there are none" into the
+same tick as "I never opened this", and those are different facts about the
+data. The menu starts blank, so the honest state is the resting state and a
+person has to do something to make a claim.
 
-BUT LEFT-AT-DEFAULT IS RECORDED SEPARATELY FROM CONFIRMED. Whether a person
-actually looked is a different fact from what the box says, and only one of
-them is evidence. `confirmed` is true only when someone set the box
-deliberately; a recording processed without anyone touching it carries
-`confirmed: false`, so a later reader can tell a checked assertion from an
-untouched default.
+LEFT BLANK STILL FOLLOWS THE WORKFLOW DEFAULT rather than blocking. Students
+here are instructed to analyse forward crawling and reversing only, so "no
+omegas" is a real if weak piece of evidence - it comes from the protocol rather
+than from this recording. Refusing every uninspected file would stop a 24-file
+batch twenty-four times and teach people to answer without looking, which is
+the failure the third state exists to prevent.
+
+WHAT MAKES THAT SAFE IS THAT IT IS COUNTED. `batch_summary` reports how many
+recordings were auto-corrected on an unconfirmed default, so "19 of 24 were
+corrected without anyone looking" is visible once, in aggregate, instead of
+being invisible in nineteen separate sidecars.
 
 THIS DEFAULT IS SAFE FOR RGBCaMP AND WRONG FOR GCaMP-ONLY DATA, which does
 contain omegas and coiling. The default belongs to the acquisition, not to the
@@ -42,13 +49,33 @@ from pathlib import Path
 
 ANSWERS = ("no_omegas", "contains_omegas", "unknown")
 
-# Unchecked = no omegas, per the RGBCaMP workflow. A tool whose
-# recordings DO contain omegas should pass default_contains=True.
+# What the three menu entries say, in the order they appear. Blank is first
+# because it is the resting state and should not look like a third opinion
+# tucked under two real ones.
+MENU = (("", "unknown", "not inspected"),
+        ("No", "no_omegas", "forward crawling and reversing only"),
+        ("Yes", "contains_omegas", "the animal turns around or coils"))
+
+# Blank falls to this, per the RGBCaMP workflow. A tool whose recordings DO
+# contain omegas should pass default_contains=True.
 DEFAULT_CONTAINS_OMEGAS = False
 
 
 class OmegaGateError(Exception):
     """Refusals that name the consequence."""
+
+
+def _who():
+    """Initials of whoever is at this station, or "" - never a guess."""
+    try:
+        import sys
+        app = str(Path(__file__).resolve().parents[2] / "app")
+        if app not in sys.path:
+            sys.path.insert(0, app)
+        import operator_identity
+        return operator_identity.initials()
+    except Exception:
+        return ""
 
 
 def gate_path(recording):
@@ -74,6 +101,13 @@ def record(recording, answer, by="", frames_viewed=0, note="",
         raise OmegaGateError(
             f"{answer!r} is not one of {ANSWERS}. An invented answer would "
             f"gate a correction that silently reverses real reorientations.")
+    # "Not inspected" can never be confirmed - that is what the word means.
+    # Without this, a caller could write an uninspected recording down as a
+    # deliberate assertion and the aggregate count would under-report.
+    if answer == "unknown":
+        confirmed = False
+    if not by:
+        by = _who()
     doc = {
         "recording": str(recording), "answer": answer, "asked": True,
         "answered_by": by, "answered_utc": _dt.datetime.now(
@@ -93,9 +127,11 @@ def record(recording, answer, by="", frames_viewed=0, note="",
             "contains_omegas": ("Real reorientations occur here, so an "
                                 "inversion may be the animal. Corrections go "
                                 "to review, never automatic."),
-            "unknown": ("Nobody answered. Treated exactly as "
-                        "'contains_omegas', because the failure that would "
-                        "cause is silent and the one it prevents is visible."),
+            "unknown": ("NOT INSPECTED. Nobody looked at this recording, so "
+                        "it falls to the workflow default - which is evidence "
+                        "about the protocol, not about this file. Counted in "
+                        "the batch summary so the size of that gap is visible "
+                        "in aggregate rather than buried per-file."),
         }[answer],
     }
     gate_path(recording).write_text(json.dumps(doc, indent=2), encoding="utf-8")
@@ -109,28 +145,73 @@ def may_autocorrect(recording, default_contains=DEFAULT_CONTAINS_OMEGAS):
     RGBCaMP workflow and must be set True for data that contains omegas.
     """
     doc = load(recording)
-    if not doc.get("asked"):
-        doc["answer"] = "contains_omegas" if default_contains else "no_omegas"
-    ok = doc.get("answer") == "no_omegas"
+    stated = doc.get("answer", "unknown")
+    # Never inspected and explicitly left blank are the SAME evidentiary state:
+    # nobody looked. Both fall to the workflow default; neither is confirmed.
+    uninspected = stated == "unknown" or not doc.get("asked")
+    effective = (("contains_omegas" if default_contains else "no_omegas")
+                 if uninspected else stated)
+    ok = effective == "no_omegas"
     return {
         "allowed": bool(ok),
-        "answer": doc.get("answer", "unknown"),
+        "answer": effective,
+        "stated": stated,
         "asked": bool(doc.get("asked")),
-        "confirmed": bool(doc.get("confirmed", False)),
-        "from_default": not bool(doc.get("asked")),
+        "inspected": not uninspected,
+        "confirmed": bool(doc.get("confirmed", False)) and not uninspected,
+        "from_default": bool(uninspected),
         "why": (
-            "Confirmed free of omegas, so any profile inversion is a tracker "
-            "artefact and can be corrected without review."
+            ("Confirmed free of omegas, so any profile inversion is a tracker "
+             "artefact and can be corrected without review."
+             if not uninspected else
+             "NOT INSPECTED - permitted by the workflow default, which says "
+             "these recordings hold forward crawling and reversing only. That "
+             "is evidence about the protocol, not about this file. Counted in "
+             "the batch summary.")
             if ok else
-            f"Answer is {doc.get('answer', 'unknown')!r}. Automatic correction "
-            f"is refused because a real reorientation here would be silently "
-            f"reversed - the animal turns, the profile inverts, and the tool "
-            f"would call the biology an error."),
+            (f"Answer is {effective!r}. Automatic correction is refused "
+             f"because a real reorientation here would be silently reversed - "
+             f"the animal turns, the profile inverts, and the tool would call "
+             f"the biology an error.")),
         "fallback": (None if ok else
                      "Use the duration test: an event clearing one undulation "
                      "period with a genuine curvature spike is a candidate "
                      "real turn and goes to a person."),
     }
+
+
+def batch_summary(recordings, default_contains=DEFAULT_CONTAINS_OMEGAS):
+    """How much of a batch was corrected on nobody's word.
+
+    This is the safety valve for letting blank follow the default. A per-file
+    sidecar saying "not inspected" is true and invisible; "19 of 24 recordings
+    were auto-corrected without anyone looking" is the same fact in the one
+    form that provokes a decision.
+    """
+    gates = [(r, may_autocorrect(r, default_contains)) for r in recordings]
+    auto = [r for r, g in gates if g["allowed"]]
+    unseen = [r for r, g in gates if g["allowed"] and not g["inspected"]]
+    refused = [r for r, g in gates if not g["allowed"]]
+    n = max(len(gates), 1)
+    out = {
+        "n_recordings": len(gates),
+        "auto_corrected": len(auto),
+        "auto_corrected_uninspected": len(unseen),
+        "refused_to_review": len(refused),
+        "inspected_fraction": round(1 - len(unseen) / n, 3),
+        "uninspected_files": [str(r) for r in unseen],
+        "operator": _who() or None,
+    }
+    if unseen:
+        out["headline"] = (
+            f"{len(unseen)} of {len(gates)} recordings were auto-corrected "
+            f"without anyone confirming they contain no omegas. The default "
+            f"is the RGBCaMP protocol, not an observation about these files. "
+            f"Spot-check a few before the numbers leave this session.")
+    else:
+        out["headline"] = (
+            f"All {len(auto)} auto-corrected recordings were inspected first.")
+    return out
 
 
 def biological_floor(fps, undulation_hz=0.2):
@@ -234,29 +315,41 @@ def ask(parent, recording, frames=None, fps=None, on_answer=None):
             win.destroy()
         return go
 
-    # A CHECKBOX, unchecked by default. Ticking it says omegas are present.
-    contains = tk.BooleanVar(value=bool(DEFAULT_CONTAINS_OMEGAS))
-    ttk.Checkbutton(bar, variable=contains,
-                    text="This recording contains omegas or coiling"
-                    ).pack(side="left")
+    # THREE STATES, starting blank. Blank is not a third opinion - it is the
+    # absence of one, and it is the honest resting state for a recording
+    # nobody has scrubbed through.
+    labels = [lbl for lbl, _key, _hint in MENU]
+    hints = {lbl: hint for lbl, _key, hint in MENU}
+    keys = {lbl: key for lbl, key, _hint in MENU}
 
-    def done():
-        a = "contains_omegas" if contains.get() else "no_omegas"
+    ttk.Label(bar, text="Contains omegas:").pack(side="left")
+    choice = tk.StringVar(value="")
+    combo = ttk.Combobox(bar, textvariable=choice, values=labels,
+                         state="readonly", width=6)
+    combo.pack(side="left", padx=(6, 8))
+
+    hint = ttk.Label(bar, foreground="#666", text=hints[""])
+    hint.pack(side="left")
+
+    def touched(_e=None):
+        state["touched"] = True
+        hint.configure(text=hints.get(choice.get(), ""))
+    combo.bind("<<ComboboxSelected>>", touched)
+
+    def commit(confirmed):
+        a = keys.get(choice.get(), "unknown")
         state["answer"] = a
-        # touched=True only if the box was moved off its default, or OK was
-        # pressed - closing the window is not a confirmation.
         record(recording, a, frames_viewed=state["viewed"],
-               confirmed=state.get("touched", True))
+               confirmed=bool(confirmed) and a != "unknown")
         if on_answer:
             on_answer(a)
         win.destroy()
 
-    def closed():
-        state["answer"] = "no_omegas" if not contains.get() else "contains_omegas"
-        record(recording, state["answer"], frames_viewed=state["viewed"],
-               confirmed=False)
-        win.destroy()
-
-    ttk.Button(bar, text="OK", command=done).pack(side="right")
-    win.protocol("WM_DELETE_WINDOW", closed)
+    # Pressing OK on a blank menu is still not an assertion - `record` forces
+    # confirmed=False for "unknown", so the button cannot manufacture evidence.
+    ttk.Button(bar, text="OK",
+               command=lambda: commit(state.get("touched", False))
+               ).pack(side="right")
+    # Closing the window is never a confirmation, whatever the menu shows.
+    win.protocol("WM_DELETE_WINDOW", lambda: commit(False))
     return win, state

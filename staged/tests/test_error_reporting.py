@@ -66,6 +66,60 @@ check("...and shows the offending source line",
 check("the library frame is kept as context, not discarded",
       "raised inside" in text and ".py:" in text.split("raised inside")[-1])
 
+# --- the cockpit path used to differ, and was wrong ------------------------
+# CockpitApp sets report_callback_exception in __init__, so 15 tools HAD error
+# reporting - but it reported frames[-1], which is the library that raised.
+# Same capability, opposite outcome, and the audit could not see the difference.
+src = (ROOT / "app" / "process_ui.py").read_text(encoding="utf-8")
+check("both paths share one helper",
+      src.count("describe_exception(exc_type, value, tb)") >= 2)
+check("...and the cockpit no longer reports frames[-1] itself",
+      "last = frames[-1]" not in src,
+      "that pointed every cockpit tool at the wrong file")
+
+
+def only_ours():
+    raise RuntimeError("boom")
+
+
+try:
+    only_ours()
+except Exception:
+    d2 = process_ui.describe_exception(*sys.exc_info())
+check("a failure with no library involved still names the line",
+      "only_ours" in d2 and "RuntimeError: boom" in d2)
+check("...without inventing a library aside",
+      "raised inside" not in d2,
+      "the parenthetical is only meaningful when the frames differ")
+
+# --- the tools patched in this pass ----------------------------------------
+PATCHED = [
+    "tools/population_orientation/aggregate_plates_tool.py",
+    "tools/worm_kinematics/kinematics_browser.py",
+    "tools/afd_neuron/run_neuron_tracker.py",
+    "tools/scale_tools/scale_calculator.py",
+    "tools/segmentation_review_tool.py",
+    "tools/worm_kinematics/dic_tracker/run_dic_kinematics.py",
+    "tools/movie/convert_gui.py",
+    "tools/movie/movie_probe_gui.py",
+    "tools/power_analysis/power_planner.py",
+]
+texts = {p: (ROOT / p).read_text(encoding="utf-8") for p in PATCHED}
+check("every patched tool installs reporting",
+      not [p for p in PATCHED if "install_error_reporting" not in texts[p]])
+check("...guarded, so a sys.path problem cannot break a working tool",
+      not [p for p in PATCHED if "error reporting unavailable" not in texts[p]],
+      "breaking a tool to add diagnostics would be a bad trade")
+
+import py_compile   # noqa: E402
+bad = []
+for p in PATCHED:
+    try:
+        py_compile.compile(str(ROOT / p), doraise=True)
+    except Exception as exc:
+        bad.append(f"{p}: {exc}")
+check("every patched tool still compiles", not bad, str(bad))
+
 print()
 failed = [n for n, ok, _ in results if not ok]
 print(f"{len(results) - len(failed)} of {len(results)} checks passed")
