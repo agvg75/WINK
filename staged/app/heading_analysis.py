@@ -326,6 +326,93 @@ def analyse(assays, field, *, window_s=WINDOW_S, interval_s=INTERVAL_S,
     return out
 
 
+def axial_statistics(angles_deg):
+    """Alignment with the field AXIS, ignoring which way along it.
+
+    Andres asked about the relationship to field axis versus polarity. They are
+    different questions and the standard test answers only the second.
+
+    A POPULATION PERFECTLY ALIGNED TO THE AXIS BUT SPLIT 50/50 ON DIRECTION
+    SCORES r = 0 ON A RAYLEIGH TEST - indistinguishable from random, when in
+    fact every animal is lying along the field line. That is the same failure
+    as pooling across the 180-degree reversal: two opposite strong preferences
+    cancelling into an apparent absence.
+
+    The doubling method (Batschelet): double every angle, do the circular
+    statistics there, halve the resulting mean. Doubling maps 0 and 180 degrees
+    onto the same point, which is exactly what "same axis, either direction"
+    means.
+
+    THIS MATTERS FOR THE REVERSAL SPECIFICALLY. If early animals head 183
+    degrees and late ones head 3, that is one axis with the polarity flipped -
+    not two unrelated preferences. Axial alignment would then be stable across
+    the whole assay while polar preference reverses, and those are very
+    different biological claims.
+    """
+    values = np.asarray(angles_deg, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size < 2:
+        return {"axis_deg": None, "axial_r": None, "axial_p": None, "n":
+                int(values.size)}
+    doubled = np.degrees(np.angle(np.exp(2j * np.radians(values))))
+    stat = mean_resultant(doubled)
+    ray = rayleigh_test(doubled)
+    axis = wrap_degrees(stat["mean_angle_deg"] / 2.0)
+    return {
+        # Reported in [0, 180): an axis has no head or tail, so 200 degrees
+        # and 20 degrees are the same axis and must not print differently.
+        "axis_deg": float(axis % 180.0),
+        "axial_r": stat["resultant_length"],
+        "axial_p": ray["p"],
+        "axially_aligned": bool(ray["p"] is not None and ray["p"] < 0.05),
+        "n": stat["n"],
+    }
+
+
+def axis_versus_polarity(angles_deg):
+    """Is the population aligned, directed, both, or neither?
+
+    Four outcomes, and only one of them is what a Rayleigh test alone reports.
+    """
+    ax = axial_statistics(angles_deg)
+    polar = mean_resultant(angles_deg)
+    pray = rayleigh_test(angles_deg)
+    directed = bool(pray["p"] is not None and pray["p"] < 0.05)
+    aligned = bool(ax["axially_aligned"])
+
+    if aligned and directed:
+        verdict = "directed"
+        why = ("The population lies along the field axis AND prefers one "
+               "direction along it.")
+    elif aligned and not directed:
+        verdict = "axial_only"
+        why = ("The population is aligned with the field axis but split on "
+               "which way along it. A Rayleigh test alone reports this as no "
+               "preference - r={:.2f}, p={:.3f} - which is wrong in the way "
+               "that matters: the animals are not ignoring the field, they "
+               "are lying along it in both directions. Bimodal orientation is "
+               "a known magnetoreception outcome, not a failed "
+               "experiment.".format(polar["resultant_length"] or 0.0,
+                                    pray["p"] if pray["p"] is not None else 1.0))
+    elif directed and not aligned:
+        verdict = "directed_without_axis"
+        why = ("Directed but not axially concentrated, which is unusual - a "
+               "directed population is normally also axial. Check for a few "
+               "extreme headings dragging the mean.")
+    else:
+        verdict = "unoriented"
+        why = "Neither aligned with the axis nor directed along it."
+
+    return {
+        "verdict": verdict, "why": why,
+        "axis_deg": ax["axis_deg"], "axial_r": ax["axial_r"],
+        "axial_p": ax["axial_p"],
+        "polar_deg": polar["mean_angle_deg"],
+        "polar_r": polar["resultant_length"], "polar_p": pray["p"],
+        "n": ax["n"],
+    }
+
+
 def _max_angular_spread(angles):
     a = np.radians(np.asarray(angles, dtype=float))
     best = 0.0
