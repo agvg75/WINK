@@ -395,20 +395,31 @@ def food_state(offset_s, threshold_s=ENHANCED_SLOWING_S):
 
 
 def donut_crossing(tracks, center_xy_mm, inner_radius_mm, *,
-                   body_radius_mm=None, criterion="fully_outside",
-                   recording_duration_s=None):
+                   body_radius_mm=None, body_length_mm=None,
+                   criterion="fully_outside", recording_duration_s=None):
     """Time until each worm has fully crossed the inner edge of the hole.
 
     Andres: worms start at the centre, surrounded by a donut magnet; the user
     draws the inner edge and the program counts time to worms FULLY crossing
     it.
 
-    "FULLY" IS A CHOICE AND IT IS RECORDED. A centroid crossing and a whole
-    -body crossing differ by about a worm length - roughly a millimetre in an
-    adult - which on a hole of a few millimetres is a large fraction of the
-    measurement. `body_radius_mm` makes the difference explicit; without it the
-    criterion falls back to the centroid and says so, rather than quietly
-    measuring something else.
+    "FULLY" IS HALF A BODY LENGTH FROM THE CENTROID, per Andres. The tracked
+    point is the centroid, and the furthest part of the animal from it is half
+    its length away - so a worm is fully outside once its centroid clears the
+    edge by that much. Pass `body_length_mm` (about 1 mm for an adult) and the
+    half is taken here; `body_radius_mm` says the same thing directly.
+
+    THIS IS NOT A DETAIL ON A SMALL HOLE. A 5 mm hole with a 1 mm animal means
+    the centroid criterion fires a full 10% of the radius early, and every
+    crossing time is short by however long the worm takes to travel half its
+    own length. Without either measurement the criterion falls back to the
+    centroid and says so, rather than quietly measuring something else.
+
+    IT IS A WORST CASE, DELIBERATELY. Half the body length is the distance to
+    the furthest point only when the animal is straight and pointing radially
+    outward; a curled or tangentially oriented worm clears the line sooner. So
+    these times are the latest defensible ones, which is the right direction
+    for a threshold nobody can observe directly.
 
     ANIMALS THAT NEVER CROSS ARE CENSORED, NOT SLOW. This is a survival-time
     measurement, and the commonest way to ruin one is to drop the non-crossers
@@ -427,6 +438,16 @@ def donut_crossing(tracks, center_xy_mm, inner_radius_mm, *,
             "criterion must be 'fully_outside' or 'centroid'. They differ by "
             "about a worm length, which on a hole of a few millimetres is a "
             "large fraction of the answer.")
+    if body_radius_mm in (None, "", 0) and body_length_mm not in (None, "", 0):
+        body_radius_mm = float(body_length_mm) / 2.0
+    elif (body_radius_mm not in (None, "", 0)
+          and body_length_mm not in (None, "", 0)
+          and abs(float(body_radius_mm) - float(body_length_mm) / 2) > 1e-9):
+        raise ValueError(
+            f"body_radius_mm={body_radius_mm} and body_length_mm="
+            f"{body_length_mm} disagree. Give one - the radius is half the "
+            f"length - or the crossing threshold depends on which the code "
+            f"happens to prefer.")
     pad = 0.0
     used = criterion
     note = None

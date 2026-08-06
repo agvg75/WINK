@@ -26,7 +26,7 @@ from magnetotaxis import analyze_magnetotaxis
 from run_feedback import RunFeedbackStore, prompt_post_run_feedback
 from stimulus_fields import (
     ChemicalProvider, MagnetProvider, NullProvider, ThermalLinearProvider,
-    ThermalRadialProvider, UniformFieldProvider)
+    RingMagnetProvider, ThermalRadialProvider, UniformFieldProvider)
 from thermotaxis import analyze_thermotaxis
 
 # Result tables are read through read_table. Under pandas 3 a numeric column
@@ -139,6 +139,25 @@ def configuration_template(assay):
             #    "rotation_schedule": [],      # [{"at_s": 300,
             #                                  #   "rotate_deg": 90}]
             #    "uniformity_tolerance_percent": 5.0}
+            # For the donut assay:
+            #   {"source_type": "ring",
+            #    "inner_diameter_mm": 10.0,   # the hole the worms start in;
+            #                                 # EDIT for a different magnet
+            #    "outer_diameter_mm": 30.0,
+            #    "height_mm": 5.0,
+            #    "remanence_t": 1.32,         # 1.32 T is N42
+            #    "center_xy_mm": [25.0, 25.0]}
+            # and set donut.body_length_mm so "fully crossed" means the whole
+            # animal rather than its centroid.
+            "donut": {
+                "inner_diameter_mm": 10.0, "outer_diameter_mm": 30.0,
+                "height_mm": 5.0, "remanence_t": 1.32,
+                "body_length_mm": 1.0,
+                "_note": ("Defaults describe one ring magnet. Edit them when "
+                          "a different magnet is used - the field everywhere "
+                          "depends on all four, and the crossing times depend "
+                          "on the body length."),
+            },
             "provider": {
                 "source_type": "magnet",
                 "shape": "disc", "dimensions_mm": [50.8, 6.35],
@@ -230,6 +249,8 @@ def build_provider(assay, config):
         kind = str(values.pop("source_type", "magnet")).lower()
         if kind in {"uniform", "uniform_field", "coil", "cage", "helmholtz"}:
             return UniformFieldProvider(**values)
+        if kind in {"ring", "donut", "ring_magnet"}:
+            return RingMagnetProvider(**values)
         if kind in {"magnet", "permanent_magnet", "dipole"}:
             return MagnetProvider(**values)
         raise ValueError(
