@@ -687,8 +687,85 @@ def recompute_events_from_tracks(results_dir, tracks=None, fps=None,
     return event_table, tracks, out
 
 
+# An adult is roughly 1.15 mm long and 80 um wide, so about 92,000 um2 of
+# segmented area. The band below is deliberately generous - it spans a small
+# L4 through a large, thick or partly coiled adult - because these are
+# REJECTION gates: their job is to exclude debris and merged pairs, not to
+# grade animals.
+WORM_MIN_AREA_UM2 = 20_000
+WORM_MAX_AREA_UM2 = 300_000
+# An adult crawls at roughly 0.15 mm/s, so 0.5 mm between frames is generous
+# at any ordinary frame rate while staying well below the spacing between
+# animals on a plate.
+MAX_LINK_UM = 500.0
+# Below this a blob is too few pixels for its area to mean anything, whatever
+# the physical size says.
+MIN_USABLE_AREA_PX = 25
+
+
+def area_gates_for(um_per_px, *, min_area=None, max_area=None,
+                   max_link_px=None):
+    """Turn physical worm size into pixel gates for THIS recording.
+
+    THE BUG THIS FIXES. The gates were fixed pixel counts - min_area=40,
+    max_area=2500 - while the scale varies by more than an order of magnitude
+    across this lab's recordings. They only admit an adult worm between about
+    20 and 10 um/px. At 2.5 um/px, which is an ordinary 4K recording of a
+    plate, a worm covers 14,720 px against a 2,500 px ceiling: every animal is
+    REJECTED and only debris that happens to fall in the 40-2500 band is
+    tracked. The tool does not fail, it tracks the wrong objects.
+
+    `max_link_px` had the same defect. Sixty pixels is 150 um at one scale and
+    3 mm at another - generous in one case, and wide enough to link across
+    neighbouring animals in the other.
+
+    Explicit values are always honoured. Someone who has tuned gates for a
+    particular rig should not have them silently overridden.
+    """
+    scale = float(um_per_px)
+    if scale <= 0:
+        raise ValueError(
+            "A positive um/px is required to set area gates. Fixed pixel "
+            "gates are what this replaces - they admit an adult worm only "
+            "within a narrow band of magnifications and silently track debris "
+            "outside it.")
+    px_per_um2 = 1.0 / (scale * scale)
+    derived_min = max(MIN_USABLE_AREA_PX,
+                      int(WORM_MIN_AREA_UM2 * px_per_um2))
+    derived_max = int(WORM_MAX_AREA_UM2 * px_per_um2)
+    out = {
+        "min_area": int(min_area) if min_area is not None else derived_min,
+        "max_area": int(max_area) if max_area is not None else derived_max,
+        "max_link_px": (int(max_link_px) if max_link_px is not None
+                        else max(3, int(MAX_LINK_UM / scale))),
+        "um_per_px": scale,
+        "derived": {"min_area": derived_min, "max_area": derived_max},
+        "overridden": [k for k, v in (("min_area", min_area),
+                                      ("max_area", max_area),
+                                      ("max_link_px", max_link_px))
+                       if v is not None],
+        "warnings": [],
+    }
+    expected_adult_px = 92_000 * px_per_um2
+    if not out["min_area"] <= expected_adult_px <= out["max_area"]:
+        out["warnings"].append(
+            f"At {scale:g} um/px an adult worm covers about "
+            f"{expected_adult_px:,.0f} px, which falls OUTSIDE the gates "
+            f"{out['min_area']}-{out['max_area']}. Every animal would be "
+            f"rejected and only objects of the wrong size tracked. This is "
+            f"the failure the fixed 40-2500 defaults produced at any scale "
+            f"finer than about 8 um/px.")
+    if derived_max < MIN_USABLE_AREA_PX * 2:
+        out["warnings"].append(
+            f"At {scale:g} um/px even a large adult is only "
+            f"{derived_max} px, which is too few for an area gate to "
+            f"discriminate anything. This is a magnification problem rather "
+            f"than a threshold problem.")
+    return out
+
+
 def analyze(folder, fps, um_per_px, start_roi, lawn_rois, output_dir=None,
-            min_area=40, max_area=2500, max_link_px=60,
+            min_area=None, max_area=None, max_link_px=None,
             before_s=10.0, after_s=10.0, pre_entry_gap_s=0.0,
             outside_buffer_px=10.0, min_window_fraction=0.70,
             sample_background=31, max_stitch_gap_s=4.0,
@@ -697,6 +774,20 @@ def analyze(folder, fps, um_per_px, start_roi, lawn_rois, output_dir=None,
             progress=None):
     files = list_frames(folder)
     fps, scale = float(fps), float(um_per_px)
+    # Derive the pixel gates from this recording's scale unless the caller
+    # supplied them. Fixed pixel gates only admit an adult worm between about
+    # 20 and 10 um/px; outside that band every animal is rejected and debris
+    # is tracked instead.
+    _gates = area_gates_for(scale, min_area=min_area, max_area=max_area,
+                            max_link_px=max_link_px)
+    min_area = _gates["min_area"]
+    max_area = _gates["max_area"]
+    max_link_px = _gates["max_link_px"]
+    for _w in _gates["warnings"]:
+        if progress:
+            progress(f"WARNING: {_w}")
+        else:
+            print("WARNING:", _w)
     acquisition = AcquisitionMetadata(
         fps, "declared", scale, "declared", None,
         "not_applicable").validate()
