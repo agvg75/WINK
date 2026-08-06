@@ -164,6 +164,55 @@ except sd.DriftError as exc:
     check("...naming that fractional change is undefined",
           "fractional change is undefined" in str(exc))
 
+# --- the Reagent Hub is where thaws are recorded -----------------------------
+# Andres: Mackenzie records a thaw in the hub, and it is passed to WINK. The
+# hub holds the freezer, so it holds the log; this is where the two meet.
+payload = {"thaws": [
+    {"strain": "N2", "thaw_date": "2025-01-10", "outcome": "recovered",
+     "is_refresh": True, "thawed_by": "MJ", "source_copy": "copy_2"},
+    {"strain": "N2", "thaw_date": "2025-06-10", "outcome": "failed",
+     "is_refresh": False},
+    {"strain": "N2", "thaw_date": "2025-07-01", "outcome": "in_progress",
+     "is_refresh": False},
+    {"strain": "dys-1", "thaw_date": "2025-03-01", "outcome": "recovered",
+     "is_refresh": True},
+]}
+anch = sd.thaw_records_from_hub(payload)
+check("successful thaws become drift anchors", anch["n_anchors"] == 2)
+check("a FAILED thaw is not an anchor", anch["n_skipped"] == 2)
+check("...naming that it never restarted the line",
+      any("did not restart the line" in s_["reason"]
+          for s_ in anch["skipped"]),
+      "treating it as a reset would make a real drift appear to vanish")
+check("...but is still reported, since it explains a drift that did not reset",
+      "explains a drift that did not reset" in anch["why"])
+check("the anchor carries who thawed it and from which copy",
+      anch["anchors"][0]["thawed_by"] == "MJ" and
+      anch["anchors"][0]["source_copy"] == "copy_2",
+      "copies frozen on different dates are different stocks")
+
+rows_h = [rec("N2", "speed_mm_s", -30, 0.11),
+          rec("N2", "speed_mm_s", 30, 0.10),
+          rec("dys-1", "speed_mm_s", 100, 0.05)]
+stamped = sd.attach_thaws(rows_h, anch["anchors"])
+before, after = stamped[0], stamped[1]
+check("a measurement taken BEFORE any thaw gets no anchor",
+      "thaw_date" not in before,
+      "otherwise old measurements look like they came from current stock")
+check("a measurement after a thaw is stamped with it",
+      after.get("thaw_date") == "2025-01-10")
+check("...and with how long the line had been growing",
+      after.get("days_since_thaw") == 21)
+check("each strain gets its own thaw, not the latest overall",
+      stamped[2].get("thaw_date") == "2025-03-01")
+
+check("an empty payload yields no anchors and does not raise",
+      sd.thaw_records_from_hub({"thaws": []})["n_anchors"] == 0)
+check("a row missing its date is skipped with a reason",
+      any("no strain or no date" in s_["reason"] for s_ in
+          sd.thaw_records_from_hub(
+              {"thaws": [{"strain": "N2", "is_refresh": True}]})["skipped"]))
+
 print()
 failed = [n for n, ok, _ in results if not ok]
 print(f"{len(results) - len(failed)} of {len(results)} checks passed")

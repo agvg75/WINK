@@ -283,3 +283,75 @@ def report(records, metrics, strains, *, since_thaw=True):
             "No common-mode drift found, so any per-strain trend here is at "
             "least consistent with that strain's own history."),
     }
+
+
+def thaw_records_from_hub(payload):
+    """Turn the Reagent Hub's /api/thaws/ export into drift-anchor records.
+
+    Andres: Mackenzie records a thaw in the hub, and it is passed to WINK.
+    The hub is where the freezer lives, so it is where the thaw log belongs;
+    this is the only place the two systems meet.
+
+    ONLY SUCCESSFUL THAWS BECOME ANCHORS. The export deliberately includes
+    failed and in-progress attempts, because a gap in the record and a thaw
+    that failed mean different things when a drift does not reset - but an
+    attempt that did not recover never restarted the line, and treating it as
+    a reset would make a real drift appear to vanish at exactly the moment
+    somebody tried to fix it.
+    """
+    rows = payload.get("thaws", payload) if isinstance(payload, dict) else payload
+    out, skipped = [], []
+    for t in rows or []:
+        strain = t.get("strain")
+        when = t.get("thaw_date")
+        if not strain or not when:
+            skipped.append({**t, "reason": "no strain or no date"})
+            continue
+        if not t.get("is_refresh"):
+            skipped.append({**t, "reason": f"outcome {t.get('outcome')!r} "
+                                           f"did not restart the line"})
+            continue
+        out.append({"strain": strain, "thaw_date": when,
+                    "thawed_by": t.get("thawed_by"),
+                    "source_copy": t.get("source_copy")})
+    return {
+        "anchors": out, "n_anchors": len(out),
+        "skipped": skipped, "n_skipped": len(skipped),
+        "why": (f"{len(out)} successful thaw(s) will anchor drift analysis; "
+                f"{len(skipped)} attempt(s) were recorded but did not restart "
+                f"a line, so they are not anchors. A failed thaw is still "
+                f"worth knowing about - it explains a drift that did not "
+                f"reset when somebody expected it to."),
+    }
+
+
+def attach_thaws(records, anchors):
+    """Stamp measurement records with the thaw that was current when taken.
+
+    A measurement inherits the MOST RECENT thaw at or before its own date, not
+    the latest one overall - otherwise every historical measurement would look
+    as though it came from the current stock, and drift within an older line
+    would be attributed to the newer one.
+    """
+    by_strain = {}
+    for a in anchors:
+        by_strain.setdefault(str(a["strain"]).lower(), []).append(
+            _days(a["thaw_date"]))
+    for v in by_strain.values():
+        v.sort()
+
+    out = []
+    for r in records:
+        rec = dict(r)
+        days = by_strain.get(str(r.get("strain", "")).lower(), [])
+        try:
+            when = _days(r["date"])
+        except Exception:
+            out.append(rec)
+            continue
+        prior = [d for d in days if d <= when]
+        if prior:
+            rec["thaw_date"] = _dt.date.fromordinal(prior[-1]).isoformat()
+            rec["days_since_thaw"] = when - prior[-1]
+        out.append(rec)
+    return out
