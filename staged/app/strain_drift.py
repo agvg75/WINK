@@ -355,3 +355,118 @@ def attach_thaws(records, anchors):
             rec["days_since_thaw"] = when - prior[-1]
         out.append(rec)
     return out
+
+
+# Roughly how often a line is refreshed here. A reminder, not a rule.
+REFRESH_REMINDER_DAYS = 90
+
+
+def anchor_for(strain, records, anchors=(), today=None):
+    """When did this line last start over? A recorded thaw, or first sight.
+
+    Andres: if a student never enters a thaw date, day zero is the day the
+    strain first appears, and three months later the assistant can say "it has
+    been AT LEAST three months since you thawed this strain".
+
+    "AT LEAST" IS DOING REAL WORK IN THAT SENTENCE and the code has to keep it.
+    A recorded thaw is a known start. First sight is a LOWER BOUND: the line
+    may have been growing for a year before anybody measured it, so the true
+    elapsed time is greater than or equal to what is reported and never less.
+    Any drift measured from it is a lower bound too. Reporting a lower bound as
+    though it were a date would turn "we do not know when this was thawed" into
+    a false precision that reads exactly like knowledge.
+    """
+    today = _days(today) if today else _dt.date.today().toordinal()
+    real = [a for a in anchors
+            if str(a.get("strain", "")).lower() == str(strain).lower()]
+    days_list = []
+    for a in real:
+        try:
+            days_list.append(_days(a["thaw_date"]))
+        except Exception:
+            continue
+    if days_list:
+        day = max(d for d in days_list)
+        return {
+            "strain": strain, "kind": "thaw", "day": day,
+            "date": _dt.date.fromordinal(day).isoformat(),
+            "is_lower_bound": False,
+            "days_since": today - day,
+            "why": "Anchored to a recorded thaw, so this is a known start.",
+        }
+
+    seen = [d for d, _v, _r in
+            sorted({(_days(r["date"]), 0, None) for r in records
+                    if str(r.get("strain", "")).lower() == str(strain).lower()
+                    and r.get("date")})]
+    if not seen:
+        return {"strain": strain, "kind": "none", "is_lower_bound": None,
+                "why": (f"No thaw recorded and no measurements for {strain}, "
+                        f"so there is nothing to count from.")}
+    day = min(seen)
+    return {
+        "strain": strain, "kind": "first_seen", "day": day,
+        "date": _dt.date.fromordinal(day).isoformat(),
+        "is_lower_bound": True,
+        "days_since": today - day,
+        "why": (f"No thaw is recorded for {strain}, so the clock starts at the "
+                f"first measurement. The line may have been growing long "
+                f"before that, so this is a LOWER BOUND - the true time since "
+                f"thawing is at least this, and possibly much more."),
+    }
+
+
+def since_thaw_message(anchor, *, reminder_days=REFRESH_REMINDER_DAYS,
+                       generation_days=3.5):
+    """The sentence the assistant says, with its certainty intact."""
+    if anchor.get("kind") == "none":
+        return {"say": False, "why": anchor["why"]}
+    days = anchor["days_since"]
+    months = days / 30.4
+    gens = days / float(generation_days)
+    hedge = "at least " if anchor["is_lower_bound"] else ""
+    line = (f"{anchor['strain']} has been growing {hedge}{months:.0f} months "
+            f"since it was last refreshed - {hedge}{gens:.0f} generations.")
+    if anchor["is_lower_bound"]:
+        line += (" No thaw date is recorded, so the count starts from the "
+                 "first measurement and the real figure can only be larger. "
+                 "Entering the thaw date in the Reagent Hub would make this "
+                 "exact.")
+    due = days >= reminder_days
+    if due:
+        line += (f" That is past the {reminder_days}-day mark this lab "
+                 f"refreshes on. At roughly one deleterious mutation every "
+                 f"three generations, a line this old has had room to drift - "
+                 f"worth thawing fresh stock before it shows up in results.")
+    return {
+        "say": True, "line": line, "days": days,
+        "months": round(months, 1), "generations": round(gens, 1),
+        "is_lower_bound": anchor["is_lower_bound"],
+        "past_reminder": bool(due),
+    }
+
+
+def refresh_status(strains, records, anchors=(), *, today=None,
+                   reminder_days=REFRESH_REMINDER_DAYS):
+    """Which lines are overdue, and which of those we are only guessing about."""
+    rows = []
+    for s in strains:
+        a = anchor_for(s, records, anchors, today=today)
+        msg = since_thaw_message(a, reminder_days=reminder_days)
+        if msg["say"]:
+            rows.append({"strain": s, **msg, "anchor_kind": a["kind"]})
+    overdue = [r for r in rows if r["past_reminder"]]
+    guessed = [r for r in rows if r["is_lower_bound"]]
+    return {
+        "strains": rows,
+        "n_overdue": len(overdue),
+        "n_lower_bound": len(guessed),
+        "overdue": [r["strain"] for r in overdue],
+        "note": (f"{len(guessed)} of {len(rows)} strain(s) have no recorded "
+                 f"thaw, so their ages are lower bounds - each is at least "
+                 f"that old and may be much older. Entering thaw dates in the "
+                 f"Reagent Hub converts a floor into a fact."
+                 if guessed else
+                 "Every strain here has a recorded thaw, so these ages are "
+                 "exact."),
+    }

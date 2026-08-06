@@ -213,6 +213,68 @@ check("a row missing its date is skipped with a reason",
           sd.thaw_records_from_hub(
               {"thaws": [{"strain": "N2", "is_refresh": True}]})["skipped"]))
 
+# --- a missing thaw date starts the clock rather than blocking ---------------
+# Andres: if a student does not enter a thaw date, day zero is today, and
+# three months later the assistant can say "it has been AT LEAST three months
+# since you thawed this strain". "At least" is doing real work in that
+# sentence, and the code has to keep it.
+TODAY = dt.date(2025, 8, 6)
+seen_only = [rec("N2", "speed_mm_s", 90, 0.11)]      # first seen 2025-04-01
+implied = sd.anchor_for("N2", seen_only, [], today=TODAY)
+check("with no thaw recorded, first sight starts the clock",
+      implied["kind"] == "first_seen")
+check("...and it is marked a LOWER BOUND",
+      implied["is_lower_bound"] is True,
+      "the line may have been growing long before anyone measured it")
+check("...naming that the true figure can only be larger",
+      "possibly much more" in implied["why"])
+
+msg = sd.since_thaw_message(implied)
+check("the sentence says 'at least'", "at least" in msg["line"])
+check("...and offers the fix", "Reagent Hub would make this exact"
+      in msg["line"])
+check("...and converts days into generations, which is the unit that matters",
+      "generations" in msg["line"],
+      "one deleterious mutation every three generations")
+
+known = sd.anchor_for("N2", seen_only,
+                      [{"strain": "N2", "thaw_date": "2025-01-10"}],
+                      today=TODAY)
+check("a recorded thaw supersedes first sight",
+      known["kind"] == "thaw" and known["is_lower_bound"] is False)
+check("...and the hedge disappears",
+      "at least" not in sd.since_thaw_message(known)["line"],
+      "a known date is not a floor")
+check("...giving a longer elapsed time than the floor did",
+      known["days_since"] > implied["days_since"],
+      "which is exactly why the floor was only a floor")
+
+recent = sd.anchor_for("N2", [rec("N2", "speed_mm_s", 210, 0.11)], [],
+                       today=TODAY)
+check("a recently-seen strain is not flagged as overdue",
+      sd.since_thaw_message(recent)["past_reminder"] is False)
+check("an old line IS flagged", msg["past_reminder"] is True)
+check("...naming the mutation rate rather than just a date",
+      "one deleterious mutation every three generations" in msg["line"])
+check("...and recommending a fresh thaw before it reaches results",
+      "before it shows up in results" in msg["line"])
+
+check("a strain with nothing recorded at all says so",
+      sd.anchor_for("ghost", seen_only, [], today=TODAY)["kind"] == "none")
+check("...and the assistant stays silent about it",
+      sd.since_thaw_message(
+          sd.anchor_for("ghost", seen_only, [], today=TODAY))["say"] is False)
+
+status = sd.refresh_status(["N2", "dys-1"],
+                           seen_only + [rec("dys-1", "speed_mm_s", 200, 0.05)],
+                           [{"strain": "dys-1", "thaw_date": "2025-07-01"}],
+                           today=TODAY)
+check("a status list separates guessed ages from known ones",
+      status["n_lower_bound"] == 1 and status["n_overdue"] == 1)
+check("...naming which strains are overdue", status["overdue"] == ["N2"])
+check("...and that entering dates converts a floor into a fact",
+      "converts a floor into a fact" in status["note"])
+
 print()
 failed = [n for n, ok, _ in results if not ok]
 print(f"{len(results) - len(failed)} of {len(results)} checks passed")
