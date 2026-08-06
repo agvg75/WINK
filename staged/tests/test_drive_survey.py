@@ -51,8 +51,14 @@ check("extensions are histogrammed",
 check("...and grouped into families that say what a folder HOLDS",
       a["families"]["image_stack"] == 5 and a["families"]["table"] == 1 and
       a["families"]["document"] == 1)
+# Compared against the real on-disk total rather than an arithmetic guess:
+# write_text translates \n to \r\n on Windows, so counting the characters
+# written is short by one byte per line. The property that matters is that the
+# reported size matches what the filesystem says, which is what a directory
+# entry carries - not that it matches what the test thinks it wrote.
+on_disk = sum(f.stat().st_size for f in (tmp / "expA").iterdir() if f.is_file())
 check("size comes from the directory entry, not from reading",
-      a["total_bytes"] == 5 * 1000 + len("a,b\n1,2\n") + 50)
+      a["total_bytes"] == on_disk, f"{a['total_bytes']} == {on_disk} on disk")
 check("modification times are captured",
       a["newest_mtime"] is not None and a["oldest_mtime"] is not None)
 
