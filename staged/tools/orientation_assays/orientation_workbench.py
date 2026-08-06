@@ -126,12 +126,18 @@ def configuration_template(assay):
             # gradient, and is therefore the condition that separates
             # orienting to direction from climbing magnitude.
             #
-            # For a coil, replace the provider block with:
+            # For the double-wrapped Merritt cage, replace the provider block:
             #   {"source_type": "coil",
+            #    "condition": "field",         # or zero_field / sham_current
+            #                                  # / ambient - see COIL_CONDITIONS
             #    "direction_xyz": [1, 0, 0],   # parallel to the plate here,
             #                                  # but declared, not assumed
             #    "magnitude_mt": 0.065,
-            #    "includes_earth_field": False,
+            #    "includes_earth_field": true, # the cage cancels Earth and
+            #                                  # imposes in its place
+            #    "oscillation_hz": null,       # set for an oscillating field
+            #    "rotation_schedule": [],      # [{"at_s": 300,
+            #                                  #   "rotate_deg": 90}]
             #    "uniformity_tolerance_percent": 5.0}
             "provider": {
                 "source_type": "magnet",

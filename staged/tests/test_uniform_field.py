@@ -65,11 +65,13 @@ check("...and a vertical field is 90 degrees, so xyz really is honoured",
 # --- Earth's field: added, or replaced ---------------------------------------
 earth = (0.000020, 0.0, -0.000045)
 adds = UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_t=0.001,
-                            earth_field_xyz_t=earth)
+                            earth_field_xyz_t=earth,
+                            includes_earth_field=False)
 cancels = UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_t=0.001,
-                               earth_field_xyz_t=earth,
-                               includes_earth_field=True)
-check("a cage that adds to Earth's field includes it in the total",
+                               earth_field_xyz_t=earth)
+check("cancelling Earth is the DEFAULT, because that is what a Merritt does",
+      cancels.includes_earth_field is True)
+check("a rig that adds to Earth instead gets a different total",
       adds.sample(0, 0).magnitude != cancels.sample(0, 0).magnitude,
       "a cage may cancel and replace Earth's field or add to it")
 check("...and which one it is, is recorded",
@@ -84,7 +86,7 @@ for label, kwargs, phrase in (
     ("two strengths", {"direction_xyz": [1, 0, 0], "magnitude_t": 1.0,
                        "magnitude_mt": 1000.0}, "not both"),
     ("zero strength", {"direction_xyz": [1, 0, 0], "magnitude_t": 0.0},
-     "sham condition"),
+     "condition='zero_field'"),
 ):
     try:
         UniformFieldProvider(**kwargs)
@@ -183,6 +185,131 @@ for assay in ("chemotaxis", "thermotaxis", "magnetotaxis"):
           block.get("pressure_atm") == 1.0)
     check(f"...with the sign-off unticked ({assay})",
           block.get("confirmed") is False)
+
+# --- the four coil conditions ----------------------------------------------
+# Andres: double-wrapped Merritt cage. It cancels Earth then imposes a new
+# field vectorially. Zero-field controls cancel Earth and impose nothing.
+# Current controls run the SAME current antiparallel, for vibration and
+# thermal noise.
+from stimulus_fields import COIL_CONDITIONS   # noqa: E402
+
+earth_t = (0.000020, 0.0, -0.000045)
+common = {"earth_field_xyz_t": earth_t, "includes_earth_field": True}
+exp = UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_mt=0.065,
+                           condition="field", **common)
+zero = UniformFieldProvider(condition="zero_field", **common)
+sham = UniformFieldProvider(condition="sham_current", **common)
+amb = UniformFieldProvider(condition="ambient", **common)
+
+check("the cage cancels Earth and imposes in its place",
+      abs(exp.sample(0, 0).magnitude - 0.000065) < 1e-12,
+      "the applied vector IS the total, not added to Earth")
+check("a zero-field control really is near zero",
+      zero.sample(0, 0).magnitude == 0.0)
+check("a sham reads zero field too", sham.sample(0, 0).magnitude == 0.0)
+check("...but is distinguishable from a zero field, which is the point",
+      zero.sample(0, 0).uncertainty["condition"] !=
+      sham.sample(0, 0).uncertainty["condition"],
+      "both read zero tesla and control for entirely different things")
+check("...naming that the sham controls for the coil, not the field",
+      "controls for the coil, not for the field" in
+      sham.sample(0, 0).uncertainty["condition_means"])
+check("ambient leaves the animal in Earth's field",
+      abs(amb.sample(0, 0).magnitude - float(np.linalg.norm(earth_t))) < 1e-12)
+check("...and is distinct from a cancelled zero field",
+      amb.sample(0, 0).magnitude > zero.sample(0, 0).magnitude,
+      "coils off is not the same as Earth actively cancelled")
+check("the sham records that the coil is energised",
+      sham.sample(0, 0).uncertainty["coil_energised"] is True and
+      amb.sample(0, 0).uncertainty["coil_energised"] is False,
+      "the field record cannot tell them apart; this can")
+check("a control needs no field strength to be constructed",
+      zero.magnitude_t is None,
+      "requiring one would push people to type a fake number")
+try:
+    UniformFieldProvider(condition="off", **common)
+    check("an unknown condition is refused", False)
+except ValueError as exc:
+    check("an unknown condition is refused", True)
+    check("...naming that it cannot be inferred from the field",
+          "cannot be inferred from the field" in str(exc))
+try:
+    UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_t=0.0,
+                         condition="field", **common)
+    check("a zero-strength 'field' condition is refused", False)
+except ValueError as exc:
+    check("a zero-strength 'field' condition is refused", True)
+    check("...steering to the condition that records WHY it is zero",
+          "condition='zero_field'" in str(exc),
+          "Earth cancelled, not a weak field")
+
+# --- oscillating fields ------------------------------------------------------
+osc = UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_mt=1.0,
+                           oscillation_hz=1.0, **common)
+check("an oscillating field is zero at t=0 for a sine",
+      abs(osc.sample(0, 0, 0.0).magnitude) < 1e-12)
+check("...peaks a quarter cycle later",
+      abs(osc.sample(0, 0, 0.25).magnitude - 0.001) < 1e-9)
+check("...and reverses direction at three quarters",
+      osc.applied_at(0.25)[0] > 0 > osc.applied_at(0.75)[0],
+      "the direction reverses every half cycle")
+check("an oscillating field is flagged as time varying",
+      osc.is_time_varying and osc.constant_direction is False)
+check("...warning that a pooled statistic measures against a moving reference",
+      "reference that" in
+      osc.sample(0, 0, 0.1).uncertainty["time_varying_warning"])
+check("...and carrying the frequency",
+      osc.sample(0, 0, 0.1).uncertainty["oscillation_hz"] == 1.0)
+try:
+    UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_mt=1.0,
+                         oscillation_hz=0, **common)
+    check("a zero oscillation frequency is refused", False)
+except ValueError as exc:
+    check("a zero oscillation frequency is refused", True)
+    check("...naming that a static field is a different condition",
+          "different condition" in str(exc))
+
+# --- rotating fields ---------------------------------------------------------
+rot = UniformFieldProvider(
+    direction_xyz=[1, 0, 0], magnitude_mt=1.0,
+    rotation_schedule=[{"at_s": 300, "rotate_deg": 90}], **common)
+check("before the rotation the field is where it started",
+      abs(rot.applied_at(0)[0] - 0.001) < 1e-12 and
+      abs(rot.applied_at(0)[1]) < 1e-12)
+check("...and after it has turned by the declared angle",
+      abs(rot.applied_at(400)[1] - 0.001) < 1e-9 and
+      abs(rot.applied_at(400)[0]) < 1e-9, "90 degrees at 300 s")
+check("rotations accumulate",
+      UniformFieldProvider(
+          direction_xyz=[1, 0, 0], magnitude_mt=1.0,
+          rotation_schedule=[{"at_s": 100, "rotate_deg": 45},
+                             {"at_s": 200, "rotate_deg": 45}],
+          **common).rotation_at(250) == 90.0)
+check("a rotating field is time varying",
+      rot.is_time_varying and rot.constant_direction is False)
+check("...and says the comparison must be made against the field at that time",
+      "not against the starting direction" in
+      rot.sample(0, 0, 400).uncertainty["time_varying_warning"])
+check("...recording how much rotation had been applied by then",
+      rot.sample(0, 0, 400).uncertainty["rotation_applied_deg"] == 90.0)
+check("a static field is not flagged as time varying",
+      exp.constant_direction is True and
+      "time_varying_warning" not in exp.sample(0, 0).uncertainty)
+for bad, phrase in (({"at_s": 10}, "not a rotation"),
+                    ({"rotate_deg": 90}, "cannot be applied to a track")):
+    try:
+        UniformFieldProvider(direction_xyz=[1, 0, 0], magnitude_mt=1.0,
+                             rotation_schedule=[bad], **common)
+        check(f"an incomplete rotation step is refused ({bad})", False)
+    except ValueError as exc:
+        check(f"an incomplete rotation step is refused ({sorted(bad)})", True)
+        check("...naming what is missing", phrase in str(exc))
+
+check("the description names the condition and modulation",
+      "sham_current" in sham.describe() and
+      "oscillating 1.0 Hz" in osc.describe())
+check("every condition documents what it means",
+      all(len(v) > 40 for v in COIL_CONDITIONS.values()))
 
 print()
 failed = [n for n, ok, _ in results if not ok]

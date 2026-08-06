@@ -109,12 +109,34 @@ class ChemicalProvider(StimulusFieldProvider):
             "declared chemical units")
 
 
-class UniformFieldProvider(StimulusFieldProvider):
-    """A coil cage: one direction everywhere, and NO gradient anywhere.
+# The conditions a double-wrapped Merritt cage can be run in. These are NOT
+# interchangeable and two of them look identical in the field record while
+# controlling for completely different things, which is why the condition is
+# named rather than inferred from the field strength.
+COIL_CONDITIONS = {
+    "field": (
+        "Windings parallel, current on: Earth is cancelled and the declared "
+        "field is imposed in its place."),
+    "zero_field": (
+        "Earth cancelled and nothing imposed. The animal is in near-zero "
+        "field - a real stimulus condition, not an absence of one."),
+    "sham_current": (
+        "Windings ANTIPARALLEL, same current as the experiment. No net field, "
+        "but identical Joule heating, vibration and acoustic noise. This "
+        "controls for the coil, not for the field."),
+    "ambient": (
+        "Coils off entirely. The animal is in Earth's field. Distinct from "
+        "zero_field, where Earth has been actively cancelled."),
+}
 
-    Andres: the lab's cages give a uniform field parallel to the plate
-    surface, but the direction is declared as xyz so other configurations are
-    possible.
+
+class UniformFieldProvider(StimulusFieldProvider):
+    """A double-wrapped Merritt coil cage: one field everywhere, no gradient.
+
+    Andres's rig: the cage cancels Earth's field and then imposes a new one
+    vectorially. Double wrapping is what makes the sham possible - running the
+    same current antiparallel produces no net field while producing identical
+    heating, vibration and acoustic noise.
 
     THIS IS THE CONDITION THAT SEPARATES TWO HYPOTHESES, which is why it is a
     provider of its own rather than a magnet with the gradient ignored. Under a
@@ -122,83 +144,223 @@ class UniformFieldProvider(StimulusFieldProvider):
     an animal heading toward the magnet is simultaneously heading along the
     field vector and up a steeply rising magnitude, so orienting-to-direction
     and climbing-the-gradient predict the same track. A uniform field holds
-    direction while removing the gradient, so the two stop making the same
-    prediction.
+    direction while removing the gradient.
 
-    The gradient here is EXACTLY zero, not approximately - it is a property of
-    the model, not a measurement, and rounding noise into it would blur the one
-    distinction this provider exists to draw. What is uncertain is the real
-    cage's uniformity, which belongs in `uniformity_tolerance_percent` and is
-    reported as uncertainty rather than smuggled into the gradient.
+    THREE NEAR-ZERO CONDITIONS THAT ARE NOT THE SAME THING, and collapsing
+    them would destroy the design:
+
+      - `ambient`      coils off, animal in Earth's ~50 uT field
+      - `zero_field`   Earth actively cancelled, total near zero
+      - `sham_current` no net field, but the coil is energised and warm
+
+    A field record cannot tell the last two apart - both read zero tesla - so
+    the condition is declared and carried, and `coil_energised` distinguishes
+    them for anything downstream that cares about heat or vibration.
+
+    THE FIELD MAY VARY IN TIME. Oscillation at a set frequency, and rotation by
+    a set angle at a set time, are both supported, and `sample` honours
+    `time_s` rather than ignoring it. Anything that pools direction over time
+    is invalid under those, so `constant_direction` says so plainly.
+
+    The gradient is EXACTLY zero, not approximately - a property of the model,
+    where rounding noise would blur the distinction the provider exists to
+    draw. The real cage's uniformity is a separate matter and lives in
+    `uniformity_tolerance_percent`.
     """
     provider_type = "uniform_field"
     has_true_direction = True
 
-    def __init__(self, *, direction_xyz, magnitude_t=None, magnitude_mt=None,
+    def __init__(self, *, direction_xyz=None, magnitude_t=None,
+                 magnitude_mt=None, condition="field",
+                 oscillation_hz=None, oscillation_phase_deg=0.0,
+                 rotation_schedule=None,
                  earth_field_xyz_t=(0, 0, 0), earth_field_xyz_mt=None,
-                 uniformity_tolerance_percent=None, includes_earth_field=False):
-        direction = _unit(direction_xyz)
-        if direction is None or len(direction) != 3:
+                 uniformity_tolerance_percent=None,
+                 includes_earth_field=True, coil="merritt_double_wrapped"):
+        if condition not in COIL_CONDITIONS:
             raise ValueError(
-                "A non-zero 3D field direction is required. The cage geometry "
-                "does not imply it - a field parallel to the plate is the "
-                "common case, not a safe default.")
-        if magnitude_t is None and magnitude_mt is None:
-            raise ValueError(
-                "Field strength is required. Direction alone cannot say "
-                "whether the animals were in Earth's field or fifty times it, "
-                "and a null result is uninterpretable without it.")
-        if magnitude_t is not None and magnitude_mt is not None:
-            raise ValueError(
-                "Give the field strength once, in tesla or millitesla, not "
-                "both - two values that disagree cannot be reconciled later.")
-        value = (float(magnitude_t) if magnitude_t is not None
-                 else float(magnitude_mt) / 1000.0)
-        if value <= 0:
-            raise ValueError(
-                f"Field strength {value} T is not positive. A zero field is a "
-                f"sham condition and should use NullProvider, which records "
-                f"that it is a sham rather than a very weak field.")
-        self.direction = direction
-        self.magnitude_t = value
+                f"Unknown coil condition {condition!r}. Use one of "
+                f"{sorted(COIL_CONDITIONS)} - a sham and a zero field both "
+                f"read zero tesla and control for entirely different things, "
+                f"so the condition cannot be inferred from the field.")
+        self.condition = condition
+        self.coil = str(coil)
+        self.energised = condition in {"field", "zero_field", "sham_current"}
+
         if earth_field_xyz_mt is not None:
             self.earth = np.asarray(earth_field_xyz_mt, dtype=float) / 1000
         else:
             self.earth = np.asarray(earth_field_xyz_t, dtype=float)
-        # A cage may be driven to CANCEL and replace Earth's field, or to add
-        # to it. Which one changes the total the animal is in, so it is asked
-        # rather than assumed.
         self.includes_earth_field = bool(includes_earth_field)
         self.uniformity_tolerance_percent = (
             None if uniformity_tolerance_percent is None
             else float(uniformity_tolerance_percent))
 
-    def total_field(self):
-        applied = np.asarray(self.direction, dtype=float) * self.magnitude_t
+        # A sham still needs its current declared, because the point of the
+        # control is that the current MATCHES the experiment. A sham run at a
+        # different current controls for nothing.
+        needs_field = condition == "field"
+        if magnitude_t is not None and magnitude_mt is not None:
+            raise ValueError(
+                "Give the field strength once, in tesla or millitesla, not "
+                "both - two values that disagree cannot be reconciled later.")
+        value = (float(magnitude_t) if magnitude_t is not None
+                 else None if magnitude_mt is None
+                 else float(magnitude_mt) / 1000.0)
+        if needs_field:
+            if value is None:
+                raise ValueError(
+                    "Field strength is required. Direction alone cannot say "
+                    "whether the animals were in Earth's field or fifty times "
+                    "it, and a null result is uninterpretable without it.")
+            if value <= 0:
+                raise ValueError(
+                    f"Field strength {value} T is not positive. For a "
+                    f"deliberate zero use condition='zero_field', which "
+                    f"records that Earth was cancelled rather than that the "
+                    f"field was weak.")
+            direction = _unit(direction_xyz)
+            if direction is None or len(direction) != 3:
+                raise ValueError(
+                    "A non-zero 3D field direction is required. The cage "
+                    "geometry does not imply it - a field parallel to the "
+                    "plate is the common case, not a safe default.")
+        else:
+            direction = _unit(direction_xyz) or (1.0, 0.0, 0.0)
+        self.direction = direction
+        self.magnitude_t = value
+
+        self.oscillation_hz = (None if oscillation_hz in (None, "")
+                               else float(oscillation_hz))
+        if self.oscillation_hz is not None and self.oscillation_hz <= 0:
+            raise ValueError(
+                "Oscillation frequency must be positive. Zero is a static "
+                "field, which is a different condition and should say so.")
+        self.oscillation_phase_deg = float(oscillation_phase_deg)
+
+        self.rotation_schedule = self._check_schedule(rotation_schedule)
+
+    @staticmethod
+    def _check_schedule(schedule):
+        """Rotations as [{"at_s": 300, "rotate_deg": 90}, ...], cumulative."""
+        if not schedule:
+            return []
+        out = []
+        for step in schedule:
+            if "at_s" not in step or "rotate_deg" not in step:
+                raise ValueError(
+                    "Each rotation needs 'at_s' and 'rotate_deg'. A rotation "
+                    "without a time cannot be applied to a track, and one "
+                    "without an angle is not a rotation.")
+            out.append({"at_s": float(step["at_s"]),
+                        "rotate_deg": float(step["rotate_deg"])})
+        out.sort(key=lambda s: s["at_s"])
+        if out[0]["at_s"] < 0:
+            raise ValueError("A rotation cannot happen before the recording.")
+        return out
+
+    # ----------------------------------------------------------------- #
+    @property
+    def is_time_varying(self):
+        return bool(self.oscillation_hz or self.rotation_schedule)
+
+    @property
+    def constant_direction(self):
+        """False when the field turns or reverses during the recording.
+
+        Anything that pools heading-relative-to-field over the whole track is
+        invalid when this is False - the reference it is measured against
+        moved. Reported rather than silently handled, because the right
+        response depends on the analysis.
+        """
+        return not self.is_time_varying
+
+    def rotation_at(self, time_s):
+        """Cumulative rotation applied by this time, in degrees."""
+        return sum(s["rotate_deg"] for s in self.rotation_schedule
+                   if s["at_s"] <= float(time_s))
+
+    def applied_at(self, time_s=0.0):
+        """The imposed field vector at this instant, before Earth."""
+        if self.condition in {"zero_field", "sham_current", "ambient"}:
+            return np.zeros(3, dtype=float)
+        vec = np.asarray(self.direction, dtype=float) * self.magnitude_t
+        deg = self.rotation_at(time_s)
+        if deg:
+            rad = np.radians(deg)
+            c, s = np.cos(rad), np.sin(rad)
+            # Rotation in the plate plane; the vertical component is untouched
+            # because the cage turns the field within the plate, not about it.
+            vec = np.asarray([vec[0] * c - vec[1] * s,
+                              vec[0] * s + vec[1] * c, vec[2]])
+        if self.oscillation_hz:
+            phase = np.radians(self.oscillation_phase_deg)
+            vec = vec * float(np.sin(2 * np.pi * self.oscillation_hz *
+                                     float(time_s) + phase))
+        return vec
+
+    def total_field(self, time_s=0.0):
+        applied = self.applied_at(time_s)
+        if self.condition == "ambient":
+            return self.earth
+        # The Merritt cage cancels Earth and imposes in its place, so the
+        # applied vector IS the total. A rig that adds to Earth instead sets
+        # includes_earth_field=False.
         return applied if self.includes_earth_field else applied + self.earth
 
     def sample(self, x_mm, y_mm, time_s=0):
-        field = self.total_field()
+        field = self.total_field(time_s)
         magnitude = float(np.linalg.norm(field))
         horizontal = float(np.linalg.norm(field[:2]))
         inclination = float(np.degrees(np.arctan2(field[2], horizontal)))
         tol = self.uniformity_tolerance_percent
+        unc = {
+            "condition": self.condition,
+            "condition_means": COIL_CONDITIONS[self.condition],
+            "coil": self.coil,
+            "coil_energised": self.energised,
+            "gradient_is_zero_by_construction": True,
+            "why": ("A uniform field has no gradient anywhere, which is what "
+                    "makes it the control that separates orienting to field "
+                    "direction from climbing field magnitude."),
+            "uniformity_tolerance_percent": tol,
+            "uniformity_unverified": tol is None,
+            "includes_earth_field": self.includes_earth_field,
+            "constant_direction": self.constant_direction,
+            "dominant_sensitivity": (
+                "cage uniformity across the plate area" if tol is not None
+                else "cage uniformity, which has not been declared or measured"),
+        }
+        if self.oscillation_hz:
+            unc["oscillation_hz"] = self.oscillation_hz
+            unc["time_varying_warning"] = (
+                f"The field oscillates at {self.oscillation_hz} Hz, so its "
+                f"direction reverses every half cycle and its time-average is "
+                f"zero. Any statistic pooling heading relative to the field "
+                f"over the whole track is measuring against a reference that "
+                f"moved; align to phase or analyse per half-cycle.")
+        if self.rotation_schedule:
+            unc["rotation_schedule"] = list(self.rotation_schedule)
+            unc["rotation_applied_deg"] = self.rotation_at(time_s)
+            unc["time_varying_warning"] = (
+                f"The field is rotated during the recording "
+                f"({len(self.rotation_schedule)} step(s)). Heading relative to "
+                f"the field must be computed per segment against the field at "
+                f"that time, not against the starting direction.")
         return FieldSample(
             _unit(field), magnitude,
             (0.0, 0.0),          # exactly zero: the defining property
-            inclination,
-            {"gradient_is_zero_by_construction": True,
-             "why": ("A uniform field has no gradient anywhere, which is what "
-                     "makes it the control that separates orienting to field "
-                     "direction from climbing field magnitude."),
-             "uniformity_tolerance_percent": tol,
-             "uniformity_unverified": tol is None,
-             "includes_earth_field": self.includes_earth_field,
-             "dominant_sensitivity": (
-                 "cage uniformity across the plate area"
-                 if tol is not None else
-                 "cage uniformity, which has not been declared or measured")},
-            "T")
+            inclination, unc, "T")
+
+    def describe(self):
+        bits = [f"{self.coil}", self.condition]
+        if self.magnitude_t and self.condition == "field":
+            bits.append(f"{self.magnitude_t * 1000:.4g} mT")
+        if self.oscillation_hz:
+            bits.append(f"oscillating {self.oscillation_hz} Hz")
+        if self.rotation_schedule:
+            bits.append(f"{len(self.rotation_schedule)} rotation(s)")
+        return ", ".join(bits)
 
 
 class MagnetProvider(StimulusFieldProvider):
