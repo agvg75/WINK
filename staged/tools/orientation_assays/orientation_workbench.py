@@ -26,7 +26,7 @@ from magnetotaxis import analyze_magnetotaxis
 from run_feedback import RunFeedbackStore, prompt_post_run_feedback
 from stimulus_fields import (
     ChemicalProvider, MagnetProvider, NullProvider, ThermalLinearProvider,
-    ThermalRadialProvider)
+    ThermalRadialProvider, UniformFieldProvider)
 from thermotaxis import analyze_thermotaxis
 
 # Result tables are read through read_table. Under pandas 3 a numeric column
@@ -90,16 +90,51 @@ def configuration_template(assay):
         "n_placed": None,
         "plate_area_cm2": None,
     }
+    # Andres: magnetic assays are susceptible to ambient temperature and
+    # humidity; prepopulate standard lab conditions for all assays, "BUT
+    # require check box so user has to sign off on them."
+    #
+    # The sign-off is the point. A prepopulated value nobody looked at is a
+    # guess wearing the costume of a measurement, and it is strictly worse
+    # than a blank field - a blank is visibly missing, while "20.0 C" reads as
+    # something somebody measured. confirmed starts False and stays False
+    # until a person asserts it.
+    ambient_block = {
+        "temperature_c": 20.0,
+        "humidity_percent": 37.0,
+        "pressure_atm": 1.0,
+        "confirmed": False,
+        "confirmed_by": None,
+        "_note": ("These are standard-lab defaults supplied by the software, "
+                  "not measurements. Set confirmed to true only when someone "
+                  "has checked the room."),
+    }
     common = {
         "stimulus_orientations_deg": {"plate_1": 0, "plate_2": 90},
         "source_xy_mm": [0, 0],
         "endpoint_only": False,
         "state": dict(food_state_block),
+        "ambient": dict(ambient_block),
     }
     if assay == "magnetotaxis":
         return {
             **common,
+            # source_type picks the physics. "magnet" is a permanent magnet,
+            # where direction and magnitude are confounded by construction -
+            # an animal heading toward it climbs both at once. "coil" is a
+            # uniform-field cage, which holds direction and removes the
+            # gradient, and is therefore the condition that separates
+            # orienting to direction from climbing magnitude.
+            #
+            # For a coil, replace the provider block with:
+            #   {"source_type": "coil",
+            #    "direction_xyz": [1, 0, 0],   # parallel to the plate here,
+            #                                  # but declared, not assumed
+            #    "magnitude_mt": 0.065,
+            #    "includes_earth_field": False,
+            #    "uniformity_tolerance_percent": 5.0}
             "provider": {
+                "source_type": "magnet",
                 "shape": "disc", "dimensions_mm": [50.8, 6.35],
                 "remanence_t": 1.32,
                 "magnetization_direction_xyz": [0, 0, 1],
@@ -179,9 +214,23 @@ def load_tracks(path):
 
 
 def build_provider(assay, config):
-    values = config["provider"]
+    values = dict(config["provider"])
     if assay == "magnetotaxis":
-        return MagnetProvider(**values)
+        # A permanent magnet and a coil cage are the same assay and different
+        # physics: the magnet confounds direction with magnitude, the cage
+        # holds direction and removes the gradient. Defaulting to "magnet"
+        # keeps every existing configuration working, since that is what this
+        # tool has always assumed.
+        kind = str(values.pop("source_type", "magnet")).lower()
+        if kind in {"uniform", "uniform_field", "coil", "cage", "helmholtz"}:
+            return UniformFieldProvider(**values)
+        if kind in {"magnet", "permanent_magnet", "dipole"}:
+            return MagnetProvider(**values)
+        raise ValueError(
+            f"Unknown magnetic source_type {kind!r}. Use 'magnet' for a "
+            f"permanent magnet or 'coil' for a uniform-field cage - they are "
+            f"not interchangeable, because only the cage separates orienting "
+            f"to field direction from climbing field magnitude.")
     if assay == "thermotaxis":
         if values["type"] == "linear":
             return ThermalLinearProvider(

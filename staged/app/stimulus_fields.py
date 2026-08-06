@@ -109,6 +109,98 @@ class ChemicalProvider(StimulusFieldProvider):
             "declared chemical units")
 
 
+class UniformFieldProvider(StimulusFieldProvider):
+    """A coil cage: one direction everywhere, and NO gradient anywhere.
+
+    Andres: the lab's cages give a uniform field parallel to the plate
+    surface, but the direction is declared as xyz so other configurations are
+    possible.
+
+    THIS IS THE CONDITION THAT SEPARATES TWO HYPOTHESES, which is why it is a
+    provider of its own rather than a magnet with the gradient ignored. Under a
+    permanent magnet, direction and magnitude are confounded BY CONSTRUCTION:
+    an animal heading toward the magnet is simultaneously heading along the
+    field vector and up a steeply rising magnitude, so orienting-to-direction
+    and climbing-the-gradient predict the same track. A uniform field holds
+    direction while removing the gradient, so the two stop making the same
+    prediction.
+
+    The gradient here is EXACTLY zero, not approximately - it is a property of
+    the model, not a measurement, and rounding noise into it would blur the one
+    distinction this provider exists to draw. What is uncertain is the real
+    cage's uniformity, which belongs in `uniformity_tolerance_percent` and is
+    reported as uncertainty rather than smuggled into the gradient.
+    """
+    provider_type = "uniform_field"
+    has_true_direction = True
+
+    def __init__(self, *, direction_xyz, magnitude_t=None, magnitude_mt=None,
+                 earth_field_xyz_t=(0, 0, 0), earth_field_xyz_mt=None,
+                 uniformity_tolerance_percent=None, includes_earth_field=False):
+        direction = _unit(direction_xyz)
+        if direction is None or len(direction) != 3:
+            raise ValueError(
+                "A non-zero 3D field direction is required. The cage geometry "
+                "does not imply it - a field parallel to the plate is the "
+                "common case, not a safe default.")
+        if magnitude_t is None and magnitude_mt is None:
+            raise ValueError(
+                "Field strength is required. Direction alone cannot say "
+                "whether the animals were in Earth's field or fifty times it, "
+                "and a null result is uninterpretable without it.")
+        if magnitude_t is not None and magnitude_mt is not None:
+            raise ValueError(
+                "Give the field strength once, in tesla or millitesla, not "
+                "both - two values that disagree cannot be reconciled later.")
+        value = (float(magnitude_t) if magnitude_t is not None
+                 else float(magnitude_mt) / 1000.0)
+        if value <= 0:
+            raise ValueError(
+                f"Field strength {value} T is not positive. A zero field is a "
+                f"sham condition and should use NullProvider, which records "
+                f"that it is a sham rather than a very weak field.")
+        self.direction = direction
+        self.magnitude_t = value
+        if earth_field_xyz_mt is not None:
+            self.earth = np.asarray(earth_field_xyz_mt, dtype=float) / 1000
+        else:
+            self.earth = np.asarray(earth_field_xyz_t, dtype=float)
+        # A cage may be driven to CANCEL and replace Earth's field, or to add
+        # to it. Which one changes the total the animal is in, so it is asked
+        # rather than assumed.
+        self.includes_earth_field = bool(includes_earth_field)
+        self.uniformity_tolerance_percent = (
+            None if uniformity_tolerance_percent is None
+            else float(uniformity_tolerance_percent))
+
+    def total_field(self):
+        applied = np.asarray(self.direction, dtype=float) * self.magnitude_t
+        return applied if self.includes_earth_field else applied + self.earth
+
+    def sample(self, x_mm, y_mm, time_s=0):
+        field = self.total_field()
+        magnitude = float(np.linalg.norm(field))
+        horizontal = float(np.linalg.norm(field[:2]))
+        inclination = float(np.degrees(np.arctan2(field[2], horizontal)))
+        tol = self.uniformity_tolerance_percent
+        return FieldSample(
+            _unit(field), magnitude,
+            (0.0, 0.0),          # exactly zero: the defining property
+            inclination,
+            {"gradient_is_zero_by_construction": True,
+             "why": ("A uniform field has no gradient anywhere, which is what "
+                     "makes it the control that separates orienting to field "
+                     "direction from climbing field magnitude."),
+             "uniformity_tolerance_percent": tol,
+             "uniformity_unverified": tol is None,
+             "includes_earth_field": self.includes_earth_field,
+             "dominant_sensitivity": (
+                 "cage uniformity across the plate area"
+                 if tol is not None else
+                 "cage uniformity, which has not been declared or measured")},
+            "T")
+
+
 class MagnetProvider(StimulusFieldProvider):
     """Magpylib-backed 3D magnet field on the worm plane.
 

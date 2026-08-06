@@ -401,6 +401,7 @@ def population_layer(
     initial_state_window_s=30.0, pick_state=None, min_worms_per_regime=3,
     enhanced_slowing_s=ENHANCED_SLOWING_S, stimulus=None,
     n_placed=None, n_tracked=None, plate_area_cm2=None,
+    ambient=None, ambient_confirmed=False, assay=None,
 ):
     """Everything a plate-migration assay gets for free. One call per assay.
 
@@ -492,6 +493,10 @@ def population_layer(
         n_tracked=observed if n_tracked is None else n_tracked,
         plate_area_cm2=plate_area_cm2)
     out["warnings"].extend(out["population"]["warnings"])
+
+    out["ambient"] = ambient_conditions(
+        ambient, confirmed=ambient_confirmed, assay=assay)
+    out["warnings"].extend(out["ambient"]["warnings"])
     return out
 
 
@@ -520,6 +525,78 @@ STIMULUS_FIELDS = ("compound", "concentration", "concentration_units")
 # at random, because the ones that leave are disproportionately the ones that
 # were moving fastest and furthest. An index computed over the survivors alone
 # is a survivorship-biased estimate that looks completely normal.
+# Andres: "magnetic assays are susceptible to ambient temperature and
+# humidity. Those fields should be filled. And might as well add them to all
+# of these assays. Use standard lab conditions as 20C, 37% humidity, 1 ATM and
+# prepopulate for all BUT. Require check box so user has to sign off on them."
+#
+# THE SIGN-OFF IS THE WHOLE POINT, and it is the same principle as the omega
+# gate: a prepopulated value nobody looked at is a guess wearing the costume of
+# a measurement. Prepopulating without it would be strictly worse than leaving
+# the fields blank, because a blank field is visibly missing while "20.0 C"
+# reads as something somebody measured.
+#
+# So the defaults are offered, and `confirmed` starts False. Confirmed means a
+# person asserted these were the conditions; unconfirmed means the software
+# suggested them.
+STANDARD_CONDITIONS = {
+    "temperature_c": 20.0,
+    "humidity_percent": 37.0,
+    "pressure_atm": 1.0,
+}
+
+AMBIENT_SENSITIVE = {
+    "magnetotaxis": ("Ambient temperature and humidity change agar surface "
+                     "moisture and worm speed, and both alter how far an "
+                     "animal travels within the field during the assay."),
+    "thermotaxis": ("Room temperature sets the baseline the plate gradient "
+                    "sits on, so it shifts where the preferred isotherm "
+                    "actually falls."),
+    "chemotaxis": ("Volatile compounds evaporate and diffuse faster when it "
+                   "is warm and dry, so the gradient the animals experience "
+                   "is not the gradient that was pipetted."),
+}
+
+
+def ambient_conditions(values=None, confirmed=False, assay=None):
+    """Room conditions, prepopulated with standard values and NOT assumed true.
+
+    Returns the values alongside whether a person signed off on them, because
+    those are different facts and only one of them is evidence.
+    """
+    given = dict(values or {})
+    out = {"values": {}, "defaulted": [], "confirmed": bool(confirmed),
+           "warnings": []}
+    for key, default in STANDARD_CONDITIONS.items():
+        if given.get(key) in (None, ""):
+            out["values"][key] = default
+            out["defaulted"].append(key)
+        else:
+            out["values"][key] = float(given[key])
+    for key, value in given.items():
+        if key not in STANDARD_CONDITIONS:
+            out["values"][key] = value
+
+    if not out["confirmed"]:
+        which = (", ".join(out["defaulted"]) if out["defaulted"]
+                 else "the entered values")
+        out["warnings"].append(
+            f"Ambient conditions were not signed off ({which}). These are "
+            f"standard-lab defaults the software supplied, not measurements "
+            f"anyone made, and they will read as measurements to whoever "
+            f"opens this file later. Tick the confirmation to assert them, or "
+            f"enter what the room actually was.")
+    elif out["defaulted"]:
+        out["warnings"].append(
+            f"Signed off with defaults still in place for: "
+            f"{', '.join(out['defaulted'])}. Confirming means asserting these "
+            f"were the conditions.")
+
+    if assay in AMBIENT_SENSITIVE:
+        out["why_it_matters"] = AMBIENT_SENSITIVE[assay]
+    return out
+
+
 def population_size(n_placed=None, n_tracked=None, plate_area_cm2=None,
                     min_recovery=0.8):
     """Declared vs observed animals, and what the gap between them costs."""

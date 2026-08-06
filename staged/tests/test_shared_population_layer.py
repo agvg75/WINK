@@ -67,17 +67,20 @@ check("worms are split toward and away", lay["regimes"]["per_plate"]["p0"])
 check("the geometry is named in the result",
       "point source" in lay["geometry"] and
       lay["geometry_kind"] == "point_source")
-check("the warnings left are the unrecorded stimulus and population",
+check("the warnings left are the things nobody recorded or signed",
       [w for w in lay["warnings"]
-       if "stimulus" not in w.lower() and "animals" not in w.lower()] == [],
-      "a point source is a chemotaxis spot, so compound, concentration and "
-      "how many worms were placed are all asked for")
+       if not any(k in w.lower() for k in
+                  ("stimulus", "animals", "ambient"))] == [],
+      "a point source is a chemotaxis spot, so compound, concentration, how "
+      "many worms were placed and the room conditions are all asked for")
 full = pa.population_layer(
     tracks=tracks, segments=segments, geometry=spot,
     time_since_food_removal_s=300, min_worms_per_regime=1,
     stimulus={"compound": "diacetyl", "concentration": 0.001,
               "concentration_units": "v/v"},
-    n_placed=4)
+    n_placed=4,
+    ambient={"temperature_c": 20.0, "humidity_percent": 37.0,
+             "pressure_atm": 1.0}, ambient_confirmed=True)
 check("nothing is warned about when everything was supplied",
       full["warnings"] == [], str(full["warnings"]))
 check("...and the declared population matches what was tracked",
