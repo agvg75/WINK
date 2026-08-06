@@ -15,7 +15,7 @@ from matplotlib.figure import Figure
 import numpy as np
 import pandas as pd
 
-from basal_slowing import (analyze, list_frames, read_gray,
+from basal_slowing import (analyze, area_gates_for, list_frames, read_gray,
                            recompute_events_from_tracks)
 from track_review import review_tracks, save_track_review
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "app"))
@@ -32,9 +32,15 @@ class App(CockpitApp):
         self.folder = tk.StringVar()
         self.fps = tk.StringVar(value="7.5")
         self.scale = tk.StringVar(value="15.0")
-        self.min_area = tk.StringVar(value="40")
-        self.max_area = tk.StringVar(value="2500")
-        self.max_link_px = tk.StringVar(value="60")
+        # Multipliers on gates computed from this recording, NOT pixel counts.
+        # The old defaults of 40 / 2500 / 60 px were only ever right near
+        # 10-20 um/px; on a 4K plate recording they rejected every animal and
+        # filled the tracker with debris. 1.0 means "use what the recording
+        # implies".
+        self.min_area_mult = tk.StringVar(value="1.0")
+        self.max_area_mult = tk.StringVar(value="1.0")
+        self.max_link_mult = tk.StringVar(value="1.0")
+        self.gates_readout = tk.StringVar(value="")
         self.before_s = tk.StringVar(value="10")
         self.after_s = tk.StringVar(value="10")
         self.buffer_px = tk.StringVar(value="10")
@@ -69,28 +75,40 @@ class App(CockpitApp):
         self.add_scale_button(self._current_frame, self._apply_scale,
                               initial=self._scale_value,
                               text="Calibrate scale (scope / bar)...").pack(fill="x", pady=(0, 4))
-        entry_row("Minimum worm area (px)", self.min_area)
-        entry_row("Maximum worm area (px)", self.max_area)
+        entry_row("Min worm area (x auto)", self.min_area_mult)
+        entry_row("Max worm area (x auto)", self.max_area_mult)
         ttk.Label(c, wraplength=300, justify="left", foreground="#5E6E76",
-                  text=("Areas are in SOURCE pixels, so the right values depend "
-                        "on magnification. The defaults of 40 and 2500 suit a "
-                        "modest frame; on a 4K recording the floor is a fraction "
-                        "of a percent of an animal, so every speck of debris "
-                        "clears it and the tracker fills with noise. Measure one "
-                        "animal instead of carrying numbers between rigs.")
+                  text=("The gates are computed from THIS recording - from the "
+                        "scale above, or from the frame size if there is no "
+                        "scale - so they follow the magnification instead of "
+                        "ignoring it. These boxes are multipliers on that "
+                        "computed value: 1.0 uses it as is, 1.5 is half again "
+                        "as generous. Fixed pixel counts are what this "
+                        "replaces; 40 and 2500 px were only ever right near "
+                        "10-20 um/px, and on a 4K recording they rejected "
+                        "every animal and tracked debris instead.")
                   ).pack(anchor="w", pady=(0, 2))
+        ttk.Label(c, textvariable=self.gates_readout, wraplength=300,
+                  justify="left", foreground="#2F4F4F").pack(anchor="w",
+                                                             pady=(0, 2))
         ttk.Button(c, text="Measure a worm to set these...",
                    command=self.measure_worm).pack(fill="x", pady=(0, 4))
-        entry_row("Max link (px/frame)", self.max_link_px)
+        entry_row("Max link (x auto)", self.max_link_mult)
         ttk.Label(c, wraplength=300, justify="left", foreground="#5E6E76",
-                  text=("How far one animal may travel between frames, in source "
-                        "pixels. Too large and the tracker can carry an identity "
-                        "across the plate to a different animal. Measured motion on "
-                        "a 7.5 fps basal slowing recording was under 4 px per frame "
-                        "at the 95th percentile, against this default of 60 - so a "
-                        "much smaller value is usually right.")).pack(anchor="w", pady=(0, 4))
+                  text=("How far one animal may travel between frames, again "
+                        "as a multiplier on a distance computed from the "
+                        "scale. Too large and the tracker can carry an "
+                        "identity across the plate to a different animal. The "
+                        "old fixed 60 px was 150 um at one magnification and "
+                        "3 mm at another; measured motion on a 7.5 fps basal "
+                        "slowing recording was under 4 px per frame at the "
+                        "95th percentile.")).pack(anchor="w", pady=(0, 4))
         ttk.Button(c, text="Measure motion to set this...",
                    command=self.measure_motion).pack(fill="x", pady=(0, 4))
+        for _var in (self.scale, self.min_area_mult, self.max_area_mult,
+                     self.max_link_mult):
+            _var.trace_add("write", lambda *_: self._refresh_gates_readout())
+        self._refresh_gates_readout()
         entry_row("Before window (s)", self.before_s)
         entry_row("After window inside lawn (s)", self.after_s)
         entry_row("Outside buffer for before (px)", self.buffer_px)
@@ -288,6 +306,40 @@ class App(CockpitApp):
         if path:
             self._load_roi_path(path)
 
+    def _current_gates(self, frame_shape=None):
+        """The pixel gates this recording would actually run with, or None.
+
+        The multipliers are meaningless on their own - what matters is the
+        pixel band they produce for THIS scale, which is what the readout
+        shows and what every other control here compares against.
+        """
+        try:
+            scale = float(self.scale.get())
+        except (ValueError, tk.TclError):
+            scale = 0.0
+        try:
+            return area_gates_for(
+                scale, frame_shape=frame_shape,
+                min_area_mult=float(self.min_area_mult.get()),
+                max_area_mult=float(self.max_area_mult.get()),
+                max_link_mult=float(self.max_link_mult.get()))
+        except (ValueError, TypeError, tk.TclError):
+            return None
+
+    def _refresh_gates_readout(self):
+        gates = self._current_gates()
+        if gates is None:
+            self.gates_readout.set(
+                "Set a scale and numeric multipliers to see the pixel gates "
+                "these give.")
+            return
+        text = (f"Gates now: {gates['min_area']:,}-{gates['max_area']:,} px, "
+                f"link {gates['max_link_px']:,} px/frame. An adult is about "
+                f"{gates['expected_adult_px']:,.0f} px here.")
+        if gates["warnings"]:
+            text += "  WARNING: " + gates["warnings"][0]
+        self.gates_readout.set(text)
+
     def start(self):
         if self.start_roi is None or not self.lawn_rois:
             messagebox.showerror("ROIs", "Draw the assay ROIs first.")
@@ -302,9 +354,9 @@ class App(CockpitApp):
                 "roi_metadata": {
                     "start": self.start_roi_record,
                     "lawns": self.lawn_roi_records},
-                "min_area": int(self.min_area.get()),
-                "max_area": int(self.max_area.get()),
-                "max_link_px": float(self.max_link_px.get()),
+                "min_area_mult": float(self.min_area_mult.get()),
+                "max_area_mult": float(self.max_area_mult.get()),
+                "max_link_mult": float(self.max_link_mult.get()),
                 "before_s": float(self.before_s.get()),
                 "after_s": float(self.after_s.get()),
                 "outside_buffer_px": float(self.buffer_px.get()),
@@ -314,8 +366,8 @@ class App(CockpitApp):
             }
         except ValueError:
             messagebox.showerror(
-                "Inputs", "FPS, scale, areas, windows, buffer, and fraction "
-                          "must be numeric.")
+                "Inputs", "FPS, scale, area and link multipliers, windows, "
+                          "buffer, and fraction must be numeric.")
             return
         self.go.state(["disabled"])
         self.status.set("Analyzing frames in the background...")
@@ -381,11 +433,22 @@ class App(CockpitApp):
                               float(points[0][1]))
         described = wap.describe(stats, label, scale=1.0)
         suggested = wap.suggest_gates(described)
-        try:
-            current = (int(self.min_area.get()), int(self.max_area.get()))
-        except ValueError:
-            current = (0, 0)
+        gates = self._current_gates(frame_shape=chosen.shape[:2])
+        if gates is None:
+            messagebox.showerror(
+                "Measure a worm",
+                "Set a numeric scale and multipliers first - a measured "
+                "animal is only meaningful against the gates it would "
+                "replace.", parent=self)
+            return
+        current = (gates["min_area"], gates["max_area"])
         why = wap.gates_look_wrong_for(described, *current)
+        # The measurement is in pixels; the control is a multiplier. Convert,
+        # so a measured animal lands as "x xx of what this recording implies"
+        # and stays meaningful if the scale is corrected afterwards.
+        derived = gates["derived"]
+        new_min_mult = suggested["min_area"] / max(1, derived["min_area"])
+        new_max_mult = suggested["max_area"] / max(1, derived["max_area"])
 
         message = (
             f"Detected object under your click:\n\n"
@@ -394,9 +457,12 @@ class App(CockpitApp):
             f"It is larger than {described['percentile_of_objects']:.0f}% of the "
             f"{described['n_objects']} objects found in this frame.\n\n"
             f"Suggested gates ({suggested['min_factor']:g}x to "
-            f"{suggested['max_factor']:g}x):\n"
-            f"    Minimum worm area   {suggested['min_area']:,}\n"
-            f"    Maximum worm area   {suggested['max_area']:,}\n\n"
+            f"{suggested['max_factor']:g}x the measured animal):\n"
+            f"    Minimum worm area   {suggested['min_area']:,} px "
+            f"({new_min_mult:.2f}x auto)\n"
+            f"    Maximum worm area   {suggested['max_area']:,} px "
+            f"({new_max_mult:.2f}x auto)\n\n"
+            f"This recording's own gates are {current[0]:,}-{current[1]:,} px.\n\n"
             f"That would keep {suggested['kept_objects']} of "
             f"{suggested['n_objects']} objects in this frame.\n\n")
         if why:
@@ -411,14 +477,17 @@ class App(CockpitApp):
         if not messagebox.askyesno("Measure a worm", message, parent=self):
             self.status.set("Measured animal not applied.")
             return
-        self.min_area.set(str(suggested["min_area"]))
-        self.max_area.set(str(suggested["max_area"]))
+        self.min_area_mult.set(f"{new_min_mult:.3f}")
+        self.max_area_mult.set(f"{new_max_mult:.3f}")
         self.log("Area gates measured",
                  f"animal {described['source_area_px']:,.0f} px -> gates "
-                 f"{suggested['min_area']}/{suggested['max_area']}", "info")
+                 f"{suggested['min_area']}/{suggested['max_area']} px "
+                 f"({new_min_mult:.2f}x/{new_max_mult:.2f}x the computed "
+                 f"{derived['min_area']}/{derived['max_area']})", "info")
         self.status.set(
             f"Area gates set from a measured animal: "
-            f"{suggested['min_area']}-{suggested['max_area']} px.")
+            f"{suggested['min_area']}-{suggested['max_area']} px "
+            f"({new_min_mult:.2f}x-{new_max_mult:.2f}x auto).")
 
     def measure_motion(self):
         """Measure how far worm-sized objects actually move between frames.
@@ -439,7 +508,14 @@ class App(CockpitApp):
             files = list_frames(folder)
             if len(files) < 10:
                 raise ValueError("Need at least ten frames to measure motion.")
-            lo, hi = int(self.min_area.get()), int(self.max_area.get())
+            gates = self._current_gates(
+                frame_shape=read_gray(files[0]).shape[:2])
+            if gates is None:
+                raise ValueError(
+                    "Set a numeric scale and multipliers first - motion is "
+                    "measured over worm-sized objects, so the area gates "
+                    "have to be settled before this means anything.")
+            lo, hi = gates["min_area"], gates["max_area"]
             idx = np.unique(np.linspace(0, len(files) - 1, 31).astype(int))
             background = np.median(
                 np.stack([read_gray(files[i]) for i in idx]), axis=0).astype(np.uint8)
@@ -476,7 +552,8 @@ class App(CockpitApp):
         steps = np.array(steps)
         p95 = float(np.percentile(steps, 95))
         suggested = max(8.0, round(p95 * 3))
-        current = self.max_link_px.get()
+        current = gates["max_link_px"]
+        new_link_mult = suggested / max(1, gates["derived"]["max_link_px"])
         message = (
             f"Measured over {len(steps):,} object pairs "
             f"({np.mean(per_frame):.1f} objects per frame):\n\n"
@@ -484,16 +561,20 @@ class App(CockpitApp):
             f"    p95         {p95:6.2f} px/frame\n"
             f"    p99         {np.percentile(steps, 99):6.2f} px/frame\n\n"
             f"Suggested max link: {suggested:,.0f} px/frame "
-            f"(p95 x3, for headroom across missed frames).\n"
-            f"Currently {current}.\n\n"
+            f"({new_link_mult:.2f}x auto; p95 x3, for headroom across missed "
+            f"frames).\n"
+            f"Currently {current:,} px/frame.\n\n"
             "Apply the suggestion?")
         self.log("Motion measured",
                  f"median {np.percentile(steps, 50):.2f}, p95 {p95:.2f} px/frame "
                  f"over {len(steps):,} pairs; suggested max link {suggested:,.0f} "
-                 f"(currently {current}).", status="done")
+                 f"px ({new_link_mult:.2f}x auto, currently {current:,}).",
+                 status="done")
         if messagebox.askyesno("Measure motion", message, parent=self):
-            self.max_link_px.set(f"{suggested:g}")
-            self.status.set(f"Max link set from measured motion: {suggested:g} px/frame.")
+            self.max_link_mult.set(f"{new_link_mult:.3f}")
+            self.status.set(
+                f"Max link set from measured motion: {suggested:g} px/frame "
+                f"({new_link_mult:.2f}x auto).")
         else:
             self.status.set("Measured motion recorded; max link unchanged.")
 

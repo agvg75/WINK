@@ -24,6 +24,16 @@ def check(name, condition, detail=""):
           + (f"  [{detail}]" if detail else ""))
 
 
+def _raises(call, exc=ValueError):
+    try:
+        call()
+    except exc:
+        return True
+    except Exception:
+        return False
+    return False
+
+
 print("basal slowing area gates - regression\n")
 
 ADULT_UM2 = 92_000
@@ -65,18 +75,41 @@ check("...both representing the same physical distance",
       abs(fine * 2.5 - coarse * 50.0) < 60,
       "60 px was 150 um at one scale and 3 mm at another")
 
-# --- explicit values are never overridden ------------------------------------
-g = bs.area_gates_for(2.5, min_area=111, max_area=222, max_link_px=33)
-check("a caller's explicit gates are honoured",
-      (g["min_area"], g["max_area"], g["max_link_px"]) == (111, 222, 33),
-      "someone who tuned gates for a rig must not be silently overridden")
-check("...and the override is recorded",
-      set(g["overridden"]) == {"min_area", "max_area", "max_link_px"})
-check("...while the derived values are still reported for comparison",
-      g["derived"]["max_area"] > 222)
+# --- tuning is a multiplier, not a pixel count -------------------------------
+base = bs.area_gates_for(2.5)
+g = bs.area_gates_for(2.5, min_area_mult=0.5, max_area_mult=2.0,
+                      max_link_mult=3.0)
+check("a multiplier scales the computed gate",
+      (g["min_area"], g["max_area"], g["max_link_px"]) ==
+      (round(base["min_area"] * 0.5), round(base["max_area"] * 2.0),
+       round(base["max_link_px"] * 3.0)),
+      "someone who tuned gates for a rig keeps that judgement...")
+check("...expressed in a form that survives a change of scale",
+      bs.area_gates_for(5.0, max_area_mult=2.0)["max_area"] ==
+      2 * bs.area_gates_for(5.0)["max_area"],
+      "the same 2.0x means the same thing at any magnification")
+check("...and the adjustment is recorded",
+      set(g["adjusted"]) == {"min_area", "max_area", "max_link_px"})
+check("...while the unadjusted values are still reported for comparison",
+      g["derived"]["max_area"] == base["derived"]["max_area"])
+check("an unadjusted call records no adjustment", base["adjusted"] == [])
+
+check("a multiplier of zero or less is refused",
+      _raises(lambda: bs.area_gates_for(2.5, min_area_mult=0)),
+      "it would collapse the gate rather than loosen it")
+
+# --- raw pixel gates are gone from the API -----------------------------------
+_sig = __import__("inspect").signature(bs.area_gates_for)
+check("area_gates_for no longer accepts raw pixel counts",
+      not {"min_area", "max_area", "max_link_px"} & set(_sig.parameters),
+      "a pixel count is only correct at the magnification it was written for")
 
 # --- the warning that would have caught this in the first place --------------
-bad = bs.area_gates_for(2.5, min_area=40, max_area=2500)
+# Reproduce the old 40/2500 px band as multipliers of what 2.5 um/px implies.
+bad = bs.area_gates_for(
+    2.5,
+    min_area_mult=40 / base["derived"]["min_area"],
+    max_area_mult=2500 / base["derived"]["max_area"])
 check("supplying the old fixed gates now WARNS",
       any("OUTSIDE the gates" in w for w in bad["warnings"]))
 check("...naming that only wrong-sized objects would be tracked",
@@ -95,23 +128,50 @@ check("at absurdly coarse scale the gates say so",
 check("...and the floor never drops below a usable blob",
       coarse_g["min_area"] >= bs.MIN_USABLE_AREA_PX)
 
+# --- an uncalibrated recording falls back to the frame, not to 40/2500 -------
+fallback = bs.area_gates_for(0, frame_shape=(2160, 3840))
+check("with no scale, the gates come from the frame size",
+      fallback["basis"] == "frame_size",
+      f"{fallback['min_area']:,}-{fallback['max_area']:,} px on 4K")
+check("...bracketing the adult that framing implies",
+      fallback["min_area"] <= fallback["expected_adult_px"]
+      <= fallback["max_area"])
+check("...and saying out loud that it is an assumption",
+      any("not a measurement" in w for w in fallback["warnings"]),
+      "a framing assumption must never read as a calibration")
+check("...still far above the old 2500 px ceiling on a 4K frame",
+      fallback["max_area"] > 2500 * 5,
+      f"{fallback['max_area']:,} px vs 2500")
+small = bs.area_gates_for(0, frame_shape=(480, 640))
+check("the frame fallback tracks the sensor", fallback["max_area"] >
+      small["max_area"] * 10,
+      f"4K {fallback['max_area']:,} px vs VGA {small['max_area']:,} px")
+check("a real calibration is preferred over the frame when both are given",
+      bs.area_gates_for(2.5, frame_shape=(480, 640))["basis"] ==
+      "calibration")
+
 # --- refusals -----------------------------------------------------------------
 try:
     bs.area_gates_for(0)
-    check("a missing scale is refused", False)
+    check("neither a scale nor a frame shape is refused", False)
 except ValueError as exc:
-    check("a missing scale is refused", True)
+    check("neither a scale nor a frame shape is refused", True)
     check("...naming that fixed pixel gates are what this replaces",
           "narrow band of magnifications" in str(exc))
+check("a nonsensical frame shape is refused",
+      _raises(lambda: bs.area_gates_for(0, frame_shape=(0, 640))))
 
 # --- the signature no longer carries the bad defaults ------------------------
 import inspect   # noqa: E402
 sig = inspect.signature(bs.analyze)
-check("analyze no longer defaults to fixed pixel gates",
-      sig.parameters["min_area"].default is None and
-      sig.parameters["max_area"].default is None and
-      sig.parameters["max_link_px"].default is None,
-      "they are derived from um_per_px unless supplied")
+check("analyze takes multipliers, defaulting to the computed gate",
+      sig.parameters["min_area_mult"].default == 1.0 and
+      sig.parameters["max_area_mult"].default == 1.0 and
+      sig.parameters["max_link_mult"].default == 1.0,
+      "1.0 means 'use what the recording implies'")
+check("...and no longer accepts raw pixel gates at all",
+      not {"min_area", "max_area", "max_link_px"} & set(sig.parameters),
+      "the GUI used to pass 40/2500/60 here on every single run")
 
 print()
 failed = [n for n, ok, _ in results if not ok]

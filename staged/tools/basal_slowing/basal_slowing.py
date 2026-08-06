@@ -694,6 +694,11 @@ def recompute_events_from_tracks(results_dir, tracks=None, fps=None,
 # grade animals.
 WORM_MIN_AREA_UM2 = 20_000
 WORM_MAX_AREA_UM2 = 300_000
+# The size an ordinary adult actually is. The band above is built around it,
+# and it is the anchor used when there is no calibration to work from.
+WORM_TYPICAL_AREA_UM2 = 92_000
+WORM_LENGTH_UM = 1_150.0
+WORM_WIDTH_UM = 80.0
 # An adult crawls at roughly 0.15 mm/s, so 0.5 mm between frames is generous
 # at any ordinary frame rate while staying well below the spacing between
 # animals on a plate.
@@ -701,11 +706,26 @@ MAX_LINK_UM = 500.0
 # Below this a blob is too few pixels for its area to mean anything, whatever
 # the physical size says.
 MIN_USABLE_AREA_PX = 25
+# Fallback anchor for a recording that carries no calibration. Across this
+# lab's rigs - 640x480 at 15-20 um/px through 4K at 2.5 - an adult covers
+# roughly 0.04% to 0.2% of the frame, because the plate gets framed much the
+# same way whatever the sensor. 0.1% sits in the middle of that spread. It is
+# a far weaker anchor than a real calibration, so it always warns.
+ADULT_FRAME_AREA_FRACTION = 0.001
 
 
-def area_gates_for(um_per_px, *, min_area=None, max_area=None,
-                   max_link_px=None):
-    """Turn physical worm size into pixel gates for THIS recording.
+def _positive_multiplier(name, value):
+    value = float(value)
+    if value <= 0:
+        raise ValueError(
+            f"{name} must be greater than zero. It scales a gate computed "
+            f"from the recording; 1.0 means 'use the computed value'.")
+    return value
+
+
+def area_gates_for(um_per_px, *, frame_shape=None, min_area_mult=1.0,
+                   max_area_mult=1.0, max_link_mult=1.0):
+    """Turn this recording's own geometry into pixel gates.
 
     THE BUG THIS FIXES. The gates were fixed pixel counts - min_area=40,
     max_area=2500 - while the scale varies by more than an order of magnitude
@@ -719,37 +739,91 @@ def area_gates_for(um_per_px, *, min_area=None, max_area=None,
     3 mm at another - generous in one case, and wide enough to link across
     neighbouring animals in the other.
 
-    Explicit values are always honoured. Someone who has tuned gates for a
-    particular rig should not have them silently overridden.
+    Two bases, in order of preference:
+
+    * `um_per_px`, when the recording has been calibrated. Physical worm size
+      converts straight into pixels and the gates are as good as the scale.
+    * `frame_shape`, when it has not. An adult occupies a fairly consistent
+      fraction of the frame across this lab's rigs, which is weaker but still
+      tracks the sensor instead of ignoring it. Always warns.
+
+    Tuning is a MULTIPLIER on the computed value, never a raw pixel count.
+    1.0 means "use what the recording implies"; 1.5 means "half again as
+    generous". A raw pixel count is what produced the original bug - it is
+    only correct at the one magnification it was written for, and carrying it
+    to another rig silently tracks the wrong objects. A multiplier stays
+    meaningful wherever it is carried.
     """
-    scale = float(um_per_px)
-    if scale <= 0:
+    scale = float(um_per_px or 0)
+    warnings = []
+
+    if scale > 0:
+        basis = "calibration"
+        px_per_um2 = 1.0 / (scale * scale)
+        derived_min = int(WORM_MIN_AREA_UM2 * px_per_um2)
+        derived_max = int(WORM_MAX_AREA_UM2 * px_per_um2)
+        expected_adult_px = WORM_TYPICAL_AREA_UM2 * px_per_um2
+        derived_link = max(3, int(MAX_LINK_UM / scale))
+    elif frame_shape is not None:
+        height, width = int(frame_shape[0]), int(frame_shape[1])
+        if height <= 0 or width <= 0:
+            raise ValueError(
+                "frame_shape must be a positive (height, width) in pixels.")
+        basis = "frame_size"
+        expected_adult_px = ADULT_FRAME_AREA_FRACTION * height * width
+        band = expected_adult_px / WORM_TYPICAL_AREA_UM2
+        derived_min = int(WORM_MIN_AREA_UM2 * band)
+        derived_max = int(WORM_MAX_AREA_UM2 * band)
+        # The length implied by that area, then the same physical link
+        # distance expressed as a fraction of one worm length.
+        length_px = float(np.sqrt(
+            expected_adult_px * WORM_LENGTH_UM / WORM_WIDTH_UM))
+        derived_link = max(3, int(length_px * MAX_LINK_UM / WORM_LENGTH_UM))
+        warnings.append(
+            f"No calibration, so the gates were estimated from the frame size "
+            f"({width}x{height}) on the assumption that an adult covers about "
+            f"{ADULT_FRAME_AREA_FRACTION:.1%} of it, or "
+            f"{expected_adult_px:,.0f} px. That holds across this lab's usual "
+            f"framing but it is an assumption about how the plate was framed, "
+            f"not a measurement. Calibrate the recording, or measure one "
+            f"animal, before trusting these numbers.")
+    else:
         raise ValueError(
-            "A positive um/px is required to set area gates. Fixed pixel "
-            "gates are what this replaces - they admit an adult worm only "
-            "within a narrow band of magnifications and silently track debris "
-            "outside it.")
-    px_per_um2 = 1.0 / (scale * scale)
-    derived_min = max(MIN_USABLE_AREA_PX,
-                      int(WORM_MIN_AREA_UM2 * px_per_um2))
-    derived_max = int(WORM_MAX_AREA_UM2 * px_per_um2)
+            "Area gates need either a positive um/px or the frame shape to "
+            "work from. Fixed pixel gates are what this replaces - they admit "
+            "an adult worm only within a narrow band of magnifications and "
+            "silently track debris outside it.")
+
+    derived_min = max(MIN_USABLE_AREA_PX, derived_min)
+    min_mult = _positive_multiplier("min_area_mult", min_area_mult)
+    max_mult = _positive_multiplier("max_area_mult", max_area_mult)
+    link_mult = _positive_multiplier("max_link_mult", max_link_mult)
+
     out = {
-        "min_area": int(min_area) if min_area is not None else derived_min,
-        "max_area": int(max_area) if max_area is not None else derived_max,
-        "max_link_px": (int(max_link_px) if max_link_px is not None
-                        else max(3, int(MAX_LINK_UM / scale))),
-        "um_per_px": scale,
-        "derived": {"min_area": derived_min, "max_area": derived_max},
-        "overridden": [k for k, v in (("min_area", min_area),
-                                      ("max_area", max_area),
-                                      ("max_link_px", max_link_px))
-                       if v is not None],
-        "warnings": [],
+        "min_area": max(1, int(round(derived_min * min_mult))),
+        "max_area": int(round(derived_max * max_mult)),
+        "max_link_px": max(1, int(round(derived_link * link_mult))),
+        "um_per_px": scale if scale > 0 else None,
+        "basis": basis,
+        "expected_adult_px": float(expected_adult_px),
+        "derived": {"min_area": derived_min, "max_area": derived_max,
+                    "max_link_px": derived_link},
+        "multipliers": {"min_area": min_mult, "max_area": max_mult,
+                        "max_link_px": link_mult},
+        "adjusted": [k for k, v in (("min_area", min_mult),
+                                    ("max_area", max_mult),
+                                    ("max_link_px", link_mult)) if v != 1.0],
+        "warnings": warnings,
     }
-    expected_adult_px = 92_000 * px_per_um2
+    where = f"At {scale:g} um/px" if basis == "calibration" else "Here"
+    if out["min_area"] >= out["max_area"]:
+        out["warnings"].append(
+            f"The multipliers invert the gates: a minimum of "
+            f"{out['min_area']} px is not below a maximum of "
+            f"{out['max_area']} px, so no object can pass either.")
     if not out["min_area"] <= expected_adult_px <= out["max_area"]:
         out["warnings"].append(
-            f"At {scale:g} um/px an adult worm covers about "
+            f"{where} an adult worm covers about "
             f"{expected_adult_px:,.0f} px, which falls OUTSIDE the gates "
             f"{out['min_area']}-{out['max_area']}. Every animal would be "
             f"rejected and only objects of the wrong size tracked. This is "
@@ -757,7 +831,7 @@ def area_gates_for(um_per_px, *, min_area=None, max_area=None,
             f"finer than about 8 um/px.")
     if derived_max < MIN_USABLE_AREA_PX * 2:
         out["warnings"].append(
-            f"At {scale:g} um/px even a large adult is only "
+            f"{where} even a large adult is only "
             f"{derived_max} px, which is too few for an area gate to "
             f"discriminate anything. This is a magnification problem rather "
             f"than a threshold problem.")
@@ -765,7 +839,7 @@ def area_gates_for(um_per_px, *, min_area=None, max_area=None,
 
 
 def analyze(folder, fps, um_per_px, start_roi, lawn_rois, output_dir=None,
-            min_area=None, max_area=None, max_link_px=None,
+            min_area_mult=1.0, max_area_mult=1.0, max_link_mult=1.0,
             before_s=10.0, after_s=10.0, pre_entry_gap_s=0.0,
             outside_buffer_px=10.0, min_window_fraction=0.70,
             sample_background=31, max_stitch_gap_s=4.0,
@@ -774,12 +848,22 @@ def analyze(folder, fps, um_per_px, start_roi, lawn_rois, output_dir=None,
             progress=None):
     files = list_frames(folder)
     fps, scale = float(fps), float(um_per_px)
-    # Derive the pixel gates from this recording's scale unless the caller
-    # supplied them. Fixed pixel gates only admit an adult worm between about
+    # Derive the pixel gates from this recording, then apply the caller's
+    # multipliers. Fixed pixel gates only admit an adult worm between about
     # 20 and 10 um/px; outside that band every animal is rejected and debris
     # is tracked instead.
-    _gates = area_gates_for(scale, min_area=min_area, max_area=max_area,
-                            max_link_px=max_link_px)
+    # The frame shape is only a fallback for an uncalibrated recording, so it
+    # is read only when there is no scale to work from - never on the ordinary
+    # path, where it would be a wasted frame decode.
+    frame_shape = None
+    if scale <= 0 and len(files):
+        try:
+            frame_shape = np.asarray(read_gray(files[0])).shape[:2]
+        except Exception:
+            frame_shape = None
+    _gates = area_gates_for(
+        scale, frame_shape=frame_shape, min_area_mult=min_area_mult,
+        max_area_mult=max_area_mult, max_link_mult=max_link_mult)
     min_area = _gates["min_area"]
     max_area = _gates["max_area"]
     max_link_px = _gates["max_link_px"]
