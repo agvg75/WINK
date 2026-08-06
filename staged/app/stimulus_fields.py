@@ -458,6 +458,152 @@ class UniformFieldProvider(StimulusFieldProvider):
         return ", ".join(bits)
 
 
+class RingMagnetProvider(StimulusFieldProvider):
+    """The donut assay: worms start at the centre of a ring magnet's hole.
+
+    Andres: worms start at the centre as always, but here they are surrounded
+    by a donut magnet. The user draws the INNER EDGE of the hole, and the
+    measure is the time until a worm has fully crossed it.
+
+    WHY THIS IS ITS OWN GEOMETRY. It inverts the usual arrangement. In a point
+    -source assay the animal starts away from the stimulus and may approach it;
+    here the animal starts in the one place the field is WEAKEST and most
+    symmetric, and every direction out is a direction of increasing field. That
+    turns "did it approach the source" into "how long until it left", which is
+    a survival-time measurement rather than an index - and the two need
+    different statistics, because animals that never cross are censored, not
+    zero.
+
+    THE CENTRE IS NOT ZERO FIELD, and assuming so would be the easy mistake. On
+    the axis of a uniformly magnetised ring the contributions do not cancel;
+    what is true is that the in-plane gradient vanishes at the centre by
+    symmetry, so an animal there has no direction to follow until it moves off
+    centre. That is the interesting part of the assay and it is worth having
+    the model rather than an intuition.
+
+    Modelled as a magpylib CylinderSegment spanning the full 360 degrees, which
+    is exact for a uniformly magnetised ring - not a dipole approximation,
+    which would be wrong close in, and close in is where the animals are.
+    """
+    provider_type = "ring_magnet"
+    has_true_direction = True
+
+    def __init__(self, *, inner_diameter_mm, outer_diameter_mm, height_mm,
+                 remanence_t, magnetization_direction_xyz=(0, 0, 1),
+                 center_xy_mm=(0.0, 0.0), z_offset_mm=0.0,
+                 distance_uncertainty_mm=0.25, earth_field_xyz_t=(0, 0, 0)):
+        try:
+            import magpylib as magpy
+        except ImportError as exc:
+            raise RuntimeError(
+                "Magnetic analysis needs the magpylib library, which is not "
+                "installed on this machine.\n\n"
+                "Re-run Setup_Lab_Tools.bat to install it.") from exc
+        major = str(getattr(magpy, "__version__", "0")).split(".")[0]
+        if major != "5":
+            raise RuntimeError(
+                f"Magnetic analysis needs magpylib 5.x; this machine has "
+                f"{getattr(magpy, '__version__', 'an unknown version')}. "
+                f"Another major version would not raise - it would report "
+                f"plausible field strengths that are simply wrong.")
+        r_in = float(inner_diameter_mm) / 2.0
+        r_out = float(outer_diameter_mm) / 2.0
+        if r_in <= 0:
+            raise ValueError(
+                "The hole must have a positive radius - that is where the "
+                "worms start, and the assay is the time taken to leave it.")
+        if r_out <= r_in:
+            raise ValueError(
+                f"Outer radius {r_out} mm does not exceed inner {r_in} mm, so "
+                f"there is no magnet material at all and the field would be "
+                f"zero everywhere.")
+        direction = _unit(magnetization_direction_xyz)
+        if direction is None or len(direction) != 3:
+            raise ValueError("A non-zero 3D magnetization direction is required.")
+        if float(distance_uncertainty_mm) <= 0:
+            raise ValueError(
+                "Vertical-distance uncertainty must be measured and positive.")
+
+        self.center = np.asarray([float(center_xy_mm[0]),
+                                  float(center_xy_mm[1])], dtype=float)
+        self.inner_radius_mm = r_in
+        self.outer_radius_mm = r_out
+        self.height_mm = float(height_mm)
+        self.remanence_t = float(remanence_t)
+        self.distance_uncertainty_mm = float(distance_uncertainty_mm)
+        self.earth = np.asarray(earth_field_xyz_t, dtype=float)
+        self.magpy = magpy
+        self.source = magpy.magnet.CylinderSegment(
+            polarization=tuple(self.remanence_t * v for v in direction),
+            # (r1, r2, h, phi1, phi2) in metres and degrees; the full 360 is
+            # what makes it a ring rather than an arc.
+            dimension=(r_in / 1000, r_out / 1000, self.height_mm / 1000,
+                       0.0, 360.0),
+            position=(self.center[0] / 1000, self.center[1] / 1000,
+                      float(z_offset_mm) / 1000))
+
+    def _field(self, x_mm, y_mm, z_mm=0.0):
+        return np.asarray(self.magpy.getB(
+            self.source, (x_mm / 1000, y_mm / 1000, z_mm / 1000)),
+            dtype=float) + self.earth
+
+    def radius_mm(self, x_mm, y_mm):
+        """Distance from the hole centre - the assay's natural coordinate."""
+        return float(np.hypot(x_mm - self.center[0], y_mm - self.center[1]))
+
+    def sample(self, x_mm, y_mm, time_s=0):
+        field = self._field(x_mm, y_mm)
+        magnitude = float(np.linalg.norm(field))
+        h = max(0.02, self.distance_uncertainty_mm / 4)
+        gx = (np.linalg.norm(self._field(x_mm + h, y_mm)) -
+              np.linalg.norm(self._field(x_mm - h, y_mm))) / (2 * h)
+        gy = (np.linalg.norm(self._field(x_mm, y_mm + h)) -
+              np.linalg.norm(self._field(x_mm, y_mm - h))) / (2 * h)
+        horizontal = float(np.linalg.norm(field[:2]))
+        inclination = float(np.degrees(np.arctan2(field[2], horizontal)))
+        r = self.radius_mm(x_mm, y_mm)
+        # THE GRADIENT IS NOT TRUSTWORTHY ACROSS A MATERIAL BOUNDARY. The
+        # central difference straddles the magnet face there, so it differences
+        # two field regimes and returns a number that is large, plausible and
+        # meaningless - measured at the outer edge of a 30 mm ring it came out
+        # as -2378 mT/mm. This matters here more than anywhere else, because
+        # the inner edge IS the boundary this assay scores animals crossing.
+        near_edge = (abs(r - self.inner_radius_mm) <= h or
+                     abs(r - self.outer_radius_mm) <= h)
+        unc = {
+            "radius_from_centre_mm": r,
+            "inside_hole": r < self.inner_radius_mm,
+            "inner_radius_mm": self.inner_radius_mm,
+            "vertical_distance_mm": self.distance_uncertainty_mm,
+            "geometry": "ring",
+            "gradient_unreliable": bool(near_edge),
+        }
+        if near_edge:
+            unc["gradient_warning"] = (
+                f"This point is within {h:.3g} mm of a magnet face, so the "
+                f"finite-difference gradient straddles the material boundary "
+                f"and differences two field regimes. The value is large, "
+                f"plausible and meaningless. The field magnitude itself is "
+                f"fine; only the gradient is not.")
+        unc.update({
+            "why_the_centre_matters": (
+                "The in-plane gradient vanishes at the centre by symmetry, so "
+                "an animal starting there has no direction to follow until it "
+                "moves off centre. The field itself is NOT zero there, and it "
+                "RISES from the centre to a maximum at the inner edge - so a "
+                "worm leaving the middle climbs a gradient the whole way to "
+                "the boundary it is scored on."),
+            "dominant_sensitivity": "vertical distance to agar surface"})
+        return FieldSample(
+            _unit(field), magnitude, (float(gx), float(gy)), inclination,
+            unc, "T")
+
+    def describe(self):
+        return (f"ring magnet, hole {self.inner_radius_mm * 2:.1f} mm, "
+                f"outer {self.outer_radius_mm * 2:.1f} mm, "
+                f"{self.remanence_t} T")
+
+
 class MagnetProvider(StimulusFieldProvider):
     """Magpylib-backed 3D magnet field on the worm plane.
 

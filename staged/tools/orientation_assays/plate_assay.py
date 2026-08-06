@@ -394,6 +394,129 @@ def food_state(offset_s, threshold_s=ENHANCED_SLOWING_S):
     }
 
 
+def donut_crossing(tracks, center_xy_mm, inner_radius_mm, *,
+                   body_radius_mm=None, criterion="fully_outside",
+                   recording_duration_s=None):
+    """Time until each worm has fully crossed the inner edge of the hole.
+
+    Andres: worms start at the centre, surrounded by a donut magnet; the user
+    draws the inner edge and the program counts time to worms FULLY crossing
+    it.
+
+    "FULLY" IS A CHOICE AND IT IS RECORDED. A centroid crossing and a whole
+    -body crossing differ by about a worm length - roughly a millimetre in an
+    adult - which on a hole of a few millimetres is a large fraction of the
+    measurement. `body_radius_mm` makes the difference explicit; without it the
+    criterion falls back to the centroid and says so, rather than quietly
+    measuring something else.
+
+    ANIMALS THAT NEVER CROSS ARE CENSORED, NOT SLOW. This is a survival-time
+    measurement, and the commonest way to ruin one is to drop the non-crossers
+    or score them at the recording length. Both bias the mean downward - the
+    first by discarding the most extreme observations, the second by pretending
+    an unknown time is a known one. They are returned separately and counted.
+    """
+    center = np.asarray(center_xy_mm, dtype=float)
+    r_in = float(inner_radius_mm)
+    if r_in <= 0:
+        raise ValueError(
+            "The hole radius must be positive - it is the boundary the "
+            "measurement is defined by.")
+    if criterion not in {"fully_outside", "centroid"}:
+        raise ValueError(
+            "criterion must be 'fully_outside' or 'centroid'. They differ by "
+            "about a worm length, which on a hole of a few millimetres is a "
+            "large fraction of the answer.")
+    pad = 0.0
+    used = criterion
+    note = None
+    if criterion == "fully_outside":
+        if body_radius_mm in (None, "", 0):
+            used = "centroid"
+            note = ("No body radius was given, so a full-body crossing cannot "
+                    "be determined and the centroid was used instead. The "
+                    "centroid crosses about a worm length earlier, so these "
+                    "times are systematically SHORT by that much.")
+        else:
+            pad = float(body_radius_mm)
+
+    worms = {}
+    for row in tracks:
+        worms.setdefault(
+            (str(row["plate_id"]), str(row.get("worm_id"))), []).append(row)
+
+    crossed, censored = [], []
+    last_seen = 0.0
+    for (plate, worm), rows in sorted(worms.items()):
+        rows = sorted(rows, key=lambda r: float(r["time_s"]))
+        t0 = float(rows[0]["time_s"])
+        last_seen = max(last_seen, float(rows[-1]["time_s"]))
+        started_inside = (float(np.hypot(rows[0]["x_mm"] - center[0],
+                                         rows[0]["y_mm"] - center[1]))
+                          + pad) < r_in
+        hit = None
+        for row in rows:
+            r = float(np.hypot(row["x_mm"] - center[0],
+                               row["y_mm"] - center[1]))
+            if r - pad >= r_in:
+                hit = float(row["time_s"]) - t0
+                break
+        entry = {"plate_id": plate, "worm_id": worm,
+                 "started_inside": bool(started_inside),
+                 "crossing_time_s": hit,
+                 "observed_for_s": float(rows[-1]["time_s"]) - t0}
+        if not started_inside:
+            entry["excluded"] = (
+                "This animal was already outside the hole at the first frame, "
+                "so it has no time-to-cross. Counting it as an instant "
+                "crossing would put a zero into the distribution that "
+                "describes the setup, not the animal.")
+            censored.append(entry)
+        elif hit is None:
+            entry["censored"] = (
+                "Never crossed within the recording. This is a censored "
+                "observation, not a long one - the true time is unknown and "
+                "greater than the time observed.")
+            censored.append(entry)
+        else:
+            crossed.append(entry)
+
+    times = [e["crossing_time_s"] for e in crossed]
+    n_total = len(crossed) + len(censored)
+    out = {
+        "criterion": used,
+        "criterion_requested": criterion,
+        "body_radius_mm": None if not pad else pad,
+        "inner_radius_mm": r_in,
+        "n_worms": n_total,
+        "n_crossed": len(crossed),
+        "n_censored": len(censored),
+        "crossed": crossed,
+        "censored": censored,
+        "median_crossing_time_s": (float(np.median(times)) if times else None),
+        "fraction_crossed": (round(len(crossed) / n_total, 3)
+                             if n_total else None),
+        "warnings": [],
+    }
+    if note:
+        out["warnings"].append(note)
+    if censored:
+        out["warnings"].append(
+            f"{len(censored)} of {n_total} animals have no crossing time. "
+            f"Do not drop them and do not score them at the recording length "
+            f"- the first discards the most extreme observations and the "
+            f"second turns an unknown time into a known one, and both pull "
+            f"the mean down. Use a survival estimate, or report the fraction "
+            f"crossed alongside the median of those that did.")
+    if times and recording_duration_s and max(times) > 0.9 * float(
+            recording_duration_s):
+        out["warnings"].append(
+            "Some crossings happen near the end of the recording, so the "
+            "recording length is probably truncating the distribution rather "
+            "than containing it.")
+    return out
+
+
 def population_layer(
     *, tracks, segments, geometry=None, departure_rows=(),
     time_since_food_removal_s=None, food_removal_clock=None,
