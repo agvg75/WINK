@@ -27,11 +27,13 @@ from pathlib import Path
 from typing import Optional
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox
 from run_feedback import BRIEFINGS, RunFeedbackStore, ToolBriefing, show_first_run_briefing
 from updater import ApplicationUpdater, UpdateError
 from acquisition_advisor import show_acquisition_advisor
-from flow_layout import FlowFrame, set_minimum_size, wrap_to_width
+from flow_layout import (FlowFrame, fit_tree_column, keep_panes_usable,
+                         set_minimum_size, wrap_to_width)
 
 # Optional: the theme must never be able to stop the Hub from opening.
 try:
@@ -688,6 +690,10 @@ class Hub(_BASE):
             rail, show="tree", selectmode="browse", height=22,
             takefocus=True)
         self.category_tree.pack(fill="both", expand=True, padx=(0, 8))
+        # The column has its own width, independent of the widget's, and Tk
+        # defaults it to about 200px - so "Motor output - Rhythmic programs"
+        # was cut with nothing to reveal the rest. Follow the rail.
+        fit_tree_column(self.category_tree, rail)
         self.sections = group_tools_by_category()
         for section, tools in self.sections.items():
             self.category_tree.insert(
@@ -750,6 +756,28 @@ class Hub(_BASE):
         # unused. Follow the pane instead.
         for _lbl in (self.detail_title, self.detail_desc, self.detail_requires):
             wrap_to_width(_lbl, detail)
+
+        # ttk.Panedwindow has no per-pane minimum, so a narrow window or a
+        # dragged sash pushed the detail pane's Launch button past the edge
+        # where it could not be clicked at all. Clamp the sashes instead.
+        #
+        # The rail's minimum is MEASURED from the longest category name rather
+        # than guessed. A guess of 190px was tested and still cut "Motor output
+        # - Sensory-guided behaviour (13)" in half, which is the same failure in
+        # a new place: a number that was right for the text someone had in mind
+        # when they wrote it. Categories are added over time; the floor should
+        # follow them.
+        keep_panes_usable(body, [self._rail_minimum(), 360, 260])
+
+    def _rail_minimum(self, pad=52, floor=190, ceiling=400):
+        """Wide enough for the longest category name, within reason."""
+        try:
+            font = tkfont.nametofont("TkDefaultFont")
+            widest = max(font.measure(f"{name}  ({len(tools)})")
+                         for name, tools in self.sections.items())
+        except Exception:                                  # pragma: no cover
+            return floor
+        return int(min(max(widest + pad, floor), ceiling))
 
     def _configure_styles(self):
         style = ttk.Style(self)

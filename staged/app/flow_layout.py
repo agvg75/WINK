@@ -156,6 +156,85 @@ def wrap_to_width(label, container=None, margin=28, minimum=120):
     return label
 
 
+def fit_tree_column(tree, container=None, column="#0", margin=24,
+                    minimum=120):
+    """Keep a Treeview's column as wide as the pane holding it.
+
+    THE SAME BUG AS wrap_to_width, in the one widget where it cannot be seen.
+    A Treeview column has its own width, independent of the widget's. Tk
+    defaults ``#0`` to about 200 pixels, so a category named "Motor output -
+    Rhythmic programs (5)" is cut off at "Rhythmic program" - and unlike a
+    clipped Label, there is nothing to reveal it: no wrap, no ellipsis, and no
+    horizontal scrollbar unless one was added. Widening the pane does not help,
+    because the column stays 200 pixels wide inside a wider widget.
+
+    So the column follows the container, exactly as wrapping does.
+    """
+    if ttk is None:                                        # pragma: no cover
+        return tree
+    holder = container if container is not None else tree.master
+
+    def _fit(event=None):
+        width = (event.width if event is not None else holder.winfo_width())
+        target = max(int(width) - int(margin), int(minimum))
+        try:
+            if int(tree.column(column, "width")) != target:
+                tree.column(column, width=target, stretch=True)
+        except Exception:                                  # pragma: no cover
+            pass
+
+    holder.bind("<Configure>", _fit, add="+")
+    try:
+        holder.after_idle(_fit)
+    except Exception:                                      # pragma: no cover
+        pass
+    return tree
+
+
+def keep_panes_usable(paned, minima):
+    """Stop a pane being dragged (or squeezed) below a usable width.
+
+    ``ttk.Panedwindow`` has no per-pane minimum - that option exists on the
+    older ``tk.PanedWindow`` and did not survive into the themed one. So a
+    narrow window, or a determined drag, silently pushes a pane's contents past
+    the edge where they cannot be reached at all. The detail pane loses its
+    Launch button; the rail loses the category names.
+
+    ``minima`` is a list of minimum widths, one per pane in order. Sash
+    positions are clamped after every resize so each pane keeps at least its
+    minimum, working from the left, and the last pane keeps the remainder.
+    """
+    if ttk is None:                                        # pragma: no cover
+        return paned
+
+    def _clamp(_event=None):
+        try:
+            total = paned.winfo_width()
+            n_sashes = len(minima) - 1
+            if total <= 1 or n_sashes < 1:
+                return
+            # Left edge for sash i is the sum of the minima before it; the
+            # right edge is whatever the panes after it still need.
+            for i in range(n_sashes):
+                floor = sum(minima[:i + 1])
+                ceiling = total - sum(minima[i + 1:])
+                if ceiling < floor:
+                    continue          # window too small to satisfy everyone
+                pos = int(paned.sashpos(i))
+                target = min(max(pos, floor), ceiling)
+                if target != pos:
+                    paned.sashpos(i, target)
+        except Exception:                                  # pragma: no cover
+            pass
+
+    paned.bind("<Configure>", _clamp, add="+")
+    try:
+        paned.after_idle(_clamp)
+    except Exception:                                      # pragma: no cover
+        pass
+    return paned
+
+
 def set_minimum_size(window, width=760, height=520):
     """Stop a window being narrowed past the point where it makes sense.
 
