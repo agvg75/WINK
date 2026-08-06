@@ -545,7 +545,7 @@ def population_layer(
     initial_state_window_s=30.0, pick_state=None, min_worms_per_regime=3,
     enhanced_slowing_s=ENHANCED_SLOWING_S, stimulus=None,
     n_placed=None, n_tracked=None, plate_area_cm2=None,
-    ambient=None, ambient_confirmed=False, assay=None,
+    ambient=None, ambient_confirmed=False, assay=None, protocol=None,
 ):
     """Everything a plate-migration assay gets for free. One call per assay.
 
@@ -641,6 +641,25 @@ def population_layer(
     out["ambient"] = ambient_conditions(
         ambient, confirmed=ambient_confirmed, assay=assay)
     out["warnings"].extend(out["ambient"]["warnings"])
+
+    # The per-assay controls, checked against the published methods. Humidity
+    # is read from the ambient block so the 50% RH threshold applies to the
+    # value actually recorded rather than to a second copy of it.
+    if protocol is not None or assay:
+        import assay_protocol
+        record = dict(protocol or {})
+        record.setdefault("humidity_percent",
+                          out["ambient"]["values"].get("humidity_percent"))
+        out["protocol"] = assay_protocol.summarise(record, assay=assay or "")
+        blocking = [f for f in out["protocol"]["findings"]
+                    if f["severity"] in {"gate", "abolishes_result",
+                                         "reverses_result"}]
+        if blocking:
+            out["warnings"].append(
+                f"{len(blocking)} protocol finding(s) at a severity that can "
+                f"reverse or abolish the result: "
+                f"{', '.join(sorted({f['check'] for f in blocking}))}. See "
+                f"result['protocol'] for what each one costs.")
     return out
 
 

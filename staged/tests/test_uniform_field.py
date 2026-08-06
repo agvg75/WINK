@@ -168,14 +168,42 @@ lay = pa.population_layer(tracks=tracks, segments=segs, assay="magnetotaxis",
 check("the layer carries ambient conditions", "ambient" in lay)
 check("...and surfaces the unsigned warning",
       any("not signed off" in w for w in lay["warnings"]))
+FULL_PROTOCOL = {
+    "life_stage": "day 1 adult", "assay_start_latency_s": 240,
+    "cultivation_apparatus": "environmental box",
+    "culture_starved": False, "culture_contaminated": False,
+    "culture_overpopulated": False, "coil_orientation_randomised": True,
+    "field_measured_before_mT": 0.065, "field_measured_after_mT": 0.065,
+    "faraday_shielded": True, "thermal_gradient_c": 0.1,
+    "illumination_gradient_checked": True, "food_on_assay_surface": False,
+    "bacterial_strain": "OP50", "plate_age_days": 1, "time_of_day": "10:15",
+}
 signed_lay = pa.population_layer(
     tracks=tracks, segments=segs, assay="magnetotaxis", n_placed=1,
     time_since_food_removal_s=60,
     geometry=pa.VectorField(0.0), min_worms_per_regime=1,
     ambient={"temperature_c": 21.0, "humidity_percent": 40.0,
-             "pressure_atm": 1.0}, ambient_confirmed=True)
+             "pressure_atm": 1.0}, ambient_confirmed=True,
+    protocol=FULL_PROTOCOL)
 check("...and goes quiet once signed", signed_lay["warnings"] == [],
       str(signed_lay["warnings"]))
+check("the protocol controls are carried in the result",
+      signed_lay["protocol"]["n_findings"] == 0 and
+      signed_lay["protocol"]["interpretable"] is True)
+bare_proto = pa.population_layer(
+    tracks=tracks, segments=segs, assay="magnetotaxis", n_placed=1,
+    time_since_food_removal_s=60, geometry=pa.VectorField(0.0),
+    min_worms_per_regime=1,
+    ambient={"temperature_c": 21.0, "humidity_percent": 40.0,
+             "pressure_atm": 1.0}, ambient_confirmed=True)
+check("an unrecorded protocol surfaces as a single ranked warning",
+      any("reverse or abolish the result" in w
+          for w in bare_proto["warnings"]),
+      "not sixteen separate ones")
+check("humidity is read from the ambient block, not recorded twice",
+      not any(f["check"] == "relative_humidity"
+              for f in bare_proto["protocol"]["findings"]),
+      "40% RH was signed off, so the 50% threshold has its value")
 
 for assay in ("chemotaxis", "thermotaxis", "magnetotaxis"):
     block = ow.configuration_template(assay).get("ambient", {})

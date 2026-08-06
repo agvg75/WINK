@@ -19,6 +19,26 @@ after the fact from memory is not good enough.
 `captured` says whether WINK asks for it today. Where it does not, `matters`
 says what goes wrong, because a list of missing fields is only useful if
 someone can tell which ones to add first.
+
+WHERE THE CAPTURED ONES LIVE. The `matters` text below describes the risk each
+parameter carries and is left as written, since the risk does not go away when
+a field is added - it is what the field is for:
+
+  heading_analysis.py   time_within_assay, track_segment_normalisation,
+                        assay_as_statistical_unit, participation_radius
+  assay_protocol.py     life_stage, assay_start_latency, cultivation_apparatus,
+                        starvation/contamination, relative_humidity threshold,
+                        thermal_gradient, illumination_gradient,
+                        electric_field_shielding, field_verification,
+                        coil_orientation_randomised, plate_age, time_of_day,
+                        food_present_during_assay
+  stimulus_fields.py    field_geometry_layout, sham_and_zero_field_controls
+  plate_assay.py        time_off_food_before_assay, crowding (assay side)
+
+CAPTURED MEANS ASKED FOR, NOT ANSWERED. Every one of these defaults to None
+meaning unrecorded, and an unrecorded control is reported as such rather than
+assumed done. A full protocol block of nulls is a complete record of having
+recorded nothing.
 """
 from __future__ import annotations
 
@@ -70,7 +90,7 @@ PARAMETERS = [
     {
         "name": "time_within_assay",
         "group": "temporal",
-        "captured": "no",
+        "captured": "yes",
         "severity": "reverses_result",
         "source": "bainbridge2019",
         "finding": ("The preferred angle rotates by about 180 degrees over a "
@@ -106,7 +126,7 @@ PARAMETERS = [
     {
         "name": "assay_start_latency",
         "group": "temporal",
-        "captured": "no",
+        "captured": "yes",
         "severity": "reverses_result",
         "source": "bainbridge2019",
         "finding": ("'All assays began within 5 min of worms being collected "
@@ -119,7 +139,7 @@ PARAMETERS = [
     {
         "name": "cultivation_apparatus",
         "group": "animal_state",
-        "captured": "no",
+        "captured": "yes",
         "severity": "abolishes_result",
         "source": "bainbridge2019",
         "finding": ("Cultivating worms in an INCUBATOR interferes with the "
@@ -133,7 +153,7 @@ PARAMETERS = [
     {
         "name": "life_stage",
         "group": "animal_state",
-        "captured": "partial",
+        "captured": "yes",
         "severity": "abolishes_result",
         "source": "bainbridge2019",
         "finding": ("Larval-stage and OLD ADULT worms cannot perform magnetic "
@@ -148,7 +168,7 @@ PARAMETERS = [
     {
         "name": "starvation_and_contamination_history",
         "group": "animal_state",
-        "captured": "no",
+        "captured": "yes",
         "severity": "reverses_result",
         "source": "bainbridge2019",
         "finding": ("Starvation and contamination history 'can sway the "
@@ -174,7 +194,7 @@ PARAMETERS = [
     {
         "name": "relative_humidity",
         "group": "environment",
-        "captured": "partial",
+        "captured": "yes",
         "severity": "degrades_result",
         "source": "bainbridge2019",
         "finding": ("Orientation is more robust below 50% RH. Dry days "
@@ -189,7 +209,7 @@ PARAMETERS = [
     {
         "name": "thermal_gradient_across_plate",
         "group": "environment",
-        "captured": "no",
+        "captured": "yes",
         "severity": "confound",
         "source": "bainbridge2019",
         "finding": ("Temperature difference between plate centre and edge "
@@ -208,7 +228,7 @@ PARAMETERS = [
     {
         "name": "illumination_gradient",
         "group": "environment",
-        "captured": "no",
+        "captured": "yes",
         "severity": "confound",
         "source": "bainbridge2019",
         "finding": ("Test images were quantified in ImageJ 'to ensure no "
@@ -221,7 +241,7 @@ PARAMETERS = [
     {
         "name": "electric_field_shielding",
         "group": "environment",
-        "captured": "no",
+        "captured": "yes",
         "severity": "confound",
         "source": "bainbridge2019",
         "finding": ("Camera and LED lights were wrapped in grounded copper "
@@ -235,7 +255,7 @@ PARAMETERS = [
     {
         "name": "circadian_phase",
         "group": "temporal",
-        "captured": "no",
+        "captured": "yes",
         "severity": "unquantified",
         "source": "bainbridge2019",
         "finding": ("The replicating lab maintained LD 12:12 at 400:0 lux and "
@@ -250,7 +270,7 @@ PARAMETERS = [
     {
         "name": "field_verification_before_and_after",
         "group": "apparatus",
-        "captured": "no",
+        "captured": "yes",
         "severity": "confound",
         "source": "bainbridge2019",
         "finding": ("'Temperature and magnetic measurements were performed "
@@ -264,7 +284,7 @@ PARAMETERS = [
     {
         "name": "coil_orientation_randomised",
         "group": "apparatus",
-        "captured": "no",
+        "captured": "yes",
         "severity": "confound",
         "source": "bainbridge2019",
         "finding": ("'Before each assay, we rotated the magnetic coil system "
@@ -304,7 +324,7 @@ PARAMETERS = [
     {
         "name": "assay_as_statistical_unit",
         "group": "analysis",
-        "captured": "no",
+        "captured": "yes",
         "severity": "invalidates_statistics",
         "source": ["bainbridge2019", "landler2018"],
         "finding": ("'Following Landler et al. (2018), animals were not pooled "
@@ -320,7 +340,7 @@ PARAMETERS = [
     {
         "name": "track_segment_normalisation",
         "group": "analysis",
-        "captured": "no",
+        "captured": "yes",
         "severity": "biases_result",
         "source": "bainbridge2019",
         "finding": ("Trajectories were binned into 5% intervals so that "
@@ -333,7 +353,7 @@ PARAMETERS = [
     {
         "name": "participation_radius",
         "group": "analysis",
-        "captured": "partial",
+        "captured": "yes",
         "severity": "changes_result",
         "source": "bainbridge2019",
         "finding": ("'Animals had to move greater than 5 mm from the center "
@@ -372,7 +392,7 @@ PARAMETERS = [
     {
         "name": "plate_age_and_preparation",
         "group": "preparation",
-        "captured": "no",
+        "captured": "yes",
         "severity": "unquantified",
         "source": "bainbridge2019",
         "finding": ("A 1-day-old 10 cm chemotaxis plate; animals transferred "
@@ -396,7 +416,7 @@ PARAMETERS = [
     {
         "name": "food_present_during_assay",
         "group": "preparation",
-        "captured": "no",
+        "captured": "yes",
         "severity": "changes_result",
         "source": "bainbridge2019",
         "finding": ("The replicating lab ran assays ON A BACTERIAL LAWN "

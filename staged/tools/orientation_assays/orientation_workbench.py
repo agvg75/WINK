@@ -115,6 +115,28 @@ def configuration_template(assay):
         "endpoint_only": False,
         "state": dict(food_state_block),
         "ambient": dict(ambient_block),
+        # The per-assay controls from Bainbridge et al. 2019. None means NOT
+        # RECORDED, which is deliberately different from false - a control
+        # that ran but was never written down is a lost record, one that did
+        # not run is a confound, and they need different fixes.
+        "protocol": {
+            "life_stage": None,              # day-1 adult gates magnetotaxis
+            "assay_start_latency_s": None,   # source allows 300 s
+            "cultivation_apparatus": None,   # an incubator interferes
+            "culture_starved": None,
+            "culture_contaminated": None,
+            "culture_overpopulated": None,
+            "coil_orientation_randomised": None,
+            "field_measured_before_mT": None,
+            "field_measured_after_mT": None,
+            "faraday_shielded": None,
+            "thermal_gradient_c": None,      # plate centre to edge
+            "illumination_gradient_checked": None,
+            "food_on_assay_surface": None,
+            "bacterial_strain": None,
+            "plate_age_days": None,
+            "time_of_day": None,
+        },
     }
     if assay == "magnetotaxis":
         return {
