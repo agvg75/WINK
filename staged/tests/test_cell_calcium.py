@@ -110,6 +110,33 @@ check("a trace that DID fall still gives tau",
       cc.transient(trace[:int(5.0 * fps)], fps)["decay_tau_s"] is not None,
       "the guard must not refuse good data")
 
+# An empty recording must not produce a dose-response. This exact trace shape
+# came off the lab's ACh movies, where 96-98% of pixels were zero: a baseline
+# of a fraction of a count, and scatter of the same size. transient() reported
+# 100% of cells responding with dF/F0 up to 32 before this guard existed - the
+# checks in check_recording were all in place and none of them ran, because
+# they check a RECORDING and this takes a TRACE.
+empty = np.abs(rng_empty := np.random.default_rng(3).normal(0, 0.5, 220))
+try:
+    cc.transient(empty, 7.5)
+    check("a trace whose baseline is noise is refused", False)
+except cc.CalciumError as exc:
+    check("a trace whose baseline is noise is refused", True,
+          "dividing by 0.1 counts turns one grey level into dF/F0 of 10")
+    check("...naming that it would report the noise confidently",
+          "report it confidently" in str(exc))
+    check("...and that exposure, not analysis, is the fix",
+          "no analysis recovers a signal that was never" in str(exc))
+
+# The guard must not refuse real data. A genuine transient on a proper baseline
+# has scatter far below its baseline.
+noisy_real = 100.0 + np.random.default_rng(4).normal(0, 3, 400)
+noisy_real[40:] += 80 * np.exp(-np.arange(360) / 30.0)
+ok = cc.transient(noisy_real, 20.0)
+check("a real transient on a solid baseline still passes",
+      ok["detected"] and ok["amplitude_dff"] > 0.5,
+      f"dF/F0 {ok['amplitude_dff']:.2f} on baseline 100 with SD 3")
+
 try:
     cc.transient(trace, 0)
     check("a missing frame rate is refused", False)

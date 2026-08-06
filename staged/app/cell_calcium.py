@@ -298,6 +298,10 @@ MIN_RATIOMETRIC_BITS = 12
 # Points after the peak needed before a decay fit means anything.
 MIN_DECAY_POINTS = 8
 MIN_SIGNAL_FOR_RATIO = 20.0
+# How far the resting part of a trace may scatter, relative to the baseline
+# itself, before dF/F0 stops meaning anything. At 0.5 the baseline is worth
+# only twice its own noise, which is already generous.
+BASELINE_NOISE_LIMIT = 0.5
 
 
 def normalise_probe(name):
@@ -470,6 +474,33 @@ def transient(trace, fps, *, f0=None, f0_method="percentile",
         raise CalciumError(
             "The baseline is zero, so dF/F0 is undefined. For a single-"
             "wavelength dye this usually means background was over-subtracted.")
+
+    # A BASELINE INDISTINGUISHABLE FROM ZERO MAKES dF/F0 MEANINGLESS, and it
+    # does so while returning large, confident-looking numbers. Dividing by a
+    # baseline of 0.1 counts turns one grey level into a dF/F0 of 10.
+    #
+    # Found on the lab's ACh dose-response movies, where this function reported
+    # that 100% of cells responded with dF/F0 up to 32 - from recordings in
+    # which 96-98% of pixels were exactly zero and the "cells" were 1-pixel
+    # shot-noise specks. Every guard in check_recording was in place and none
+    # of them ran, because they check the RECORDING and this takes a TRACE.
+    #
+    # The test is unit-free, so it needs no declared bit depth: compare the
+    # baseline to the scatter of the resting part of the trace itself. If the
+    # resting points wander by as much as the baseline is worth, the baseline
+    # is not measurably different from zero and nothing divided by it survives.
+    rest = x[x <= np.percentile(x, 25)]
+    rest_sd = float(np.std(rest)) if rest.size >= 3 else 0.0
+    if rest_sd >= BASELINE_NOISE_LIMIT * abs(base):
+        raise CalciumError(
+            f"The baseline is {base:.3g} and the resting part of the trace "
+            f"scatters by {rest_sd:.3g}, so the baseline is not measurably "
+            f"different from zero. dF/F0 divides by it, which would turn that "
+            f"scatter into a large amplitude and report it confidently - this "
+            f"is how an empty recording produces a dose-response. Fix the "
+            f"exposure; no analysis recovers a signal that was never "
+            f"collected.")
+
     dff = (x - base) / base
     i_peak = int(np.argmax(dff))
     amp = float(dff[i_peak])
