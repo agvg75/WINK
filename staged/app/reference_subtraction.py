@@ -188,6 +188,70 @@ def _label(mask):
     return labels, current
 
 
+def reference_quality(candidate_index, frames, *, sample=12, tolerance_sd=4.0):
+    """Is this frame REPRESENTATIVE of the movie, or the one odd frame in it?
+
+    Found on real data and it cost a whole re-tracking run. In an archived
+    magnetotaxis movie the first frame - the one "subtract the starting frame"
+    tells you to use - contained a ceiling-lamp reflection off the plate,
+    12,658 px of it, that was gone by frame 1 and never returned in the
+    remaining 3454 frames. Frame 0 was the single frame unlike every other,
+    and subtracting it made a large bright object appear to arrive in every
+    later frame.
+
+    THE GHOST CHECK DOES NOT CATCH THIS. That one asks whether the animals in
+    the reference sit in the excluded region. This asks a different and prior
+    question: is the reference typical of the movie at all? The first frame is
+    the most likely one to be contaminated - a hand still withdrawing, a lid
+    coming off, auto-exposure settling, someone stepping out of the light -
+    precisely because it is the first.
+
+    `frames` is a sequence supporting integer indexing and returning arrays.
+    """
+    n = len(frames)
+    if n < 3:
+        raise SubtractionError(
+            "At least three frames are needed to judge whether one of them is "
+            "unusual.")
+    idx = sorted({int(round(i)) for i in
+                  np.linspace(0, n - 1, min(sample, n))}
+                 - {int(candidate_index)})
+    means = np.array([float(np.mean(_gray(frames[i]))) for i in idx])
+    cand = float(np.mean(_gray(frames[int(candidate_index)])))
+    med = float(np.median(means))
+    mad = float(np.median(np.abs(means - med))) * 1.4826
+    if mad <= 0:
+        mad = float(np.std(means)) or 1e-9
+    z = abs(cand - med) / mad
+    ok = z <= tolerance_sd
+    out = {
+        "candidate_index": int(candidate_index),
+        "candidate_mean": cand,
+        "movie_median_mean": med,
+        "deviation_sd": round(z, 2),
+        "representative": bool(ok),
+        "compared_against": idx,
+    }
+    if not ok:
+        out["why"] = (
+            f"Frame {candidate_index} has a mean of {cand:.2f} against a movie "
+            f"median of {med:.2f} - {z:.1f} robust SD away. It is not typical "
+            f"of this recording, so subtracting it will make whatever is "
+            f"unusual about it appear to arrive in every other frame. The "
+            f"FIRST frame is the likeliest to be contaminated - a hand "
+            f"withdrawing, a lid coming off, exposure settling, someone "
+            f"stepping out of the light - precisely because it is first. Pick "
+            f"another early frame.")
+        # Suggest the nearest early frame that is typical.
+        early = [i for i in idx if i <= max(4, n // 20)]
+        for i in early + idx:
+            m = float(np.mean(_gray(frames[i])))
+            if abs(m - med) / mad <= tolerance_sd:
+                out["suggested_index"] = i
+                break
+    return out
+
+
 def ghost_check(reference, later, *, center_px, roi_radius_px,
                 threshold_sd=4.0, polarity="dark"):
     """Do the reference frame's animals really all sit inside the excluded ROI?

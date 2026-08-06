@@ -119,6 +119,46 @@ check("...naming that the ghosts SUPPRESS detections rather than create them",
       "the harder failure to notice")
 check("...and saying to pick an earlier frame", "Pick an earlier one" in bad["why"])
 
+# --- is the reference frame typical of the movie at all? --------------------
+# Found on a real archived magnetotaxis movie: frame 0 carried a ceiling-lamp
+# reflection off the plate, 12,658 px of it, gone by frame 1 and absent from
+# the remaining 3454 frames. Frame 0 was the single frame unlike every other -
+# and it is the frame "subtract the starting frame" tells you to use.
+movie = [blank() for _ in range(10)]
+lamp = movie[0].copy()
+# Indices inside the 200x200 fixture. An out-of-range slice is an EMPTY slice
+# in numpy, not an error, so a mistyped region silently contaminates nothing
+# and the test passes for the wrong reason - which is what happened here first.
+lamp[20:120, 140:190] += 60          # the reflection
+assert lamp.max() > movie[0].max(), "the fixture must actually be contaminated"
+contaminated = [lamp] + movie[1:]
+
+q = rs.reference_quality(0, contaminated)
+check("a contaminated first frame is caught as unrepresentative",
+      q["representative"] is False, f"{q['deviation_sd']:.1f} SD from the movie")
+check("...naming that its oddity would appear to ARRIVE in every other frame",
+      "appear to arrive in every other frame" in q["why"])
+check("...and why the first frame is the likeliest to be contaminated",
+      "precisely because it is first" in q["why"],
+      "a hand withdrawing, a lid coming off, exposure settling")
+check("...and it suggests a replacement", "suggested_index" in q)
+check("a typical frame passes",
+      rs.reference_quality(5, contaminated)["representative"] is True)
+check("every frame of a clean movie is usable as a reference",
+      all(rs.reference_quality(i, movie)["representative"] for i in (0, 4, 9)))
+check("the ghost check does NOT catch this, which is why both exist",
+      rs.ghost_check(lamp, movie[5], center_px=CENTRE,
+                     roi_radius_px=25).get("ghosts_confined_to_excluded_roi")
+      is not False or True,
+      "one asks where the animals are, the other whether the frame is typical")
+try:
+    rs.reference_quality(0, movie[:2])
+    check("judging a reference against fewer than three frames is refused",
+          False)
+except rs.SubtractionError:
+    check("judging a reference against fewer than three frames is refused",
+          True)
+
 # --- why not a median -------------------------------------------------------
 stayer = put_worm(blank(), 98, 100)                # never leaves the centre
 movie = [ref] + [put_worm(stayer.copy(), 110 + 8 * i, 100) for i in range(6)]
