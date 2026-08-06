@@ -159,6 +159,33 @@ except rs.SubtractionError:
     check("judging a reference against fewer than three frames is refused",
           True)
 
+# --- averaging the first few frames -----------------------------------------
+noisy = [blank() for _ in range(12)]
+avg, used = rs.averaged_reference(noisy, start=1, n=10)
+check("an averaged reference uses the frames asked for", used == 10)
+single_noise = float(np.median(np.abs(
+    (noisy[5] - noisy[1]) - np.median(noisy[5] - noisy[1])))) * 1.4826
+avg_noise = float(np.median(np.abs(
+    (noisy[5] - avg) - np.median(noisy[5] - avg)))) * 1.4826
+check("...and is quieter than any single frame",
+      avg_noise < single_noise * 0.85,
+      f"{avg_noise:.2f} vs {single_noise:.2f}")
+check("averaging can skip a contaminated first frame",
+      rs.averaged_reference(contaminated, start=1, n=10)[0].max() <
+      contaminated[0].max(),
+      "exclude bad frames first, then average the rest")
+try:
+    rs.averaged_reference(noisy, start=50, n=10)
+    check("an empty averaging range is refused", False)
+except rs.SubtractionError as exc:
+    check("an empty averaging range is refused", True)
+    check("...naming that every pixel would become a detection",
+          "every pixel of every frame a detection" in str(exc))
+check("the docstring records that the gain must be spent as SNR",
+      "not as a lower threshold" in rs.averaged_reference.__doc__.lower()
+      or "NOT AS A LOWER THRESHOLD" in rs.averaged_reference.__doc__,
+      "holding threshold_sd fixed on a quieter reference fragments tracks")
+
 # --- why not a median -------------------------------------------------------
 stayer = put_worm(blank(), 98, 100)                # never leaves the centre
 movie = [ref] + [put_worm(stayer.copy(), 110 + 8 * i, 100) for i in range(6)]
