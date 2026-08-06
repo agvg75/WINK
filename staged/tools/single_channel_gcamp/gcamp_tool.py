@@ -21,6 +21,7 @@ ROOT = HERE.parents[1]
 sys.path[:0] = [str(HERE), str(ROOT / "app"), str(ROOT / "tools" / "movie")]
 
 from acquisition import AcquisitionMetadata
+import gcamp_session
 from movie_reader import open_movie
 from image_sequence import discover_images
 from run_feedback import prompt_post_run_feedback
@@ -185,6 +186,10 @@ class App(CockpitApp):
                    command=self.find_episodes).grid(row=0, column=3, padx=4)
         ttk.Button(dial, text="Choose frames by hand...",
                    command=self.choose_frame_subset).grid(row=1, column=3, padx=4)
+        ttk.Button(dial, text="Save session marks...",
+                   command=self.save_session_marks).grid(row=0, column=4, padx=4)
+        ttk.Button(dial, text="Load session marks...",
+                   command=self.load_session_marks).grid(row=1, column=4, padx=4)
 
         ttk.Label(self.center, textvariable=self.status, wraplength=560,
                   justify="left").pack(side="bottom", anchor="w", padx=6,
@@ -307,6 +312,12 @@ class App(CockpitApp):
                 return
             e = eps[int(sel[0])]
             self.episode_range = (e["frame_start"], e["frame_end"])
+            # Recorded as detected rather than manual: a boundary the detector
+            # proposed is not the same evidence as one a person drew, and once
+            # both are in a session file nothing else can tell them apart.
+            self.session_marks = gcamp_session.marks_from_ranges(
+                [(e["frame_start"], e["frame_end"])], kind=e.get("kind", ""),
+                origin="detected")
             self.frames = None
             self.status.set(
                 f"Using frames {e['frame_start']}-{e['frame_end']} "
@@ -434,8 +445,11 @@ class App(CockpitApp):
         except Exception as exc:
             self.status.set(f"Could not load frame: {exc}"); return
         # A new source invalidates any previously chosen range - carrying one
-        # over would silently analyse frames of a different recording.
+        # over would silently analyse frames of a different recording. The
+        # marks go with it, for the same reason: they are source frame
+        # numbers, and they mean nothing against a different recording.
         self.episode_range = None
+        self.session_marks = []
         self.frames = None
         self._last_display_image = im
         self._last_display_title = f"First frame (of {n})"
@@ -449,6 +463,67 @@ class App(CockpitApp):
                 f"'Find recordings in this folder...' to pick one, or 'Choose "
                 f"frames...' to set a range by hand. Analysing across a change "
                 f"of illumination is not a calcium measurement.")
+
+    def save_session_marks(self):
+        """Write the marked range out as structured session data.
+
+        Deciding which frames are the real fluorescence take is the expensive
+        part of this work, and until now it lived in a tuple that died with
+        the window.
+        """
+        marks = getattr(self, "session_marks", None)
+        if not marks:
+            messagebox.showinfo(
+                "Session marks",
+                "Nothing is marked yet. Use 'Find recordings in this "
+                "folder...' or 'Choose frames by hand...' first - there is "
+                "no point writing an empty file.", parent=self)
+            return
+        source = self.v["source"].get()
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Save session marks",
+            defaultextension=".json",
+            initialfile=gcamp_session.DEFAULT_NAME,
+            initialdir=str(Path(source).parent if source else Path.cwd()),
+            filetypes=[("Session marks", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            gcamp_session.save_marks(
+                path, marks, source=source,
+                frame_count=getattr(self, "_session_frame_count", None))
+        except Exception as exc:
+            messagebox.showerror("Session marks", str(exc), parent=self)
+            return
+        self.status.set(f"Session marks saved to {Path(path).name}.")
+
+    def load_session_marks(self):
+        """Read marks back and apply them, without re-deciding anything."""
+        source = self.v["source"].get()
+        path = filedialog.askopenfilename(
+            parent=self, title="Load session marks",
+            initialdir=str(Path(source).parent if source else Path.cwd()),
+            filetypes=[("Session marks", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            document = gcamp_session.load_marks(path, source=source or None)
+            (a, b), gap = gcamp_session.span(document["marks"])
+        except Exception as exc:
+            messagebox.showerror("Session marks", str(exc), parent=self)
+            return
+        self.session_marks = document["marks"]
+        self.episode_range = (int(a), int(b))
+        self.frames = None
+        if document.get("frame_count"):
+            self._session_frame_count = int(document["frame_count"])
+        origins = sorted({m["origin"] for m in document["marks"]})
+        gap_note = (f" Spans {gap} unmarked frames, which will be analysed "
+                    f"too." if gap else "")
+        self.status.set(
+            f"Loaded {len(document['marks'])} mark(s) from "
+            f"{Path(path).name}: frames {a}-{b} ({b - a + 1} frames, "
+            f"{'/'.join(origins)}).{gap_note} Re-run the feasibility pass.")
 
     def choose_frame_subset(self):
         """Pick a frame range by hand, at load time rather than after.
@@ -471,15 +546,28 @@ class App(CockpitApp):
             movie.close()
             messagebox.showerror("Frame chooser unavailable", str(exc))
             return
+        frame_count = int(movie.n_frames)
         movie.close()
         if not ranges:
             return
-        a = min(r[0] for r in ranges)
-        b = max(r[1] for r in ranges)
+        try:
+            self.session_marks = gcamp_session.marks_from_ranges(
+                ranges, origin="manual")
+            (a, b), gap = gcamp_session.span(self.session_marks)
+        except gcamp_session.SessionMarkError as exc:
+            messagebox.showerror("Frame range", str(exc), parent=self)
+            return
         self.episode_range = (int(a), int(b))
         self.frames = None
-        self.status.set(f"Using frames {a}-{b} ({b - a + 1} frames). "
-                        f"Re-run the feasibility pass.")
+        self._session_frame_count = frame_count
+        # The tool analyses one contiguous span, so disjoint marks collapse to
+        # their outer bounds and the frames between them come along. Saying so
+        # is the difference between a choice and a surprise.
+        gap_note = (f" NOTE: this spans {gap} frames you did not mark, which "
+                    f"will be analysed too - the analysis takes one "
+                    f"contiguous range." if gap else "")
+        self.status.set(f"Using frames {a}-{b} ({b - a + 1} frames)."
+                        f"{gap_note} Re-run the feasibility pass.")
 
     def choose(self):
         path = filedialog.askopenfilename(

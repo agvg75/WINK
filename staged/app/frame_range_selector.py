@@ -33,11 +33,33 @@ class FrameRangeSelector(tk.Toplevel):
         self.minsize(760, 560)
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
+        # PACKING ORDER IS LOAD-BEARING HERE, so every row is built first and
+        # packed together at the end of __init__.
+        #
+        # THE BUG THIS FIXES. The preview was packed first with
+        # fill="both", expand=True, and the control rows after it. Tk
+        # allocates the cavity in packing order, so once the preview asked for
+        # more height than the 780 px window had, every row packed after it
+        # was squeezed to one pixel - present, findable by a test, and
+        # impossible to click. Measured on this widget:
+        #
+        #   source frame   Mark start   Analyze full movie   Accept   Cancel
+        #     <= 384 px        25 px          25 px           25 px    25 px
+        #     512-640 px       25 px          25 px            1 px     1 px
+        #     >= 720 px         1 px           1 px            1 px     1 px
+        #
+        # At 512-640 px a user could mark a start and an end, could see
+        # "Analyze full movie", and had no reachable way to commit the marks
+        # or to leave without analysing - which is exactly how it was
+        # reported. The preview thumbnails to 720 px, so any ordinary
+        # fluorescence frame lands in the broken band.
+        #
+        # The fixed-height rows are therefore packed FIRST, bottom-most one
+        # first, so they claim their space before the preview is offered what
+        # is left. The preview is packed last and absorbs the remainder.
         self.image = ttk.Label(self)
-        self.image.pack(fill="both", expand=True, padx=8, pady=8)
 
         nav = ttk.Frame(self)
-        nav.pack(fill="x", padx=8)
         ttk.Button(nav, text="<", command=lambda: self.step(-1)).pack(side="left")
         self.scale = tk.Scale(
             nav, from_=1, to=max(1, self.count), orient="horizontal",
@@ -50,7 +72,6 @@ class FrameRangeSelector(tk.Toplevel):
         ttk.Entry(nav, textvariable=self.preview_max, width=6).pack(side="left")
 
         controls = ttk.Frame(self)
-        controls.pack(fill="x", padx=8, pady=5)
         ttk.Button(controls, text="Mark start", command=self.mark_start).pack(side="left")
         ttk.Button(controls, text="Mark end + add range", command=self.mark_end).pack(side="left", padx=4)
         ttk.Button(controls, text="Delete selected", command=self.delete).pack(side="left")
@@ -65,17 +86,23 @@ class FrameRangeSelector(tk.Toplevel):
         ):
             self.tree.heading(column, text=title_text)
             self.tree.column(column, width=150)
-        self.tree.pack(fill="x", padx=8, pady=5)
 
         self.status = tk.StringVar(
             value="Add one or more ranges. Gaps are skipped but original "
                   "frame numbers and elapsed time are retained.")
-        ttk.Label(self, textvariable=self.status, wraplength=980).pack(fill="x", padx=8)
+        status_label = ttk.Label(self, textvariable=self.status, wraplength=980)
 
         bottom = ttk.Frame(self)
-        bottom.pack(fill="x", padx=8, pady=8)
         ttk.Button(bottom, text="Cancel", command=self.cancel).pack(side="right")
         ttk.Button(bottom, text="Accept ranges", command=self.accept).pack(side="right", padx=5)
+
+        # Bottom-most row first. Anything packed to "bottom" stacks upward, so
+        # this list reads in reverse visual order on purpose.
+        for row, pad in ((bottom, 8), (status_label, 0), (self.tree, 5),
+                         (controls, 5), (nav, 0)):
+            row.pack(side="bottom", fill="x", padx=8, pady=pad)
+        # Last, so it is offered only the height the controls did not need.
+        self.image.pack(side="top", fill="both", expand=True, padx=8, pady=8)
 
         self.bind("<Left>", lambda _e: self.step(-1))
         self.bind("<Right>", lambda _e: self.step(1))
