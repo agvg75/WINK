@@ -540,7 +540,7 @@ def propose_years(row, segments):
     return out
 
 
-def propose_strains(row, segments, projects):
+def propose_strains(row, segments, projects, rnai_context=False):
     """Strain proposals. Requires a letter prefix, always.
 
     The Projects sheet's strains column is blank pending a pull from
@@ -572,7 +572,9 @@ def propose_strains(row, segments, projects):
                 out.append(_proposal(
                     row, "strain", hit["strain"], "strain_exact", word,
                     segment, "ReagentHub",
-                    "exact match against the lab's strain list",
+                    ("the background this RNAi was performed on"
+                     if rnai_context else
+                     "exact match against the lab's strain list"),
                     evidence=(f"genotype {genotype[:70]}" if genotype else ""),
                     scope=scope_of(segments, index)))
             elif LAB_STRAIN_RE.match(word):
@@ -580,10 +582,15 @@ def propose_strains(row, segments, projects):
                 out.append(_proposal(
                     row, "strain", word.upper(), "lab_strain_prefix", word,
                     segment, "lab designation pattern",
-                    "matches this lab's AVG/AG/COP/VG naming but is NOT in "
-                    "ReagentHub - either it is missing from the hub or the "
-                    "designation is wrong. Worth resolving, because every "
-                    "strain the lab has should be in there",
+                    ("the background this RNAi was performed on, and NOT in "
+                     "ReagentHub" if rnai_context else
+                     "matches this lab's AVG/AG/COP/VG naming but is NOT in "
+                     "ReagentHub - either it is missing from the hub or the "
+                     "designation is wrong. Worth resolving, because every "
+                     "strain the lab has should be in there"),
+                    ambiguity=("RNAi on a non-N2 background is a suppressor "
+                               "screen rather than a straight knockdown"
+                               if rnai_context and key != "n2" else ""),
                     scope=scope_of(segments, index)))
     return out
 
@@ -600,12 +607,20 @@ VECTOR_RE = re.compile(r"^l4+4*0$", re.I)          # l4440, and the l440/l44440 
 GENE_RE = re.compile(r"^[a-z]{3,4}-\d{1,3}$", re.I)
 WORM_NUMBER_RE = re.compile(r"^w\d{1,2}$", re.I)
 
-# THE TWO CONTROLS ARE THE SAME KIND OF THING. L4440 is the control for an
-# RNAi experiment exactly as N2 is the control for a mutant or edited strain,
-# and a folder holding either is a control arm. Recognising only the first
-# would leave every wild-type control arm on the drive unlabelled - N2 was
-# being proposed as a strain and nothing else, which is true and misses the
-# point of the folder.
+# N2's ROLE DEPENDS ON THE EXPERIMENT, and getting this backwards mislabels
+# the arm. L4440 is the control for an RNAi experiment; N2 is the control for
+# a mutant or edited strain. But N2 is ALSO the strain RNAi is usually
+# performed ON, so inside an RNAi experiment N2 is the BACKGROUND, not the
+# control - the control there is L4440, and calling N2 the control would name
+# the wrong arm.
+#
+# The same context test that decides whether a gene name is a knockdown
+# therefore decides what N2 means: vector among the siblings, N2 is the
+# background; no vector, N2 is the control.
+#
+# RNAi is not always run on N2. Suppressor screens run it on dystrophic
+# backgrounds, which is why the background is reported rather than assumed -
+# and why the authority's 2016 "suppressor-mutant class cohort" note exists.
 CONTROLS = {
     "n2": ("N2 (wild type, control)",
            "the control for a mutant or edited strain, the counterpart of "
@@ -642,10 +657,21 @@ def propose_conditions(row, segments, rnai_context):
             elif key in CONTROLS:
                 seen.add(key)
                 label, why = CONTROLS[key]
-                out.append(_proposal(
-                    row, "condition", label, "control_exact", word, segment,
-                    "control vocabulary", why,
-                    scope=scope_of(segments, index)))
+                if rnai_context:
+                    # N2 inside an RNAi experiment is the BACKGROUND the
+                    # knockdown was performed on. The control is L4440.
+                    out.append(_proposal(
+                        row, "condition", "RNAi performed on N2 background",
+                        "rnai_gene", word, segment, "RNAi vocabulary",
+                        "N2 is the strain RNAi is usually run on, so inside "
+                        "an RNAi experiment it is the background, not the "
+                        "control - the control here is L4440",
+                        scope=scope_of(segments, index)))
+                else:
+                    out.append(_proposal(
+                        row, "condition", label, "control_exact", word,
+                        segment, "control vocabulary", why,
+                        scope=scope_of(segments, index)))
             elif GENE_RE.match(word) and not LAB_STRAIN_RE.match(word):
                 seen.add(key)
                 gene = word.lower()
@@ -769,7 +795,8 @@ def run(labels_path, authority_path, out_path):
         proposals += project_proposals
         proposals += propose_people(row, segments, people, by_key, context)
         proposals += year_proposals
-        proposals += propose_strains(row, segments, projects)
+        proposals += propose_strains(row, segments, projects,
+                                     rnai_parents.get(_parent(row), False))
         proposals += propose_conditions(row, segments,
                                         rnai_parents.get(_parent(row), False))
         proposals += propose_given_names(row, segments, by_initial)

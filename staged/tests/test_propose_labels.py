@@ -138,6 +138,34 @@ check("...while still being proposed as a strain",
 check("both controls share one tier",
       pl.TIERS["control_exact"] == 2)
 
+# N2's ROLE INVERTS WITH CONTEXT, and getting it backwards names the wrong
+# arm. N2 is the strain RNAi is usually performed ON, so inside an RNAi
+# experiment it is the background and the control is L4440.
+n2_row = {"path": r"L:\05_Proprioception\Andres pezo\N2 dys-1 w4",
+          "folder": "N2 dys-1 w4", "area": "05"}
+segs = pl.path_segments(n2_row["path"])
+in_rnai = pl.propose_conditions(n2_row, segs, True)
+outside = pl.propose_conditions(n2_row, segs, False)
+check("inside an RNAi experiment N2 is the BACKGROUND, not the control",
+      any("background" in c["proposed_value"] for c in in_rnai)
+      and not any(c["confidence"] == "control_exact" for c in in_rnai),
+      "the control there is L4440; calling N2 the control names the wrong arm")
+check("outside one, N2 IS the control",
+      any(c["confidence"] == "control_exact" for c in outside))
+
+# RNAi on a non-N2 background is a suppressor screen, not a straight
+# knockdown. AVG6 is dys-1(eg33) plus GCaMP2, so the 2020-21 screen run in it
+# is exactly that.
+sup_row = {"path": r"L:\02_Duchenne Muscular Dystrophy\Monica\cex-2 avg6 w1",
+           "folder": "cex-2 avg6 w1", "area": "02"}
+segs = pl.path_segments(sup_row["path"])
+sup = pl.propose_strains(sup_row, segs, [], True)
+check("RNAi on a non-N2 background is flagged as a suppressor screen",
+      any("suppressor" in (x["ambiguity"] or "") for x in sup),
+      "AVG6 is dys-1(eg33); RNAi in it is a screen for suppressors")
+check("...and the strain is named as the background it is",
+      any("background" in x["rule"] for x in sup))
+
 # --- a gene name is a knockdown only when the vector is nearby ----------------
 gene_row = {"path": r"L:\02_Duchenne Muscular Dystrophy\Monica\dys-1 zw w3",
             "folder": "dys-1 zw w3", "area": "02"}
