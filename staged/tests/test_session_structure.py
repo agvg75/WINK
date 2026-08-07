@@ -52,13 +52,54 @@ check("frames are attributed to their own session",
 check("the folder's session count is carried on every row",
       all(r["sessions_in_folder"] == 2 for r in rows))
 
-check("a real FlyCap name parses to (session, index)",
+check("a real FlyCap name parses to (session, index, stamped)",
       ss.session_key("fc2_save_2021-04-19-132028-0000.tif")
-      == ("2021-04-19-132028", 0))
+      == ("2021-04-19-132028", 0, True))
 check("the index is the frame, not part of the session",
       ss.session_key("fc2_save_2021-04-19-132028-8998.tif")[1] == 8998)
 check("a name with no index yields nothing",
       ss.session_key("notes.txt") is None)
+
+# THE ANCHOR WAS TOO STRICT AND COST REAL DATA. Requiring the name to start
+# with `fc2_save_` missed this, a genuine 449-frame run on the drive.
+check("a stamp mid-name is still a stamp",
+      ss.session_key("tm2071_crawl2_04072017_2017-04-07-115046-0000.pgm")
+      == ("2017-04-07-115046", 0, True),
+      "the stamp is the evidence; the prefix is just what it was called")
+check("a filename prefix is NOT a stamp",
+      ss.session_key("worm_export_0042.tif")[2] is False,
+      "grouping by prefix is this module's guess, not the camera's record")
+
+print("\n--- a one-frame group is not a recording ----------------------")
+
+# WITHOUT THIS GUARD, run drive-wide, the prefix fallback produced 550,354
+# "sessions" from 2.5 M frames with a MEDIAN OF ONE FRAME EACH, beside
+# 11,402 real stamped ones. Fabricated sessions then corrupted every
+# bracket computed from them.
+scattered = ss.analyse("X", [f"oddname_{i}_{i:04d}.tif" for i in range(30)])
+check("scattered singletons pool into one unstamped sequence",
+      len(scattered) == 1 and scattered[0]["session"] == ss.UNSTAMPED,
+      f"{len(scattered)} row(s), not 30")
+check("...holding all their frames",
+      scattered[0]["frames"] == 30)
+check("...and carrying no timing whatsoever",
+      scattered[0]["rate_measured"] == "NO"
+      and scattered[0]["duration_s"] == ""
+      and scattered[0]["stamped"] == "NO")
+check("...and saying why", "no acquisition stamp" in scattered[0]["note"])
+
+# A prefix group large enough to be a real series is kept, but still gets no
+# timing, because a shared prefix says nothing about when anything happened.
+big = ss.analyse("X", [f"run_{i:04d}.tif" for i in range(60)])
+check("a large prefix group survives as a sequence",
+      len(big) == 1 and big[0]["frames"] == 60)
+check("...but still gets no rate",
+      big[0]["rate_measured"] == "NO" and big[0]["stamped"] == "NO")
+
+check("stamped sessions are never pooled, however short",
+      len(ss.analyse("X", frames("2021-04-19-132028", 3)
+                     + frames("2021-04-19-132228", 3))) == 2,
+      "the camera wrote these; the threshold is for guesses only")
 
 print("\n--- the bracket, and how much of it the ceiling supplies -------")
 
