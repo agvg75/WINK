@@ -46,6 +46,7 @@ class ROIEditor:
         self._frame_timer=None
         self.allow_full_frame = bool(allow_full_frame)
         self.fig, self.ax = plt.subplots(figsize=(11, 8))
+        import display_range as _dr; _dr.name_window(self.fig, title)
         self.fig.subplots_adjust(left=.16, bottom=.21 if self.frame_count > 1 else .15)
         first_preview=self._navigation_proxy(image);self._frame_cache[0]=first_preview
         self.image_artist = self.ax.imshow(first_preview, cmap="gray",
@@ -88,6 +89,22 @@ class ROIEditor:
             self._frame_timer.add_callback(self._load_pending_frame)
             self.prev_button = self._nav_button(.79, "<", -1)
             self.next_button = self._nav_button(.86, ">", 1)
+        # BRIGHTNESS, HERE RATHER THAN PER TOOL. Eight tools draw their
+        # regions through this editor, and every one of them was asking a
+        # person to draw an accurate shape on a frame at default scaling. On
+        # oblique-lit agar a mid-grey worm is close to invisible that way, and
+        # the region drawn sets what the analysis will and will not look at.
+        # In the left gutter because the bottom already holds the frame
+        # slider, the navigation buttons and the action row.
+        try:
+            import display_range
+            self._display_widgets = display_range.attach_sliders(
+                self.fig, self.image_artist, first_preview, plt,
+                layout="left")
+        except Exception:                                    # noqa: BLE001
+            # A missing brightness control must never stop someone drawing a
+            # region; the editor worked without it for years.
+            self._display_widgets = None
         self._activate(self.radio.value_selected)
 
     def _nav_button(self, left, label, step):

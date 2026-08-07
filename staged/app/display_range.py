@@ -32,6 +32,22 @@ LOW_PERCENTILE = 0.5
 HIGH_PERCENTILE = 99.5
 
 
+def name_window(fig, title):
+    """Give a figure a descriptive window title instead of 'Figure 1'.
+
+    Matplotlib names every window 'Figure N'. The single-worm tracker alone
+    opens five, and with several on the taskbar at once they are
+    indistinguishable - working out which one was in front cost a real
+    debugging session. Backend-dependent and never worth an exception, so a
+    failure here is silent.
+    """
+    try:
+        fig.canvas.manager.set_window_title(str(title))
+    except Exception:                                        # noqa: BLE001
+        pass
+    return fig
+
+
 def auto_range(image, low=LOW_PERCENTILE, high=HIGH_PERCENTILE):
     """(vmin, vmax) that make the structure visible, as a display hint.
 
@@ -61,13 +77,23 @@ def full_range(image):
     return (lo, hi + 1.0) if hi <= lo else (lo, hi)
 
 
-def attach_sliders(fig, image_artist, image, plt, *, bottom=0.02):
-    """Put Min/Max brightness sliders and an Auto/Reset pair under a figure.
+def attach_sliders(fig, image_artist, image, plt, *, bottom=0.02,
+                   layout="bottom"):
+    """Put Black/White brightness sliders and an Auto/Reset pair on a figure.
 
-    Matplotlib rather than Tk, because the tracker screens are matplotlib
-    figures driven by ginput. Returns the widgets so the caller can keep a
-    reference - Matplotlib drops widgets that are garbage collected, and a
-    slider that stops responding after a few seconds is worse than none.
+    Matplotlib rather than Tk, because these screens are matplotlib figures
+    driven by ginput. Returns the widgets so the caller can keep a reference -
+    Matplotlib drops widgets that are garbage collected, and a slider that
+    stops responding after a few seconds is worse than none.
+
+    `layout` picks where they go, because the screens that need this do not
+    have the same free space:
+
+        "bottom"  a full-width row under the image
+        "left"    the narrow gutter beside it, for screens whose bottom is
+                  already occupied - roi_editor has a frame slider at y=.125,
+                  navigation buttons at .115 and an action row at .035, and
+                  squeezing a third row in would overlap all of them
     """
     from matplotlib.widgets import Button, Slider
 
@@ -75,8 +101,16 @@ def attach_sliders(fig, image_artist, image, plt, *, bottom=0.02):
     start_lo, start_hi = auto_range(image)
     image_artist.set_clim(start_lo, start_hi)
 
-    axis_lo = fig.add_axes([0.13, bottom + 0.045, 0.52, 0.022])
-    axis_hi = fig.add_axes([0.13, bottom + 0.015, 0.52, 0.022])
+    if layout == "left":
+        axis_lo = fig.add_axes([0.035, 0.46, 0.10, 0.02])
+        axis_hi = fig.add_axes([0.035, 0.41, 0.10, 0.02])
+        auto_box = [0.015, 0.335, 0.062, 0.045]
+        reset_box = [0.082, 0.335, 0.062, 0.045]
+    else:
+        axis_lo = fig.add_axes([0.13, bottom + 0.045, 0.52, 0.022])
+        axis_hi = fig.add_axes([0.13, bottom + 0.015, 0.52, 0.022])
+        auto_box = [0.70, bottom + 0.015, 0.10, 0.05]
+        reset_box = [0.815, bottom + 0.015, 0.10, 0.05]
     slider_lo = Slider(axis_lo, "Black", low, high, valinit=start_lo)
     slider_hi = Slider(axis_hi, "White", low, high, valinit=start_hi)
 
@@ -94,10 +128,8 @@ def attach_sliders(fig, image_artist, image, plt, *, bottom=0.02):
         slider_lo.set_val(lo)
         slider_hi.set_val(hi)
 
-    button_auto = Button(fig.add_axes([0.70, bottom + 0.015, 0.10, 0.05]),
-                         "Auto")
-    button_reset = Button(fig.add_axes([0.815, bottom + 0.015, 0.10, 0.05]),
-                          "Reset")
+    button_auto = Button(fig.add_axes(auto_box), "Auto")
+    button_reset = Button(fig.add_axes(reset_box), "Reset")
     button_auto.on_clicked(lambda _e: set_both(*auto_range(image)))
     button_reset.on_clicked(lambda _e: set_both(low, high))
 

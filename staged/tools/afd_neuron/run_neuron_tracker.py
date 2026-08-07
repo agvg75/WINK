@@ -162,6 +162,7 @@ class Reviewer:
         self.interval_start=None; self.active_interval=None; self.finalized=False
         from matplotlib.widgets import Slider,Button
         self.fig, self.ax = plt.subplots(figsize=(11, 7));self.fig.subplots_adjust(bottom=.17)
+        import display_range as _dr; _dr.name_window(self.fig, "Review the tracked neuron and body")
         slider_ax=self.fig.add_axes([.18,.065,.58,.035]);self.slider=Slider(slider_ax,"Analyzed frame",1,self.tr.T,valinit=1,valstep=1);self.slider.on_changed(self._slider_changed)
         jump_ax=self.fig.add_axes([.78,.05,.14,.06]);self.jump_button=Button(jump_ax,"Jump to frame…");self.jump_button.on_clicked(self.jump_to_frame)
         self.fig.canvas.mpl_connect("key_press_event", self.on_key)
