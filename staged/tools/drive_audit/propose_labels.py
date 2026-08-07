@@ -122,7 +122,10 @@ YEAR_RANGE = (2000, 2026)
 # 41921 is 19 April 2021 and cop1367 is an allele, and the ONLY thing that
 # separates them is the prefix. A designation matching this is a strain with
 # high confidence; a bare number never is.
-LAB_STRAIN_RE = re.compile(r"^(AG|COP)\d{2,5}$", re.I)
+LAB_STRAIN_RE = re.compile(r"^(AG|COP|VG)\d{2,5}$", re.I)
+# Wild type. One digit, so the general letters-then-digits pattern below will
+# not match it, and it is far too common on this drive to miss.
+KNOWN_STRAINS = {"n2"}
 # The general case: letters then digits, e.g. ok1234, e1370, n2. Weaker,
 # because plenty of things are letters followed by digits.
 STRAIN_RE = re.compile(r"^[a-z]{1,4}\d{2,5}$", re.I)
@@ -324,7 +327,7 @@ def propose_projects(row, segments, projects):
     return out
 
 
-def propose_people(row, segments, people, by_key):
+def propose_people(row, segments, people, by_key, context=None):
     """Surname proposals from the People sheet."""
     out = []
     seen = set()
@@ -344,7 +347,7 @@ def propose_people(row, segments, people, by_key):
                     row, GIVEN_NAMES[key], key, word, segment,
                     "person_surname_exact",
                     "given name from the authority's given_name column",
-                    scope=scope_of(segments, index)))
+                    scope=scope_of(segments, index), context=context))
                 continue
             matches = by_key.get(key, [])
             if matches:
@@ -354,7 +357,7 @@ def propose_people(row, segments, people, by_key):
                 out.append(_person_proposal(
                     row, matches, key, word, segment, "person_surname_exact",
                     "whole-token surname match",
-                    scope=scope_of(segments, index)))
+                    scope=scope_of(segments, index), context=context))
                 continue
             for candidate_key, matches in by_key.items():
                 if len(candidate_key) < MIN_FUZZY_LEN or len(key) < MIN_FUZZY_LEN:
@@ -369,13 +372,52 @@ def propose_people(row, segments, people, by_key):
                         row, matches, candidate_key, word, segment,
                         "person_surname_fuzzy",
                         f"fuzzy surname match, ratio {ratio:.2f}",
-                        scope=scope_of(segments, index)))
+                        scope=scope_of(segments, index), context=context))
     return out
 
 
+def _person_active(person, years):
+    """Was this person here in any of these years?"""
+    try:
+        first = int(str(person.get("first_year", "")).strip())
+        last = int(str(person.get("last_year", "")).strip() or first)
+    except ValueError:
+        return True          # no dates recorded, so no evidence either way
+    return any(first <= y <= last for y in years)
+
+
 def _person_proposal(row, matches, key, word, segment, tier, rule,
-                     scope=None):
+                     scope=None, context=None):
     """One surname may be one person under two spellings, or two people."""
+    # NARROW BY THE RECORDING BEFORE GIVING UP. Two people can share a given
+    # name and still be separable by when they were here or what they worked
+    # on. Measured case: `\Erin\` matches both Cheeseman E and Sawilchik E,
+    # but Sawilchik ran 2021-2024 on PEZO and Cheeseman 2025 on DMD_SMOOTH and
+    # DMD_CALCIUM - disjoint in BOTH year and project. A folder carrying
+    # either signal resolves to one of them.
+    #
+    # Reported as `narrowed_by` rather than silently, because a name resolved
+    # by a date is weaker evidence than a name that was never ambiguous.
+    narrowed_by = []
+    if len(matches) > 1 and context:
+        years = {int(y) for y in context.get("years", ()) if str(y).isdigit()}
+        codes = {c.upper() for c in context.get("codes", ())}
+        if years:
+            fits = [p for p in matches if _person_active(p, years)]
+            if len(fits) == 1:
+                matches, _ = fits, narrowed_by.append(
+                    f"the folder's year {sorted(years)} falls inside "
+                    f"{fits[0]['first_year']}-{fits[0]['last_year']} and "
+                    f"outside the other candidate's")
+        if len(matches) > 1 and codes:
+            fits = [p for p in matches
+                    if codes & {c.strip().upper() for c in
+                                str(p.get("project_codes", "")).split(";")}]
+            if len(fits) == 1:
+                matches, _ = fits, narrowed_by.append(
+                    f"the folder's project {sorted(codes)} is on this "
+                    f"person's lines and not the other candidate's")
+
     # Collapse aliases FIRST. Hughes K and Hughes-Wiles K are two authority
     # rows and one person, so a given-name match that lands on both is not an
     # ambiguity - it is one person under two spellings, and reporting it as
@@ -408,6 +450,8 @@ def _person_proposal(row, matches, key, word, segment, tier, rule,
                          if p.get("_given_note")})
     if seed_notes:
         ambiguity = "; ".join(filter(None, [ambiguity] + seed_notes))
+    if narrowed_by:
+        rule = f"{rule}; narrowed because " + "; ".join(narrowed_by)
     return _proposal(
         row, "person", value, tier, word, segment, "People", rule,
         ambiguity=ambiguity, scope=scope,
@@ -481,6 +525,14 @@ def propose_strains(row, segments, projects):
                     row, "strain", strain, "strain_exact", word, segment,
                     "Projects", "strain listed against a project",
                     evidence=f"project {code}",
+                    scope=scope_of(segments, index)))
+            elif key in KNOWN_STRAINS:
+                seen.add(key)
+                out.append(_proposal(
+                    row, "strain", word.upper(), "lab_strain_prefix", word,
+                    segment, "known strain",
+                    "N2 is the wild-type reference strain; a single digit, so "
+                    "the general letters-then-digits pattern misses it",
                     scope=scope_of(segments, index)))
             elif LAB_STRAIN_RE.match(word):
                 seen.add(key)
@@ -574,9 +626,17 @@ def run(labels_path, authority_path, out_path):
     proposals = []
     for row in rows:
         segments = path_segments(row["path"])
-        proposals += propose_projects(row, segments, projects)
-        proposals += propose_people(row, segments, people, by_key)
-        proposals += propose_years(row, segments)
+        # Projects and years first: they are the evidence that disambiguates
+        # two people who share a given name (see _person_proposal).
+        project_proposals = propose_projects(row, segments, projects)
+        year_proposals = propose_years(row, segments)
+        context = {
+            "codes": {p["proposed_value"] for p in project_proposals},
+            "years": {p["proposed_value"] for p in year_proposals},
+        }
+        proposals += project_proposals
+        proposals += propose_people(row, segments, people, by_key, context)
+        proposals += year_proposals
         proposals += propose_strains(row, segments, projects)
         proposals += propose_given_names(row, segments, by_initial)
 
