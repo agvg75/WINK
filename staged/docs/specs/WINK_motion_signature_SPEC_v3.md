@@ -381,7 +381,25 @@ ruler in the frame: a day 1 adult is about **1100 um** long, so
 um_per_px = 1100 / body_length_px
 ```
 
-On the development set this gives about **0.45 px/um**.
+> **RETRACTED: 0.45 px/um. Do not resurrect it.** An earlier draft of this
+> section gave 0.45 px/um for the development set. That figure was derived
+> from a 495 px body length, and the 495 px was the median of a frame census
+> **which was withdrawn** — it had measured the shadow, not the animal (5.4).
+> A number derived from a withdrawn measurement is withdrawn with it.
+>
+> This mattered practically: 0.45 was later compared against a live
+> measurement and the gap treated as a discrepancy needing explanation. There
+> was no discrepancy, because there was only ever one measurement. **A
+> withdrawn number propagating forward because something had already been
+> built on it** is the same failure as the 14.9:1 aspect ratio, which was also
+> a shadow measurement that appeared to confirm an expectation.
+>
+> When a measurement is withdrawn, walk forward through everything derived
+> from it and withdraw that too, in the same edit.
+
+**The current figure is unsettled** — see 9.5.1. Measured scale across the six
+frozen recordings spans 1.10 to 1.95 um/px, which is too wide to adopt. Do not
+put a number here until that is resolved.
 
 This output is **stage-dependent** and must record which route produced the
 length — `undulation`, `coherent_motion`, or `failed` — because the routes are
@@ -664,6 +682,56 @@ depends on them.
 **It must not be run until 5.4 is settled.** Every number above derives from a
 segmentation, and a segmentation that returns the shadow produces a full set of
 plausible wrong answers.
+
+### 9.5.1 First run: what the corrected rule gives, and what it does not
+
+Run 6 August 2026 with the 5.4.0 rule, 30 sampled frames per recording,
+lengths conditioned on frames where the animal is fully enclosed.
+
+| recording | n enclosed | length median | length p10-p90 | width | aspect | enclosed |
+|---|---|---|---|---|---|---|
+| `41921_cop1367` | 24 | 807 | 534-939 | **39.8** | 19.4:1 | 80% |
+| `41921_cop1553` | 11 | 702 | 453-1136 | **40.8** | 16.4:1 | 37% |
+| `42821_AG406` | 20 | 564 | 392-934 | **38.7** | 13.2:1 | 67% |
+| `5121_AG405` | 15 | 997 | 500-1210 | **35.6** | 26.3:1 | 50% |
+| `5521_cop1524` | 24 | 739 | 439-936 | **41.2** | 18.4:1 | 80% |
+| `52021 food density` | 9 | 587 | 292-1526 | **27.6** | 20.9:1 | 30% |
+
+**WIDTH IS STABLE AND LENGTH IS NOT.** Five of six recordings sit in a 35.6 to
+41.2 px band — a 15% spread on a quantity that should be constant for day 1
+adults at fixed magnification. That is good evidence that **magnification does
+not vary meaningfully across those five**. The food density recording at
+27.6 px is the exception and needs its own explanation.
+
+Length, by contrast, spans p10-p90 of roughly 400 to 1200 px **within single
+recordings**, a threefold range that cannot be real body-length variation in a
+day 1 adult population. So the mask's extent ALONG the body varies frame to
+frame while its width does not — texture contrast varies along the animal and
+with posture, so the rule sometimes covers the whole body and sometimes part.
+
+**Consequence: length is not yet a usable anchor, and no scale may be set from
+it.** Implied scale spans 1.10 to 1.95 um/px across the six, and the spread is
+measurement noise rather than magnification. This is why 5.5 carries no number.
+
+**Tested and refuted: short lengths are not partial animals leaving the
+frame.** The obvious explanation was that a worm exiting the field measures
+short. Measured across 180 frames, the correlation between distance-from-edge
+and length is **r = -0.30** — the wrong sign — and objects touching the edge
+measure **longer** (844 px) than those clear of it (725 px). Edge contact
+inflates length, most likely the 31 px closing bridging the mask into edge
+structure. Excluding edge frames is still correct, but for the opposite reason
+to the one assumed, and it does not fix the spread: clear of the edge the range
+is still 403 to 1119 px.
+
+**What this leaves open**, in priority order:
+
+1. Make length as stable as width — link fragments along the body axis rather
+   than relying on a morphological close, or validate the mask's extent against
+   a curated spine.
+2. Explain the food density recording's narrower width, which may be the OP50
+   immersion case from 5.4.1.
+3. Only then set the scale, and update what 6.1's fractions resolve to. **The
+   fractions themselves do not change** — they are anatomy, not measurement.
 
 ---
 
