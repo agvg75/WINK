@@ -299,7 +299,11 @@ def _compass(angle):
 # A textureless background is plain agar or liquid. Worms neither pump nor
 # defecate without food, so those readouts were never possible there - which
 # makes substrate a CHEAP ELIGIBILITY GATE rather than a segmentation detail.
-SUBSTRATE_TEXTURE_MIN = 1.8
+# Measured at the LAWN'S OWN SCALE, which is its wrinkles - not at the
+# animal's cuticle scale, and not at the sensor-noise scale. Separation on the
+# frozen six: lawns score 17.6 to 31.9, a worm off food scores 4.71.
+SUBSTRATE_SIGMA = (6.0, 24.0)
+SUBSTRATE_TEXTURE_MIN = 10.0
 
 
 def detect_substrate(gray_frames, *, limit=8):
@@ -323,25 +327,43 @@ def detect_substrate(gray_frames, *, limit=8):
     pool. That is the section 8 distinction, derived from the substrate rather
     than from looking and failing to find anything.
     """
-    ratios = []
+    scores = []
     for frame in list(gray_frames)[:limit]:
         f = np.asarray(frame, dtype=np.float32)
         span = float(f.max() - f.min())
         if span < 1:
             continue
-        f = (f - f.min()) / span * 255.0
-        fine = np.abs(cv2.GaussianBlur(f, (0, 0), 1.0)
-                      - cv2.GaussianBlur(f, (0, 0), 3.0))
-        coarse = np.abs(cv2.GaussianBlur(f, (0, 0), 4.0)
-                        - cv2.GaussianBlur(f, (0, 0), 16.0))
-        # Ratio rather than absolute fine energy, so it does not simply track
-        # overall contrast. A lawn has fine structure everywhere; agar has
-        # broad shading and almost none.
-        ratios.append(float(np.percentile(fine, 75))
-                      / max(float(np.percentile(coarse, 75)), 1e-6) * 100)
-    if not ratios:
+        lo, hi = np.percentile(f, [1, 99])
+        f = (f - lo) / max(float(hi - lo), 1.0) * 255.0
+        # THE SCALE MATTERS AS MUCH AS THE MEASURE. Two earlier versions were
+        # wrong at this line. Sensor noise lives at sigma 1-3 and BOTH
+        # substrates have it, so measuring there separates nothing: lawns
+        # scored 1.44-1.64 against 1.24 off food. The lawn's own structure is
+        # its wrinkles, at sigma 6-24, where the same recordings score
+        # 17.6-31.9 against 4.71.
+        structure = np.abs(
+            cv2.GaussianBlur(f, (0, 0), SUBSTRATE_SIGMA[0])
+            - cv2.GaussianBlur(f, (0, 0), SUBSTRATE_SIGMA[1]))
+        # MEASURE THE BACKGROUND, WITH THE ANIMAL REMOVED. The animal is the
+        # most finely textured thing in any of these frames, so including it
+        # measures the worm rather than the substrate.
+        found = texture_foreground(f)
+        background = np.ones(f.shape, bool)
+        if found is not None:
+            worm = cv2.dilate(found[0], np.ones((41, 41), np.uint8))
+            background = worm == 0
+        if background.sum() < f.size * 0.2:
+            continue
+        # ABSOLUTE energy, not a ratio to a coarser band. An earlier version
+        # divided fine by coarse, which INVERTS on the case this gate exists
+        # for: a textureless background has almost no coarse energy either, so
+        # the quotient explodes. Measured on a worm off food, that version
+        # scored 148 where the lawns scored 17 - the highest score of the six
+        # went to the one recording with no lawn at all.
+        scores.append(float(np.percentile(structure[background], 90)))
+    if not scores:
         return None
-    score = float(np.median(ratios))
+    score = float(np.median(scores))
     textured = score >= SUBSTRATE_TEXTURE_MIN
     return {
         "texture_score": round(score, 2),
