@@ -152,6 +152,150 @@ def measure_body_length_px(gray_frames, *, background=None):
     return float(np.median(lengths)), detail
 
 
+# A directional shadow is deliberate lab technique for pumping and defecation,
+# chosen for contrast, so it is a property of the ASSAY rather than of the rig
+# on a given day. Its absence on a recording intended for those readouts should
+# be caught at the scope, not discovered at analysis.
+SHADOW_MIN_CONSISTENCY = 0.55     # resultant length of the direction vectors
+SHADOW_MIN_CONTRAST = 12.0        # counts between the lit and shadow sides
+SHADOW_OFFSET_PX = 30
+
+
+def texture_foreground(gray, *, percentile=95.5, close=31):
+    """The animal, by fine texture. See motion signature spec 5.4.0.
+
+    A bacterial lawn has broad topography and no fine structure; the animal has
+    cuticle striation. Intensity and relief both fail here because the lawn has
+    plenty of both.
+    """
+    f = np.asarray(gray, dtype=np.float32)
+    span = float(f.max() - f.min())
+    if span < 1:
+        return None
+    f = (f - f.min()) / span * 255.0
+    band = (cv2.GaussianBlur(f, (0, 0), 1.0)
+            - cv2.GaussianBlur(f, (0, 0), 3.0))
+    energy = cv2.GaussianBlur(np.abs(band), (0, 0), 6.0)
+    mask = (energy >= np.percentile(energy, percentile)).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(
+        mask, cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close, close)))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    if count < 2:
+        return None
+    best = 1 + int(np.argmax([stats[i, cv2.CC_STAT_AREA]
+                              for i in range(1, count)]))
+    return (labels == best).astype(np.uint8), f
+
+
+def measure_shadow(gray, *, offset=SHADOW_OFFSET_PX):
+    """Direction and strength of the shadow cast beside the animal.
+
+    Samples the raw image a fixed distance either side of the body midline,
+    perpendicular to the LOCAL body axis, and averages the direction pointing
+    toward the darker side.
+
+    Returns azimuth in image convention - 0 = shadow to the right, 90 = below,
+    180 = left, 270 = above - plus `consistency`, the resultant length of those
+    directions. Consistency near 1 means every sample agreed; near 0 means
+    there is no directional shadow at all, which is a finding rather than a
+    failure: an animal immersed in an OP50 lawn casts little shadow under
+    oblique light.
+    """
+    from skimage.morphology import skeletonize
+
+    found = texture_foreground(gray)
+    if found is None:
+        return None
+    worm, f = found
+    if worm.sum() < 4000:
+        return None
+    skel = skeletonize(worm > 0)
+    ys, xs = np.nonzero(skel)
+    if len(ys) < 40:
+        return None
+    pts = np.stack([xs, ys], 1).astype(float)
+    height, width = f.shape
+    vectors = []
+    for k in range(0, len(pts), 3):
+        p = pts[k]
+        near = pts[np.hypot(*(pts - p).T) < 12]
+        if len(near) < 5:
+            continue
+        centred = near - near.mean(0)
+        u, _, _ = np.linalg.svd(centred.T @ centred / len(near))
+        perp = np.array([-u[1, 0], u[0, 0]])
+        a = np.round(p + perp * offset).astype(int)
+        b = np.round(p - perp * offset).astype(int)
+        if not (0 <= a[0] < width and 0 <= a[1] < height
+                and 0 <= b[0] < width and 0 <= b[1] < height):
+            continue
+        delta = float(f[a[1], a[0]] - f[b[1], b[0]])
+        if abs(delta) < 2:
+            continue
+        vectors.append(perp * (-1 if delta > 0 else 1) * abs(delta))
+    if len(vectors) < 10:
+        return None
+    V = np.array(vectors)
+    strength = np.linalg.norm(V, axis=1)
+    unit = V / np.clip(strength[:, None], 1e-9, None)
+    mean = unit.mean(0)
+    consistency = float(np.linalg.norm(mean))
+    azimuth = float(np.degrees(np.arctan2(mean[1], mean[0]))) % 360
+    contrast = float(np.median(strength))
+    directional = (consistency >= SHADOW_MIN_CONSISTENCY
+                   and contrast >= SHADOW_MIN_CONTRAST)
+    return {
+        "azimuth_deg": round(azimuth, 1),
+        "direction": _compass(azimuth),
+        "consistency": round(consistency, 3),
+        "contrast": round(contrast, 1),
+        "directional": directional,
+        "n_samples": len(vectors),
+    }
+
+
+def measure_shadow_over_frames(gray_frames, *, limit=25):
+    """Shadow direction pooled across frames. ONE FRAME IS NOT ENOUGH.
+
+    Measured on the pezo-1 CRISPR set: a single frame of `41921_cop1367` gave
+    146 degrees at consistency 0.56, while pooling 25 frames of the same
+    recording gave 94 degrees at 0.86. A single posture puts most of the body
+    at one angle, so the perpendicular samples are correlated and the estimate
+    inherits the animal's shape rather than the lighting.
+    """
+    per_frame = []
+    for frame in list(gray_frames)[:limit]:
+        result = measure_shadow(frame)
+        if result:
+            per_frame.append(result)
+    if not per_frame:
+        return None
+    angles = np.radians([p["azimuth_deg"] for p in per_frame])
+    mx, my = float(np.cos(angles).mean()), float(np.sin(angles).mean())
+    consistency = float(np.hypot(mx, my))
+    azimuth = float(np.degrees(np.arctan2(my, mx))) % 360
+    contrast = float(np.median([p["contrast"] for p in per_frame]))
+    return {
+        "azimuth_deg": round(azimuth, 1),
+        "direction": _compass(azimuth),
+        "consistency": round(consistency, 3),
+        "contrast": round(contrast, 1),
+        "directional": (consistency >= SHADOW_MIN_CONSISTENCY
+                        and contrast >= SHADOW_MIN_CONTRAST),
+        "n_frames": len(per_frame),
+    }
+
+
+def _compass(angle):
+    names = [(0, "right"), (45, "below-right"), (90, "below"),
+             (135, "below-left"), (180, "left"), (225, "above-left"),
+             (270, "above"), (315, "above-right")]
+    return min(names, key=lambda t: min(abs(angle - t[0]),
+                                        360 - abs(angle - t[0])))[1]
+
+
 def measure_intensity(raw_frames):
     """Sensor-range findings, in the terms that made a calcium series useless.
 
@@ -167,12 +311,32 @@ def measure_intensity(raw_frames):
     flat = stack.ravel()
     if flat.size > 4_000_000:
         flat = flat[:: flat.size // 4_000_000]
-    levels = int(np.unique(flat).size)
+    unique = np.unique(flat)
+    levels = int(unique.size)
+    # A 16-BIT CONTAINER IS NOT 16 BITS OF DATA. These cameras write 8-bit
+    # values left-shifted into a 16-bit word, so the quantisation step is 128
+    # and only 512 of the 65536 codes can ever occur. Comparing levels against
+    # the container failed a perfectly good recording at 333 of 65536, when
+    # the honest figure was 333 of 512.
+    #
+    # The step must be measured PER FRAME and pooled by median. Taking it
+    # across pooled frames gives 2 instead of 128, because separate frames sit
+    # at slightly different offsets and their union fills in codes that no
+    # single frame contains.
+    steps = []
+    for frame in stack:
+        u = np.unique(frame)
+        if u.size > 1:
+            steps.append(int(np.min(np.diff(u))))
+    step = int(np.median(steps)) if steps else 1
+    available = int((full_scale + 1) // max(step, 1))
     return {
         "dtype": str(dtype),
         "bit_depth_container": 16 if dtype == np.uint16 else 8,
+        "quantisation_step": step,
+        "bit_depth_effective": round(float(np.log2(max(available, 2))), 1),
         "grey_levels_used": levels,
-        "grey_levels_available": full_scale + 1,
+        "grey_levels_available": available,
         "zero_fraction": round(float((flat == 0).mean()), 4),
         "saturated_fraction": round(float((flat >= full_scale).mean()), 5),
         "mean": round(float(flat.mean()), 2),
@@ -232,6 +396,7 @@ def probe(source, *, sample_frames=40, declared_fps=None, um_per_px=None,
         "intensity": measure_intensity(raw),
         "focus_laplacian_var": measure_focus(gray[len(gray) // 2]),
         "declared_um_per_px": float(um_per_px) if um_per_px else None,
+        "shadow": measure_shadow_over_frames(gray),
         "disagreements": [],
     }
 

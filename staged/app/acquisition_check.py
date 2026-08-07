@@ -377,7 +377,11 @@ def recommend(*, wants, gait="crawl", body_length_um=1140.0,
     fps = max(fps, event_floor)
     return {
         "min_fps": round(fps, 1),
-        "max_um_per_px": round(float(body_length_um) / need_px, 2),
+        # An event-duration readout has no body-length floor - pumping frames
+        # the head, not the animal - so there is no scale it implies. None
+        # rather than a number, because a 0 here would read as "any scale".
+        "max_um_per_px": (round(float(body_length_um) / need_px, 2)
+                          if need_px else None),
         "min_body_px": need_px,
         "needs_spine": needs_spine,
         "gait": gait, "undulation_hz": hz,

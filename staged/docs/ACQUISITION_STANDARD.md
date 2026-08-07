@@ -98,8 +98,42 @@ a fast recording of animals too small to measure is worth nothing.
 | Swimming / population modality | swim | **20 fps, 60 px** | 2 Hz undulation — five times the crawl floor |
 | Magnetotaxis / orientation | crawl | **3 fps, 40 px** | Body orientation ≠ direction of travel |
 | Foraging / nose tracking | crawl | **3 fps, 25 px** | |
+| Defecation / pBoc | crawl | **1 fps, 10 px** | Duration-bound, not frame-rate bound — needs *minutes*, several 50 s cycles. Oblique light required |
+| Pharyngeal pumping | — | **30 fps** | Event-duration floor, see the section above. Frames the head, so no body-length floor. Oblique light required |
 
 ---
+
+## Oblique illumination — required for pumping and defecation
+
+**Light the plate from one side, not from directly beneath.** The animal
+should show a bright edge where the light strikes it and a **shadow cast to
+the opposite side**. This is deliberate technique, chosen because it gives the
+contrast that makes the grinder and the gut readable. It is not a quirk of one
+rig on one day.
+
+The checker measures it and reports the direction:
+
+```
+PASS  Oblique illumination present, shadow below (94deg)
+      consistency 0.86, contrast 66 counts.
+```
+
+**Any consistent direction is fine.** What matters is that there *is* one.
+Measured across the pezo-1 CRISPR archive the shadow falls below the animal in
+five recordings of six, and below-right in the other — both perfectly usable.
+The check tests for a consistent shadow, not for a particular bearing.
+
+**If the checker reports no directional shadow**, the plate is probably lit
+from below or diffusely. Move the light off-axis and re-run the ten-second
+clip.
+
+> **The one exception.** An animal **immersed in an OP50 lawn** rather than
+> lying on top of it casts little shadow even under correct lighting. If the
+> checker fails this and the animal is down in the lawn, **record that** — it
+> is a property of the preparation, not a lighting fault, and relighting will
+> not change it. The analysis does not depend on the shadow; it detects the
+> animal by its cuticle texture, which the lawn lacks. The check exists so
+> that genuinely flat lighting is caught at the scope rather than at analysis.
 
 ## The rest of the recording
 

@@ -40,9 +40,15 @@ ASSAY_WANTS = {
     "swimming": ("position", "speed", "curvature", "omega_turns"),
     "magnetotaxis": ("position", "speed", "track_direction", "body_orientation"),
     "foraging": ("position", "speed", "track_direction", "turning"),
+    "pumping": ("pumping",),
+    "defecation": ("position", "speed"),
     "all": tuple(ac.MEASUREMENTS),
 }
 ASSAY_GAIT = {"swimming": "swim"}
+# Oblique illumination is deliberate technique for these two, chosen for
+# contrast against the cuticle and the gut. It is a property of the assay, not
+# of the rig on a given day, so it is checkable and its absence is a defect.
+OBLIQUE_REQUIRED = {"pumping", "defecation"}
 
 PASS, FAIL, WARN, INFO = "PASS", "FAIL", "WARN", "INFO"
 
@@ -197,7 +203,8 @@ def main():
     report.add(FAIL if used_fraction < 0.05 else
                WARN if used_fraction < 0.15 else PASS,
                f"Sensor range in use ({it['grey_levels_used']} of "
-               f"{it['grey_levels_available']} grey levels)",
+               f"{it['grey_levels_available']} usable levels, "
+               f"{it['bit_depth_effective']:g} effective bits)",
                "A recording using a few dozen levels with most pixels at "
                "zero is not a dim recording to be normalised later - there "
                "is nothing in it to normalise. Raise exposure, gain or "
@@ -207,6 +214,33 @@ def main():
                          f"zero",
                    "A near-empty frame produces enormous ratios from "
                    "quantisation noise divided by a near-zero baseline.")
+    # ---- oblique illumination, where the assay requires it ---------------
+    if args.assay in OBLIQUE_REQUIRED:
+        shadow = probe.get("shadow")
+        if shadow is None:
+            report.add(WARN, "Oblique illumination could not be assessed",
+                       "The animal was not segmented well enough to sample "
+                       "either side of it. Not a verdict on the lighting.")
+        elif shadow["directional"]:
+            report.add(PASS,
+                       f"Oblique illumination present, shadow "
+                       f"{shadow['direction']} ({shadow['azimuth_deg']:g}deg)",
+                       f"consistency {shadow['consistency']:.2f}, contrast "
+                       f"{shadow['contrast']:.0f} counts. Deliberate technique "
+                       f"for this assay, not an artefact.")
+        else:
+            report.add(FAIL,
+                       "No directional shadow, and this assay needs one",
+                       f"consistency {shadow['consistency']:.2f} against "
+                       f"{ap.SHADOW_MIN_CONSISTENCY}, contrast "
+                       f"{shadow['contrast']:.0f} against "
+                       f"{ap.SHADOW_MIN_CONTRAST:.0f}. Oblique lighting is "
+                       f"chosen for contrast on pumping and defecation. "
+                       f"KNOWN EXCEPTION: an animal immersed in an OP50 lawn "
+                       f"casts little shadow even under correct lighting - if "
+                       f"that is the case here, record it rather than "
+                       f"relighting.")
+
     report.add(INFO, f"Focus score {probe['focus_laplacian_var']:g}",
                "Laplacian variance - comparable only within one rig and "
                "magnification, so it is reported rather than graded.")

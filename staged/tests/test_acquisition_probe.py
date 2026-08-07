@@ -157,6 +157,17 @@ for assay, wants in ASSAY_WANTS.items():
     if assay == "all":
         continue
     rec = ac.recommend(wants=wants, gait=ASSAY_GAIT.get(assay, "crawl"))
+    if not rec["min_body_px"]:
+        # An event-duration assay frames the head, not the animal, so it has
+        # no body-length floor and its row quotes only a frame rate.
+        row = re.search(rf"^\|[^|]*\|[^|]*\|\s*\*\*{rec['min_fps']:g} fps\*\*",
+                        DOC, re.M)
+        check(f"the per-assay row for {assay} quotes its fps floor",
+              row is not None, f"expects {rec['min_fps']:g} fps, no px floor")
+        check(f"...and recommend() returns no scale for {assay}",
+              rec["max_um_per_px"] is None,
+              "a 0 here would read as 'any scale'")
+        continue
     row = re.search(rf"^\|[^|]*\|[^|]*\|\s*\*\*{rec['min_fps']:g} fps, "
                     rf"{rec['min_body_px']} px\*\*", DOC, re.M)
     check(f"the per-assay row for {assay} matches recommend()",
