@@ -270,6 +270,50 @@ So the discriminating properties are **texture and scale, plus motion** - not
 darkness, and not relief amplitude. A rule built on any single frame's
 intensity will not work on this set at any threshold.
 
+### 5.4.0 The foreground rule: fine texture, because OP50 is smooth
+
+**The substrate is not agar. It is an OP50 lawn**, which is why there are
+tracks at all - worms leave tracks on lawns, not on plain agar - and it is also
+where the animals feed, so it is where pumping happens. The lawn has broad
+topography but **no fine structure. The animal has cuticle striation.** That
+single asymmetry is the whole discriminator:
+
+```
+band   = gaussian(f, 1.0) - gaussian(f, 3.0)     # fine structure only
+energy = gaussian(|band|, 6.0)                   # local texture energy
+mask   = energy >= percentile(energy, 96.5)      # keep the top ~3.5%
+mask   = close(mask, ellipse(31))                # link along the body
+                                                 # then drop small components
+```
+
+Verified against a hand-drawn midline on `5521_cop1524`: this returns **the
+whole animal as a single component**, head to tail, following the drawn
+midline. The remaining components are small lawn specks and are removed by
+area.
+
+**Threshold behaviour**, measured on that frame:
+
+| keep top | close | components | largest | length |
+|---|---|---|---|---|
+| 1.5% | 21 | 5 | 4,076 px | 143 px — fragments |
+| 2.5% | 25 | 2 | 12,938 px | 574 px — most of the body |
+| **3.5%** | **31** | **5** | **26,844 px** | **779 px — whole animal** |
+| 4.5% | 31 | 8 | 30,579 px | 771 px — whole animal |
+| 5.5% | 41 | 12 | 34,224 px | 771 px — whole animal, more specks |
+
+Too tight and the body fragments; too loose and lawn specks multiply while the
+animal stays stable. The plateau from 3.5% to 5.5% is the operating range.
+
+**Why the earlier rules failed, in one line each:** intensity rules chase the
+shadow, which is darker than the animal; relief rules chase the lawn
+topography, which is as strongly relieved as the animal; coarse bandpass
+straddles both. Only the fine-texture band contains the animal and not the
+lawn.
+
+**Do not port these constants to another set without re-checking.** They
+encode the lawn's smoothness and the animal's striation *at this
+magnification*. A different magnification moves the striation out of the band.
+
 A length, width or scale derived from any of those is wrong **and looks
 entirely reasonable**, which is the failure mode this whole module exists to
 prevent. The animal presents as a shadow-and-highlight pair flanking a
