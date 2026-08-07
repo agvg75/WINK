@@ -723,15 +723,68 @@ structure. Excluding edge frames is still correct, but for the opposite reason
 to the one assumed, and it does not fix the spread: clear of the edge the range
 is still 403 to 1119 px.
 
+### 9.5.2 The development set is MULTI-WORM. This invalidates the anchor.
+
+**Established by annotation, 6 August 2026.** Frames spanning the length range
+in `5521_cop1524` were drawn on by eye. Of six frames, **two contain two
+animals** and four contain one. The count varies frame to frame as animals
+enter and leave the field.
+
+Everything above assumed one animal per frame. That assumption is in the
+selector — "take the largest component" — and it is wrong in two distinct
+ways on a multi-worm frame:
+
+- It reports **one of several animals**, chosen by area, with no record that
+  others were present.
+- When that animal is fragmented it reports **a fragment of a different
+  animal**. On frame 18550 the selected component is the tail of the second
+  worm. An earlier note here called it a non-worm blob; that was wrong, and it
+  is worse than a blob — a blob is obviously spurious, whereas a real worm
+  fragment is plausible.
+
+**This is the dominant term in the length spread**, ahead of fragmentation and
+coil-bridging. A distribution pooling one-worm and two-worm frames is not a
+body-length distribution at all.
+
+Consequences that must be carried into the design:
+
+1. **Stage 1 detects N animals, not one.** `body_length_px` is a per-animal
+   measurement, and a frame yields a set of them. The recording-level
+   distribution is over animals, not over frames.
+2. **"Largest component" is banned as a selector**, for this reason in addition
+   to the shape reasons in 9.5.1.
+3. **The whole-animal-enclosed fraction in 9.5 item 3 needs redefining.** With
+   two animals in frame, "the animal is enclosed" has no referent. It becomes
+   per-animal, and a frame can be partly enclosed.
+4. **This connects to grant plan section 5**, which names resolving recordings
+   to individual animals as the gating unknown that determines n. The
+   development set is an instance of exactly that problem, not an exception to
+   it. Session marking is the mechanism, and it applies here.
+
+Coil-bridging remains real and separate: frame 66086 holds **one** animal
+folded double, and the 31 px closing bridges the two limbs of the fold. That
+inflates length on a single-worm frame, so it is not explained by multi-worm
+counting.
+
 **What this leaves open**, in priority order:
 
-1. Make length as stable as width — link fragments along the body axis rather
-   than relying on a morphological close, or validate the mask's extent against
-   a curated spine.
-2. Explain the food density recording's narrower width, which may be the OP50
+1. **Count the animals first.** Every other measurement is conditioned on
+   knowing how many are in frame, and the current numbers pool one-worm and
+   two-worm frames. Nothing downstream is interpretable until this is fixed.
+2. Make per-animal length as stable as width — link fragments along the body
+   axis rather than relying on a morphological close, and separate that from
+   the closing that bridges coil limbs. The two need different operations.
+3. Explain the food density recording's narrower width, which may be the OP50
    immersion case from 5.4.1.
-3. Only then set the scale, and update what 6.1's fractions resolve to. **The
+4. Only then set the scale, and update what 6.1's fractions resolve to. **The
    fractions themselves do not change** — they are anatomy, not measurement.
+
+**A note on how items 1 and 2 interact.** Temporal tracking would fix
+fragmentation, coil-bridging and mis-selection together, because an animal is
+continuous in time and its length cannot change discontinuously. But on a
+multi-worm field it becomes multi-object tracking with animals entering and
+leaving, which is a substantially larger problem than single-worm tracking and
+must be scoped as such rather than assumed to fall out of item 2.
 
 ---
 
