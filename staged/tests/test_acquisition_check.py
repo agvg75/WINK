@@ -65,13 +65,40 @@ check("...and says spines are needed, pointing at what decides that",
       "whether spines are recoverable is measured, not assumed")
 
 # --- a recording that works ---------------------------------------------------
+# Scoped to the LOCOMOTION readouts. Pumping is governed by event duration
+# rather than by an undulation, so a recording can be excellent for every
+# locomotion measurement and still be useless for counting pumps - which is
+# the next check, and the reason this one is no longer "everything".
+LOCOMOTION = [k for k, s in ac.MEASUREMENTS.items() if not s.get("min_fps")]
 good = ac.check(fps=10.0, um_per_px=10.0, body_length_um=1140, gait="crawl",
-                tier="spine")
-check("a well-sampled, well-magnified recording supports everything",
-      good["n_unsupported"] == 0,
+                tier="spine", wants=LOCOMOTION)
+check("a well-sampled, well-magnified recording supports every locomotion "
+      "readout", good["n_unsupported"] == 0,
       f"{good['body_length_px']:.0f} px, "
       f"{good['samples_per_undulation']} samples/cycle")
 check("...and raises no warning", good["warnings"] == [])
+
+# --- the same recording, for pumping ------------------------------------------
+pump = ac.check(fps=10.0, um_per_px=10.0, wants=("pumping",))["measurements"]["pumping"]
+check("...while the same 10 fps recording does NOT support pumping",
+      not pump["supported"],
+      f"{pump['frames_per_event']} frames per pump event")
+check("...because a pump is an event, not a waveform",
+      "LASTS" in (pump["fix"] or ""),
+      "the fix must say so, or someone recomputes the floor from Nyquist")
+check("the Nyquist answer for a 4-5 Hz pump rate is explicitly not enough",
+      not ac.check(fps=20.0, um_per_px=10.0,
+                   wants=("pumping",))["measurements"]["pumping"]["supported"],
+      "4 samples x 5 Hz = 20 fps, and a 150 ms pump spans 3 frames there")
+check("clearing the floor with little room warns rather than passing quietly",
+      any("little room" in w for w in
+          ac.check(fps=30.0, um_per_px=10.0, wants=("pumping",))["warnings"]),
+      "undercounting looks like a low pump rate, not like a failure")
+check("a comfortable frame rate raises nothing",
+      ac.check(fps=45.0, um_per_px=10.0, wants=("pumping",))["warnings"] == [])
+check("the spatial requirement abstains rather than guessing from body length",
+      "spatial_unverified" in pump,
+      "a pumping recording frames the head, not the animal")
 
 # --- the spine tier is not optional for orientation --------------------------
 centroid = ac.check(fps=10.0, um_per_px=10.0, tier="centroid")

@@ -36,6 +36,47 @@ from __future__ import annotations
 
 import math
 
+# WHY THE PUMPING FLOOR IS NOT 16 fps.
+#
+# Every locomotion row below is governed by samples per undulation, because a
+# crawling or swimming body is approximately sinusoidal and the question is
+# whether the waveform can be reconstructed. Applying that rule to pumping
+# gives 4 samples x 4-5 Hz = 16-20 fps, and it is WRONG, because pumping is
+# not a sinusoid. It is a brief discrete event - a grinder contraction of
+# roughly 100-200 ms - separated by longer intervals. The measurement is
+# counting individual transients without merging or missing them, which is set
+# by how long one pump LASTS, not by how often pumps arrive.
+#
+#   at 16 fps a 150 ms pump spans 2.4 frames, and one falling between frames
+#             is not attenuated, it is ABSENT
+#   at 20 fps it spans 3.0 frames, still marginal
+#   at 30 fps it spans 4.5 frames, which survives a missed frame and a pump
+#             landing anywhere in the cycle
+#
+# This note sits next to the number because the number looks like it
+# disagrees with the table below, and the obvious "correction" - apply Nyquist
+# like everything else - reintroduces an undercount that looks entirely
+# plausible in the output. A 10 fps recording does not fail loudly; it returns
+# a pump rate that is simply too low, which is the same failure shape as the
+# fake calcium dose-response.
+PUMP_EVENT_S = 0.15
+PUMP_MIN_FRAMES_PER_EVENT = 4.0
+PUMP_COMFORTABLE_FRAMES_PER_EVENT = 6.0
+# 4 frames / 0.15 s = 26.7, rounded up to a frame rate a camera actually
+# offers. Comfortable is 6 / 0.15 = 40.
+PUMP_MIN_FPS = 30.0
+PUMP_COMFORTABLE_FPS = 40.0
+
+
+def pump_sampling_margin(fps, event_s=PUMP_EVENT_S):
+    """Frames per pump event - reported instead of a bare pass.
+
+    A recording that scrapes the floor and one with room to spare are not the
+    same recording, and a boolean cannot say so.
+    """
+    return float(fps) * float(event_s)
+
+
 # What each measurement actually needs. `needs_spine` connects to
 # tractability.py: a centroid gives direction of travel, a spine gives
 # orientation of the body, and they are not the same measurement.
@@ -82,6 +123,16 @@ MEASUREMENTS = {
         "why": ("An omega is a shape change over about one undulation period; "
                 "sampling it a few times per period misses its structure."),
     },
+    # NOT A NYQUIST CALCULATION. Read the note below before changing 30.
+    "pumping": {
+        "label": "Pharyngeal pumping rate",
+        "min_body_px": 0, "samples_per_undulation": 0, "needs_spine": False,
+        "min_fps": PUMP_MIN_FPS, "min_grinder_px": 8,
+        "why": ("A pump is a discrete event, not a waveform. The measurement "
+                "is counting individual transients without merging or missing "
+                "them, and that is set by how long one pump LASTS, not by how "
+                "often pumps arrive."),
+    },
 }
 
 # Crawling undulates around 0.3-0.5 Hz; swimming is far faster, 1-3 Hz. The
@@ -95,7 +146,7 @@ class AcquisitionError(Exception):
 
 
 def check(*, fps, um_per_px, body_length_um=1140.0, wants=(),
-          gait="crawl", undulation_hz=None, tier="centroid"):
+          gait="crawl", undulation_hz=None, tier="centroid", grinder_px=None):
     """Per-measurement verdicts for one recording or one proposed setting.
 
     `body_length_um` defaults to 1.14 mm, the figure Andres gave for the
@@ -166,13 +217,53 @@ def check(*, fps, um_per_px, body_length_um=1140.0, wants=(),
         if spec["needs_spine"] and tier != "spine":
             fails.append(
                 "it needs a midline and this recording gives centroids only")
-        out["measurements"][key] = {
-            "label": spec["label"], "supported": not fails,
-            "why": spec["why"],
-            "fails": fails,
-            "fix": _fix(fails, spec, fps, hz, um_per_px, body_length_um)
-            if fails else None,
+        # An event-rate floor, for readouts that count transients rather than
+        # reconstruct a waveform. Kept separate from samples_per_undulation
+        # on purpose: the two are not the same quantity and collapsing them
+        # is how the pumping floor gets "corrected" down to Nyquist.
+        record = {
+            "label": spec["label"], "supported": None, "why": spec["why"],
+            "fails": fails, "fix": None,
         }
+        floor_fps = spec.get("min_fps")
+        if floor_fps:
+            margin = pump_sampling_margin(fps)
+            record["frames_per_event"] = round(margin, 2)
+            record["comfortable_frames_per_event"] = \
+                PUMP_COMFORTABLE_FRAMES_PER_EVENT
+            if fps < floor_fps:
+                fails.append(
+                    f"the frame rate is {fps:g} fps against a floor of "
+                    f"{floor_fps:g}, so a {PUMP_EVENT_S * 1000:.0f} ms pump "
+                    f"spans only {margin:.1f} frames and one falling between "
+                    f"frames is missed entirely, not merely attenuated")
+            elif margin < PUMP_COMFORTABLE_FRAMES_PER_EVENT:
+                out["warnings"].append(
+                    f"Pumping clears its {floor_fps:g} fps floor with little "
+                    f"room: {margin:.1f} frames per pump against "
+                    f"{PUMP_COMFORTABLE_FRAMES_PER_EVENT:g} for comfort. "
+                    f"Undercounting here does not look like a failure, it "
+                    f"looks like a low pump rate.")
+        grinder_floor = spec.get("min_grinder_px")
+        if grinder_floor:
+            if grinder_px is None:
+                # Abstain rather than guess: for pumping the head is framed,
+                # not the whole animal, so body length does not imply the
+                # grinder size and inferring one from the other would be a
+                # number wearing a measurement's clothes.
+                record["spatial_unverified"] = (
+                    f"needs the grinder resolved at {grinder_floor}+ px; not "
+                    f"checked because no grinder_px was supplied and body "
+                    f"length does not imply it - a pumping recording frames "
+                    f"the head, not the animal")
+            elif float(grinder_px) < grinder_floor:
+                fails.append(
+                    f"the grinder is {float(grinder_px):.0f} px against a "
+                    f"floor of {grinder_floor} px")
+        record["supported"] = not fails
+        record["fix"] = (_fix(fails, spec, fps, hz, um_per_px, body_length_um)
+                         if fails else None)
+        out["measurements"][key] = record
     out["n_supported"] = sum(1 for m in out["measurements"].values()
                              if m["supported"])
     out["n_unsupported"] = len(out["measurements"]) - out["n_supported"]
@@ -195,6 +286,14 @@ def _fix(fails, spec, fps, hz, um_per_px, body_um):
         parts.append(
             "and extract spines rather than centroids - see tractability.py, "
             "which decides from a traced frame whether that is possible")
+    if any("floor of" in f and "fps" in f for f in fails):
+        parts.append(
+            f"film at {spec['min_fps']:g} fps or faster (currently {fps:g}) - "
+            f"this floor comes from how long a pump LASTS, not from the pump "
+            f"rate, so do not recompute it from Nyquist")
+    if any("grinder" in f for f in fails):
+        parts.append(
+            f"magnify until the grinder covers {spec['min_grinder_px']}+ px")
     return "; ".join(parts) or None
 
 
@@ -217,6 +316,10 @@ def recommend(*, wants, gait="crawl", body_length_um=1140.0,
     need_samples = max(s["samples_per_undulation"] for s in specs)
     needs_spine = any(s["needs_spine"] for s in specs)
     fps = max(need_samples * hz, 2 * hz)
+    # An event-duration floor is not comparable to an undulation floor, so it
+    # is taken as a separate maximum rather than folded into the arithmetic.
+    event_floor = max((s.get("min_fps") or 0) for s in specs)
+    fps = max(fps, event_floor)
     return {
         "min_fps": round(fps, 1),
         "max_um_per_px": round(float(body_length_um) / need_px, 2),

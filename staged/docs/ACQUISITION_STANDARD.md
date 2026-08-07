@@ -45,6 +45,32 @@ per undulation is the practical floor.
 The names in the first column are the ones the checker prints, so a `FAIL`
 line points straight at a row here.
 
+### Pharyngeal pumping is a different kind of measurement
+
+| You want to measure | Grinder (px) | Floor | Comfortable |
+|---|---|---|---|
+| Pharyngeal pumping rate | 8 | **30 fps** | 40 fps |
+
+**Do not compute this one from the undulation rule.** Everything above is a
+waveform, and four samples per cycle reconstructs it. A pump is not a
+waveform — it is a discrete event lasting about **150 ms**, and the job is to
+count individual pumps without merging or missing them.
+
+Applying the waveform rule to a 4–5 Hz pump rate gives 16–20 fps, and it is
+wrong. At 20 fps a pump spans 3 frames; a pump falling between frames is not
+dimmed, it is **absent**. At 30 fps it spans 4.5 frames and survives both a
+dropped frame and a pump landing anywhere in the cycle.
+
+The checker reports **frames per pump event**, not a bare pass, so a recording
+that scrapes the floor looks different from one with room to spare. An
+undercount here does not look like a failure — it looks like a low pump rate,
+which is exactly how a bad recording becomes a fake result.
+
+Pumping frames the **head**, not the whole animal, so the body-length floors
+above do not apply. The spatial requirement is that the grinder itself is
+resolved. The checker will not infer grinder size from body length; if it
+isn't measured, it says so rather than guessing.
+
 Read down to the *last* row you need and use that line. The floors are
 cumulative — turning also needs everything speed needs.
 

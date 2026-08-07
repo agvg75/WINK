@@ -164,6 +164,24 @@ for assay, wants in ASSAY_WANTS.items():
           f"expects {rec['min_fps']:g} fps, {rec['min_body_px']} px")
 
 for key, spec in ac.MEASUREMENTS.items():
+    if spec.get("min_fps"):
+        # An event-duration readout has no undulation columns to check. Its
+        # floor is asserted separately below, because a row that quoted a
+        # crawl and a swim frame rate for pumping would be inviting exactly
+        # the Nyquist "correction" the number exists to prevent.
+        label = spec["label"]
+        row = [ln for ln in DOC.splitlines()
+               if ln.startswith("|") and label.lower() in ln.lower()]
+        check(f"the measurement row for {key} is in the document", bool(row),
+              label)
+        if row:
+            check(f"...quoting the event-duration floor for {key}",
+                  f"{spec['min_fps']:g} fps" in row[0],
+                  f"{spec['min_fps']:g} fps")
+        check(f"...and the document warns against recomputing {key} from "
+              f"the undulation rule",
+              "Do not compute this one from the undulation rule" in DOC)
+        continue
     n = spec["samples_per_undulation"]
     crawl = max(n * 0.5, 1)
     swim = max(n * 2, 4)
