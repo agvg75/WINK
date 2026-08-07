@@ -36,27 +36,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "app"))
 
+import lab_dates             # noqa: E402
 import propose_labels as pl   # noqa: E402
 
-# Acquisition stamps as cameras write them. Ordered most specific first.
-STAMP_RES = [
-    re.compile(r"(20\d\d)[-_](\d{2})[-_](\d{2})"),      # 2021-04-19
-    re.compile(r"(20\d\d)(\d{2})(\d{2})"),              # 20210419
-]
-YEAR_RE = re.compile(r"(?<!\d)(20[0-2]\d)(?!\d)")
-
-
 def stamp_year(name):
-    """The acquisition year a filename carries, or None."""
-    for pattern in STAMP_RES:
-        match = pattern.search(name)
-        if match:
-            year = int(match.group(1))
-            month = int(match.group(2))
-            if 2000 <= year <= 2026 and 1 <= month <= 12:
-                return year
-    match = YEAR_RE.search(name)
-    return int(match.group(1)) if match else None
+    """The acquisition year a filename carries, or None.
+
+    THIS USED TO READ ONLY THE CAMERA FORMATS - 2021-04-19, 20210419 and a
+    bare 2021 - which are the ones this lab writes LEAST. Measured over 1,793
+    confocal filenames, the conventions actually in use are YYMMDD (380),
+    MM.DD.YY (55), MDDYY (50), MMDYY (25) and MMDDYY (21). The regex was
+    correct in the abstract and wrong about this lab, and it failed silently:
+    an unmatched filename yields no date, which looks exactly like a filename
+    that carries none.
+
+    The convention table now lives in lab_dates, shared with the confocal
+    census, so there is one place to be wrong rather than three.
+    """
+    return lab_dates.year_of(name)
 
 
 def vocabulary(name):
@@ -103,7 +100,14 @@ def main():
     args = ap.parse_args()
 
     pl.load_strains()
-    if args.authority and Path(args.authority).exists():
+    # A PATH THAT DOES NOT EXIST IS AN ERROR, NOT AN ABSENT OPTION. The old
+    # form here silently skipped the load, and every person column came back
+    # empty looking exactly like "no people in these filenames". Measured on
+    # the confocal census, which had the same guard: 5,206 series reported
+    # "person: none in path" on a share whose top level is a list of people.
+    if args.authority:
+        if not Path(args.authority).exists():
+            sys.exit(f"authority file not found: {args.authority}")
         pl.load_authority(args.authority)
 
     with open(args.inventory, newline="", encoding="utf-8-sig") as handle:

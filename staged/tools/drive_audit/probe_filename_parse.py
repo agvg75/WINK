@@ -83,7 +83,11 @@ def main():
     args = ap.parse_args()
 
     pl.load_strains()
-    if args.authority and Path(args.authority).exists():
+    # See parse_filenames.py: a missing path must look like a failure, not
+    # like an empty result.
+    if args.authority:
+        if not Path(args.authority).exists():
+            sys.exit(f"authority file not found: {args.authority}")
         pl.load_authority(args.authority)
 
     with open(args.inventory, newline="", encoding="utf-8-sig") as handle:

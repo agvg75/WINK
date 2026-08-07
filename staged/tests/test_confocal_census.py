@@ -27,6 +27,7 @@ The span convention is pinned too. Length is the extent from the FIRST
 element to the LAST, so it covers n - 1 steps. Over a 5-plane stack, reading
 it as n instead biases the z spacing by 25%.
 """
+from datetime import date
 from pathlib import Path
 import sys
 import xml.etree.ElementTree as ET
@@ -104,18 +105,44 @@ check("a series merely containing 'lng' is not derived",
 
 print("\n--- the year this lab actually writes -------------------------")
 
-check("YYMMDD is read", census.year_of("230222_AVG60_dys-1_a-g_RNAi") == 2023)
+# The convention table lives in tools/drive_audit/lab_dates.py and is tested
+# exhaustively in test_lab_dates.py. What is pinned HERE is that the census
+# delegates to it rather than keeping a private copy - which is how it came
+# to read a year for 91 of 5,206 series.
+check("YYMMDD is read when the file's mtime is passed",
+      census.year_of("230222_AVG60_dys-1_a-g_RNAi", date(2023, 2, 22)) == 2023)
+check("...and honestly withheld when it is not",
+      census.year_of("230222_AVG60_dys-1_a-g_RNAi") is None,
+      "230222 is 22 Feb 2023 or 23 Feb 2022; the mtime is what decides")
 check("...and so is a four-digit year",
       census.year_of("2021 pezo experiments") == 2021)
-check("a four-digit year wins over a stray six-digit run",
-      census.year_of("2019_240517") == 2019)
 check("an impossible month is not a date",
       census.year_of("239922") is None, "month 99")
 check("an impossible day is not a date",
       census.year_of("230240") is None, "day 40")
-check("a bare five-digit number is not a date",
-      census.year_of("41921") is None,
-      "same rule the folder audit holds: 41921 is a sequence, not a stamp")
+
+# THIS ASSERTION WAS BACKWARDS UNTIL 7 Aug 2026. The census kept its own date
+# reader and declared 41921 a non-date; the folder audit had documented it as
+# 19 April 2021 for two commits. The rule about bare four and five digit
+# numbers is that they never match an ALLELE - precisely BECAUSE they are
+# dates. Two parsers, two private tables, opposite answers on one filename.
+check("a bare five-digit number IS a date",
+      census.year_of("41921") == 2021,
+      "41921 is 19 April 2021 - the folder audit already said so")
+
+# THE ANCHOR. This lab writes the date at the FRONT of a name, so only the
+# leading digit run is read. An unanchored reader mined dates out of strain
+# numbers and sample IDs anywhere in a filename and dated 119 series to 2002
+# whose own names say 2025.
+check("only the leading digit run is read as a date",
+      census.year_of("2019_240517") == 2019,
+      "the trailing 240517 is not a second date to weigh")
+check("a mid-name digit run is not a date at all",
+      census.year_of("AVG60_240517_head") is None,
+      "strain and sample numbers sit mid-name; dates do not")
+check("section numbers between dots are not a date",
+      census.year_of("AVG60.3.1.02.14.25", date(2025, 2, 20)) == 2025,
+      "3.1.02 must not read as March 2002 when 02.14.25 is right there")
 
 print("\n--- shape comes from dimensions, never from a name -------------")
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
 import os
 import re
 import sys
@@ -38,14 +39,8 @@ sys.path.insert(0, str(HERE.parents[2] / "app"))
 sys.path.insert(0, str(HERE.parents[1] / "drive_audit"))
 
 import cell_calcium_lif as lif   # noqa: E402
+import lab_dates                 # noqa: E402
 import propose_labels as pl      # noqa: E402
-
-YEAR_RE = re.compile(r"(?<!\d)(20[0-2]\d)(?!\d)")
-
-# This lab writes YYMMDD on the front of a confocal filename:
-# 230222_AVG60_dys-1_a-g_RNAi.lif. A four-digit year regex reads none of it,
-# which is how the first run found a year for 91 of 5,206 series.
-YYMMDD_RE = re.compile(r"(?<!\d)([0-2]\d)([01]\d)([0-3]\d)(?!\d)")
 
 # Leica stores processed copies and analysis outputs as sibling series inside
 # the same file. Counting them as acquisitions inflates the census: a
@@ -65,17 +60,15 @@ def derivation_of(name):
     return ""
 
 
-def year_of(text):
-    """The acquisition year a path segment carries, four-digit or YYMMDD."""
-    match = YEAR_RE.search(text)
-    if match:
-        return int(match.group(1))
-    match = YYMMDD_RE.search(text)
-    if match:
-        year, month, day = (int(g) for g in match.groups())
-        if 1 <= month <= 12 and 1 <= day <= 31:
-            return 2000 + year
-    return None
+def year_of(text, not_after=None):
+    """The acquisition year a path segment carries, in any of the six
+    conventions this lab writes. See tools/drive_audit/lab_dates.py - the
+    table is shared with the folder audit so the two cannot drift apart.
+
+    `not_after` is the file's mtime where the caller has one: a stamp cannot
+    postdate the file it names, which resolves most six-digit ambiguity.
+    """
+    return lab_dates.year_of(text, not_after)
 
 
 def shape_of(series):
@@ -90,15 +83,25 @@ def shape_of(series):
     return "single plane"
 
 
-def context_of(path):
+def context_of(path, not_after=None):
     """Strain, person and year the PATH carries, via the drive-audit lexicon.
 
     The same vocabulary the folder audit uses, so a strain found here means
     the same thing it means there and the two can be joined.
+
+    `not_after` is the file's mtime, used only to rule OUT date readings that
+    would postdate the file. It is never used as the date itself: an mtime
+    records the last write, so copying an archive rewrites every one of them
+    while the filename keeps the day the animal was imaged.
     """
     found = {}
-    years = set()
-    for segment in pl.path_segments(path) + [os.path.basename(path)]:
+    # THE FILENAME OUTRANKS ITS FOLDERS, and the deepest folder outranks its
+    # parents. This used to take min() over every year found anywhere in the
+    # path, so one mis-parsed ancestor beat the file's own stamp - a folder
+    # reading 2002 dated 119 series that their filenames put in 2025.
+    segments = pl.path_segments(path)
+    years = []
+    for segment in reversed(segments):
         for word in re.split(r"[^A-Za-z0-9-]+", segment):
             if not word:
                 continue
@@ -114,11 +117,11 @@ def context_of(path):
                 found.setdefault("person", " | ".join(sorted(
                     f"{p['surname']} {p['initials']}".strip()
                     for p in people)))
-        year = year_of(segment)
-        if year and 2000 <= year <= 2026:
-            years.add(year)
+        year = year_of(segment, not_after)
+        if year:
+            years.append(year)
     if years:
-        found["year"] = str(min(years))
+        found["year"] = str(years[0])
     return found
 
 
@@ -194,7 +197,11 @@ def main():
                          "series_index": "", "series_name": "",
                          "error": str(exc)[:180]})
             continue
-        ctx = context_of(path)
+        try:
+            mtime = datetime.date.fromisoformat(entry.get("mtime") or "")
+        except ValueError:
+            mtime = None
+        ctx = context_of(path, mtime)
         held_on = by_identity[(os.path.basename(path).lower(),
                                entry.get("size_bytes"))]
         for s in series:
@@ -304,9 +311,15 @@ def main():
                               by_year_shape[year].most_common(5))
             print(f"    {year:8} {inner}")
 
-    # WHERE THE DATA LIVES. A stack that exists on one machine only is one
-    # disk failure from not existing, and the scope computer is not a backup.
-    print("\nWHERE IT IS HELD")
+    # WHERE THE DATA LIVES, AND ONLY THAT. This compares the sweeps it was
+    # given to each other. It reads no backup catalogue, no snapshot history
+    # and no tape index, so "not on the other share" is the strongest thing
+    # it can say - NOT "unbacked", and NOT "at risk". The first version of
+    # this report crossed that line and called 1.36 TB a live risk of loss on
+    # a share that is in fact backed up. Every number was right; the sentence
+    # built on them was about a system this tool never looked at.
+    print("\nWHERE IT IS HELD  (compares only the sweeps given to this run;")
+    print("                   says nothing about any backup system)")
     per_source = defaultdict(lambda: [0, 0.0])
     for row in files:
         gb = float(row.get("size_bytes") or 0) / 1e9
@@ -320,8 +333,9 @@ def main():
                       if r["source"] == source and
                       len(by_identity[(os.path.basename(r["path"]).lower(),
                                        r.get("size_bytes"))]) == 1)
+        others = ", ".join(sorted(set(per_source) - {source})) or "no other"
         print(f"    {source:14} {n:5,} files {gb:9,.1f} GB   "
-              f"of which {alone:,} ({lone_gb:,.1f} GB) exist nowhere else")
+              f"of which {alone:,} ({lone_gb:,.1f} GB) are not on {others}")
 
     print("\nNOT ANSWERED HERE: which of these are HEADS. A .lif header has")
     print("no anatomy in it, so that judgement stays with a person.")

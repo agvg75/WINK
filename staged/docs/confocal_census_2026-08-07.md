@@ -6,27 +6,39 @@ Data: `tools/confocal_census/confocal_census_2026-08-07.csv` (9,872 rows)
 
 ---
 
-## 1. The headline is not the count, it is where the data is
+## 1. Where the data is, and what that does and does not tell us
 
-| storage | confocal files | size | **exists nowhere else** |
+| storage | confocal files | size | not present on the other share |
 |---|---|---|---|
-| `L:\` (lab drive) | 1,404 | 942.2 GB | 1,312 files — **558.9 GB** |
-| `\\SLB122E-01\Vidal-Gadea_lab` (scope PC) | 389 | 1,711.6 GB | 312 files — **1,359.4 GB** |
+| `L:\` (lab drive) | 1,404 | 942.2 GB | 1,312 files — 558.9 GB |
+| `\\SLB122E-01\Vidal-Gadea_lab` (scope PC) | 389 | 1,711.6 GB | 312 files — 1,359.4 GB |
 
-**The scope computer holds nearly twice as much confocal data as the lab drive,
-and 1.36 TB of it is on that machine only.** It is a microscope control PC in
-SLB 122E — a workstation under a scope, not a backed-up server. Every stack in
-that 1.36 TB is one disk failure from not existing.
+**The scope computer holds nearly twice as much confocal data as the lab
+drive**, and only 77 of its 389 files have a counterpart on L. That is worth
+knowing for migration planning: the scope share is not a subset of the lab
+drive, so a census or a migration that reads only `L:` sees well under half
+the Leica data.
 
-Only 77 of the scope's 389 files have a counterpart on L. This is not a
-metadata problem, and it is not something the migration fixes; it is the
-single most consequential thing this census found, and it was found by
-accident, because the census was pointed at the L drive alone until the
-scope share came up mid-run.
+> **CORRECTED 7 Aug 2026, and the correction matters more than the finding.**
+> An earlier version of this section reported the 1,359.4 GB as data that
+> "exists nowhere else" and called it a live risk of loss. **That was wrong.**
+> The confocal share is backed up to the same place the L drive is. Andrés is
+> taking an independent external copy as well, but not because of this.
+>
+> **What the census actually compared was two live shares against each other.**
+> It had no visibility into any backup system, and none of its inputs could
+> have shown one. Redundancy *between two shares* is not the same claim as
+> *absence of backup*, and the first does not license the second. The column
+> above is now named for what it measures.
+>
+> The failure was one of scope, not arithmetic: every number was right, and
+> the sentence built on them was about a system the tool never looked at.
+> A comparison can only ever report on the things compared, and a report
+> should name them.
 
-Matching is by filename **and** exact byte count, so it under-reports rather
-than over-reports: a file copied and renamed reads as two files, and is
-counted as unbacked on both sides.
+Matching is by filename **and** exact byte count, so cross-share overlap is
+under-reported rather than over-reported: a file copied and renamed reads as
+two distinct files.
 
 ---
 
@@ -96,6 +108,10 @@ is a human judgement and stays one.
 
 ## 5. Caveats, so nothing here is read as firmer than it is
 
+- **This census compared two live shares, `L:` and `\\SLB122E-01`.** It read no
+  backup catalogue, no snapshot history and no tape index, because it had none
+  to read. Nothing here supports any statement about whether a file is backed
+  up. See the correction in §1 for what happens when that boundary is crossed.
 - **`.lsm`, `.czi` and `.nd2` were counted but not opened** — 1,143 files,
   41 GB, most of it 1,078 Zeiss `.lsm`. No reader for these exists in this
   codebase and guessing at their headers would be worse than reporting them
@@ -119,9 +135,11 @@ is a human judgement and stays one.
 
 ## 6. What this changes
 
-1. **Back up the scope computer.** 1.36 TB, single copy, on a workstation.
-   This is now the top operational item and it outranks everything in the
-   metadata backlog.
+1. **Any tool that reads only `L:` sees under half the Leica data.** The scope
+   share is not a subset of the lab drive — 312 of its 389 files are not on L.
+   Sweep both, keep `source` as a column. (This replaces an earlier item here
+   calling for the scope PC to be backed up; see the correction in §1. It is
+   backed up, and the census could not have known either way.)
 2. **§5.3 branches on ~3,600 candidate stacks**, with calibration on 92% of
    them, spanning 2019–2025 and concentrated in AVG60, AVG57, N2 and VG03.
    The September decision has data under it.
