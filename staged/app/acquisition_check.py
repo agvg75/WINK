@@ -80,6 +80,27 @@ PUMP_COMFORTABLE_FPS = 40.0
 # is expected to be populated; it is not a rounding error to be tidied away.
 GRINDER_MIN_PX = 10
 GRINDER_COMFORTABLE_PX = 25
+# The fraction the pixel floors above are derived FROM. Motion signature spec
+# v3 section 6.1 requires spatial thresholds be expressed as fractions of
+# measured body length rather than as pixels, because magnification metadata
+# across the archive is unreliable. This is the diameter fraction: a 1100 um
+# day 1 adult has a terminal bulb about 33 um across, so about 1/33 of body
+# LENGTH resolves to bulb DIAMETER. Revision 2 used 1/20 and took the result
+# as an axial length, which measures the wrong axis.
+PHARYNX_BULB_DIAMETER_FRACTION = 1.0 / 33.0
+
+
+def grinder_px_for(body_length_px,
+                   fraction=PHARYNX_BULB_DIAMETER_FRACTION):
+    """Bulb DIAMETER in pixels implied by a measured body length.
+
+    The spec forbids pixel thresholds precisely so this conversion happens per
+    recording. On the development set a 495 px animal gives about 15 px, which
+    is marginal - above GRINDER_MIN_PX and below GRINDER_COMFORTABLE_PX.
+    """
+    if not body_length_px:
+        return None
+    return float(body_length_px) * float(fraction)
 
 
 def pump_sampling_margin(fps, event_s=PUMP_EVENT_S):
