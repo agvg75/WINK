@@ -262,6 +262,52 @@ itself solve the problem.
 Whatever rule is used, **confirm what was segmented before anything derived
 from it is used.** Overlay the mask on raw pixels and look.
 
+### 5.4.1 Illumination geometry of the development set
+
+Established by eye against raw frames from all six recordings, 6 August 2026:
+
+- **A worm is present in every frame.** Absence of a detection on this set is a
+  detector failure, not an empty field. Stage 0 should never return `empty`
+  here, and if it does that is a bug.
+- **The light comes from the top, so the shadow falls BENEATH the worm** — in
+  every recording that has one. This is a fixed geometric relationship, not a
+  per-frame accident, and it is exploitable: the body is the mid-grey band
+  sitting immediately **above** a dark band, and the pair has a known
+  orientation. It also explains why an unconstrained intensity rule takes the
+  shadow: the shadow is darker than the animal.
+- **One recording has no detectable shadow**, because the animal is immersed in
+  an OP50 lawn rather than lying on top of it. **The foreground rule must
+  therefore not REQUIRE the shadow.** A rule keyed on the body/shadow pair
+  will silently fail on that recording while succeeding on the other five,
+  which is the worst available failure mode: a per-recording gap that looks
+  like biology.
+
+The rule must work in both regimes: use the shadow as corroboration where it
+exists, never as a precondition.
+
+### 5.4.2 Bit depth: a 16-bit container holding 8 bits
+
+The TIFFs are `uint16`, which invites the assumption that a conversion to
+8 bits discards information. It does not:
+
+| recording | distinct values | effective bits | quantisation step |
+|---|---|---|---|
+| `41921_cop1367` | 216 | 7.8 | 128 |
+| `42821_AG406` | 267 | 8.1 | 128 |
+| `52021 food density` | 296 | 8.2 | 4 |
+
+A step of 128 is 8-bit data left-shifted into a 16-bit word. **Converting to
+8 bits is lossless on this set**, so the segmentation difficulty in 5.4 is a
+choice-of-feature problem and not a quantisation artifact. Do not spend effort
+preserving 16-bit precision that was never captured — but do measure the step
+before assuming the same of another set.
+
+Measured illumination levels are consistent across the six recordings — median
+145 to 155 of 255 — while the dark tail moves considerably, `p1` ranging 66 to
+106 and shifting by 20 to 29 counts **within** a single recording. Nothing
+clips: maxima sit near 200 of 255. A fixed dark threshold is therefore
+unusable across, or even within, a recording.
+
 ### 5.5 `um_per_px` from a known adult
 
 Most of the archive carries no calibration metadata. A known animal is the only
