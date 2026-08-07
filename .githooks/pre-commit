@@ -1,0 +1,55 @@
+#!/bin/sh
+# Refuse to commit a file large enough to bloat the repo permanently.
+#
+# WHY THIS EXISTS. A `git add -A tools/` swept in a generated 339 MB
+# consolidation plan - one row per file for 1.5 million files. It was caught
+# only by GitHub rejecting the push at its 100 MB limit, which is late: by
+# then the blob is in local history and removing it means rewriting commits.
+# A repo that students clone should not carry run artifacts at all.
+#
+# 20 MB, not 100. The point is to catch the CLASS early rather than to sit
+# just under someone else's ceiling, and nothing in this repo's source is
+# anywhere near 20 MB - the largest legitimate file is a census CSV at 2 MB.
+#
+# Override, when a large file genuinely belongs:
+#     WINK_ALLOW_LARGE=1 git commit ...
+# It is deliberately an environment variable rather than --no-verify, because
+# --no-verify disables EVERY check and this one should be waived on its own.
+
+LIMIT_MB=20
+LIMIT=$((LIMIT_MB * 1024 * 1024))
+
+if [ "$WINK_ALLOW_LARGE" = "1" ]; then
+    echo "pre-commit: size guard waived by WINK_ALLOW_LARGE=1"
+    exit 0
+fi
+
+too_big=""
+while IFS= read -r file; do
+    [ -f "$file" ] || continue
+    size=$(wc -c < "$file" 2>/dev/null | tr -d ' ')
+    [ -n "$size" ] || continue
+    if [ "$size" -gt "$LIMIT" ]; then
+        mb=$((size / 1048576))
+        too_big="${too_big}
+    ${mb} MB   ${file}"
+    fi
+done <<EOF
+$(git diff --cached --name-only --diff-filter=ACM)
+EOF
+
+if [ -n "$too_big" ]; then
+    echo "" >&2
+    echo "COMMIT REFUSED: staged file(s) over ${LIMIT_MB} MB" >&2
+    echo "$too_big" >&2
+    echo "" >&2
+    echo "Generated artifacts do not belong in the repository. The manifest" >&2
+    echo "that matters lives on the drive it describes, and is mirrored to L." >&2
+    echo "" >&2
+    echo "  - if it is generated: add its pattern to .gitignore" >&2
+    echo "  - if it truly belongs: WINK_ALLOW_LARGE=1 git commit ..." >&2
+    echo "" >&2
+    exit 1
+fi
+
+exit 0

@@ -627,11 +627,21 @@ def check_two_channel_design(*, signal_channel, marker_channel,
     the shear direction recorded because the apparent shape depends on it.
     """
     notes, warnings = [], []
+    # WITHHELD, not merely warned about. A warning can be read past, and this
+    # one decides whether the cells measured are a fair sample of the cells
+    # present - every between-cell comparison rests on it. `blocked` lists
+    # what is withheld and why; `bias_note` travels with EXPORTED results,
+    # not only the UI, because the caveat has to reach whoever reads the CSV
+    # rather than only whoever clicked the button.
+    blocked, bias_note = [], ""
+    POPULATION_MEASURES = ("resting", "soce", "responding_fraction",
+                           "between-cell comparison", "population statistics")
     if segmentation_channel is None:
         warnings.append(
             "No segmentation channel declared. Say which channel the cell "
             "outlines came from - it decides whether the cells measured are a "
             "fair sample of the cells present.")
+        blocked = list(POPULATION_MEASURES)
     elif segmentation_channel == signal_channel:
         warnings.append(
             f"Cells were segmented on the measurement channel "
@@ -644,6 +654,17 @@ def check_two_channel_design(*, signal_channel, marker_channel,
             f"copied to the L: drive with the other two. DIC needs gradient-"
             f"based or learned segmentation rather than a grey-level "
             f"threshold, which on shear-shaded cells returns edges not cells.")
+        # 1.3: DO NOT BLOCK, but the bias travels with every population
+        # output from here on. Blocking would refuse the only arrangement a
+        # single-channel acquisition can offer, which would stop the
+        # students working; stating the condition lets the result be read
+        # correctly instead.
+        bias_note = (
+            f"Cells were segmented on the probe channel ({signal_channel}), "
+            f"so dim-loading cells are under-sampled. Every between-cell "
+            f"comparison below is CONDITIONAL ON LOADING: a difference in "
+            f"these numbers may be a difference in how well the cells took up "
+            f"the dye. Within-cell time courses are unaffected.")
     elif segmentation_channel == marker_channel:
         warnings.append(
             f"Cells were segmented on the marker channel ({marker_channel}), "
@@ -665,7 +686,37 @@ def check_two_channel_design(*, signal_channel, marker_channel,
             "calcium' - without it a difference between marker-positive and "
             "marker-negative cells has two explanations and no way to choose.")
     return {"notes": notes, "warnings": warnings,
-            "control_conditions": scrambles}
+            "control_conditions": scrambles,
+            # SPEC 1.2: named so callers withhold rather than compute. An
+            # empty list means population statistics are releasable.
+            "blocked_measures": blocked,
+            "segmentation_declared": segmentation_channel is not None,
+            # SPEC 1.3: attached to exported results, not only shown.
+            "bias_note": bias_note}
+
+
+def single_channel_default(channels):
+    """The one channel to pre-fill when an acquisition has exactly one.
+
+    SPEC 1 addition. Requiring a person to type a channel name when there is
+    only one channel to choose is a gate that teaches people to click past
+    gates. So it is pre-filled and confirmed in one click - RECORDED AND
+    CONFIRMED ALWAYS, SILENT NEVER.
+
+    Returns (channel, why) or (None, why). A single channel necessarily means
+    the outlines came from the probe channel, so accepting this routes
+    straight to the 1.3 bias-note path: it is the honest arrangement for a
+    single-channel acquisition, not a good one.
+    """
+    names = [str(c) for c in channels if str(c).strip()]
+    if len(names) != 1:
+        return None, (f"{len(names)} channels present, so which one carries "
+                      f"the outlines has to be stated.")
+    return names[0], (
+        f"This acquisition has exactly one channel ({names[0]}), so the cell "
+        f"outlines can only have come from it. Confirm to declare it as the "
+        f"segmentation channel. Because that is also the probe channel, "
+        f"between-cell comparisons will carry the loading-bias note.")
 
 
 def classify_by_marker(marker_values, *, threshold=None, gap_frac=0.25):

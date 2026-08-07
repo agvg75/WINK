@@ -11,6 +11,9 @@
 !/staged/
 !/installer/
 !/.github/
+# Shared git hooks, enabled with: git config core.hooksPath .githooks
+# Must be tracked, or the size guard exists on one machine only.
+!/.githooks/
 
 # Within the kept folders, still drop caches and build junk (matches anywhere).
 __pycache__/
