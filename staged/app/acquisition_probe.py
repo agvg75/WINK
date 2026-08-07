@@ -618,6 +618,112 @@ def continues_beyond(worm, labels, stats, own_label, *, reach=220,
     }
 
 
+# The stage 1 length vocabulary. `body_length_method` takes exactly one of
+# these, so a consumer can tell how a length was obtained without reading the
+# provenance.
+LENGTH_METHOD_PERCENTILE = "percentile_persistent"
+LENGTH_METHOD_COHERENT = "coherent_motion"
+LENGTH_METHOD_FAILED = "failed"
+# A percentile point is "flat" below this much change per point. Not a tuned
+# number - it is the resolution at which a shoulder is worth calling one.
+SHOULDER_FLAT_PCT_PER_POINT = 0.35
+SHOULDER_MIN_WIDTH = 6           # percentile points
+SHOULDER_SEARCH = (70, 99)
+
+
+def persistent_length(lengths, *, flat=SHOULDER_FLAT_PCT_PER_POINT,
+                      min_width=SHOULDER_MIN_WIDTH, search=SHOULDER_SEARCH,
+                      min_frames=8):
+    """Body length from a distribution of per-frame traced lengths.
+
+    THE PERCENTILE IS DELIBERATELY NOT PINNED, and this is the whole point of
+    the function. A coiled animal traces short and a stretched one long, so a
+    single frame samples a posture rather than an animal. Taking a high
+    percentile of many postures is meant to recover the animal - but only if
+    the distribution actually settles.
+
+    **The distribution chooses the percentile, and the choice is falsifiable:**
+
+    * If there is a **shoulder** - a run of percentile points across which the
+      value stops changing much - take from inside it. The value is then
+      insensitive to exactly where in the shoulder it was taken, which is what
+      makes it a measurement rather than a selection.
+    * If the curve **climbs steadily to the maximum with no shoulder**, that is
+      evidence something is still varying with posture. Picking a percentile
+      there papers over the dependence instead of resolving it, so this
+      returns `defensible=False` and the caller must not set a scale from it.
+
+    Written this way so that "95 because it sounds reasonable" is visibly not
+    what happened. Measured on the frozen development set, three of five
+    recordings had no shoulder, so this refuses more often than not on that
+    data - which is the correct behaviour there, not a failure of the method.
+    """
+    values = np.asarray([v for v in np.asarray(lengths, dtype=float)
+                         if np.isfinite(v) and v > 0])
+    if values.size < min_frames:
+        return {
+            "body_length_px": None,
+            "body_length_method": LENGTH_METHOD_FAILED,
+            "defensible": False,
+            "n_frames": int(values.size),
+            "note": (f"only {values.size} measurable frames, below the {min_frames} "
+                     f"needed for a distribution to mean anything"),
+        }
+    points = np.arange(search[0], search[1] + 1)
+    curve = np.percentile(values, points)
+    # Percent change per percentile point, which is scale free and so
+    # comparable between recordings of different magnification.
+    slope = np.diff(curve) / np.clip(curve[:-1], 1e-9, None) * 100.0
+    flat_mask = slope < flat
+
+    best_start = best_len = None
+    run_start = None
+    for i, is_flat in enumerate(list(flat_mask) + [False]):
+        if is_flat and run_start is None:
+            run_start = i
+        elif not is_flat and run_start is not None:
+            if best_len is None or (i - run_start) > best_len:
+                best_start, best_len = run_start, i - run_start
+            run_start = None
+
+    if best_len is None or best_len < min_width:
+        return {
+            "body_length_px": round(float(np.percentile(values, 90)), 1),
+            "body_length_method": LENGTH_METHOD_PERCENTILE,
+            "defensible": False,
+            "shoulder_found": False,
+            "n_frames": int(values.size),
+            "spread_iqr_pct": round(float(
+                (np.percentile(values, 75) - np.percentile(values, 25))
+                / np.median(values) * 100), 1),
+            "max_flat_run_points": int(best_len or 0),
+            "note": ("no shoulder: the distribution climbs steadily, so a "
+                     "percentile choice would paper over posture dependence "
+                     "rather than resolve it. The p90 above is reported for "
+                     "inspection ONLY and must not be used to set a scale."),
+        }
+
+    lo = int(points[best_start])
+    hi = int(points[min(best_start + best_len, len(points) - 1)])
+    take = (lo + hi) / 2.0
+    return {
+        "body_length_px": round(float(np.percentile(values, take)), 1),
+        "body_length_method": LENGTH_METHOD_PERCENTILE,
+        "defensible": True,
+        "shoulder_found": True,
+        "shoulder_percentiles": [lo, hi],
+        "percentile_used": round(take, 1),
+        "n_frames": int(values.size),
+        "spread_iqr_pct": round(float(
+            (np.percentile(values, 75) - np.percentile(values, 25))
+            / np.median(values) * 100), 1),
+        "note": (f"taken from inside a shoulder spanning percentiles {lo} to "
+                 f"{hi}, where the value changes by less than {flat}% per "
+                 f"percentile point, so it does not depend on exactly where "
+                 f"in that range it was read"),
+    }
+
+
 def measured_bit_depth(frames):
     """Effective bit depth from the QUANTISATION STEP, not from the container.
 
@@ -776,7 +882,11 @@ def probe(source, *, sample_frames=40, declared_fps=None, um_per_px=None,
                                                cv2.arcLength(best, True))
     out["body_length_px_texture"] = (round(texture_len, 1) if texture_len
                                      else None)
-    out["body_length_method"] = "spatial_illumination"
+    # NOT the stage 1 vocabulary. This probe's length is a single-pass median
+    # over sampled frames, which is a different measurement from stage 1's
+    # persistent percentile - so it is labelled separately rather than
+    # borrowing a name that would imply it went through persistent_length().
+    out["body_length_source"] = "spatial_illumination_median"
     if body_px and texture_len:
         ratio = max(body_px, texture_len) / max(min(body_px, texture_len), 1e-6)
         out["body_length_methods_agree"] = ratio <= 1.35

@@ -175,7 +175,7 @@ def main():
                    f"({probe['body_length_px']:.0f} px illumination, "
                    f"{probe['body_length_px_texture']:.0f} px texture)",
                    f"length reported from the "
-                   f"{probe['body_length_method']} rule")
+                   f"{probe['body_length_source']} rule")
 
     # ---- per-measurement verdicts ---------------------------------------
     # The check works in pixels per animal; when nothing is calibrated, feed

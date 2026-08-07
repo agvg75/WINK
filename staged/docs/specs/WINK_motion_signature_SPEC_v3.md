@@ -222,6 +222,67 @@ um_per_px               derived, STAGE-DEPENDENT - see 5.5
 `body_length_px` is the anchor for everything downstream. It carries
 uncertainty, and that uncertainty propagates into stage 2.
 
+### 5.2.1 Percentile and persistence — applied to traced length, not extent
+
+> **RECONSTRUCTION NOTE.** The original 5.2.1 is not available; it was in the
+> revision 3 that never reached this machine, and nothing in the reconstruction
+> describes it. What follows is written from Andres's account of the method
+> plus what was measured on 6 August. **Check it against the original.**
+
+**THIS IS A CHANGE OF SUBJECT, AND IT MUST STAY VISIBLE.** The original section
+described percentile-and-persistence over the **extent trace** — the
+frame-by-frame bounding extent used to detect occlusion. What is applied here
+is the same logic over **traced body length after tip extension** (5.4.0,
+4.4 of the evening handoff).
+
+Traced length is a better measurement than bounding extent: extent collapses
+when the animal curls, whereas a traced length follows the body. So the change
+is an improvement, not a compromise. But it is still a change, the original
+section was not written about this quantity, and **absorbing it silently would
+leave the spec describing one measurement while the code performs another.**
+
+#### Why length needs this at all
+
+Length has the same exposure to posture that a directional estimate has
+(5.4.3), by a different route: **a coiled animal traces short and a stretched
+one long.** One frame samples a posture, not an animal. So the length of the
+animal is estimated from a distribution over many frames, sampled **across**
+the recording rather than from a contiguous block, since consecutive frames
+share a posture too.
+
+#### The percentile is deliberately NOT pinned
+
+**Take it from the shape of the distribution, and state which shape was found.**
+
+- **If there is a shoulder** — a run of percentile points across which the
+  value stops changing much — **take from inside it.** The value is then
+  insensitive to exactly where in the shoulder it was read, and that
+  insensitivity is what makes it a measurement rather than a selection.
+- **If the distribution climbs steadily to the maximum with no shoulder**, that
+  is **evidence that something is still varying with posture.** Choosing a
+  percentile there papers over the dependence instead of resolving it. Report
+  the shape, mark the value **not defensible**, and **do not set a scale from
+  it.**
+
+Written this way so the choice is **falsifiable**. The alternative is that
+someone picks the 95th percentile because it sounds reasonable, and a number
+chosen for sounding reasonable cannot be argued with afterwards.
+
+Implemented as `acquisition_probe.persistent_length()`, which returns
+`shoulder_found`, the shoulder's percentile span, the percentile actually used,
+and a `defensible` flag. `body_length_method` takes exactly one of
+`percentile_persistent`, `coherent_motion` (the 5.3 fallback), or `failed`.
+
+#### What this returned on the development set
+
+Three of five measurable recordings had **no shoulder** — p90-to-p95 slopes of
+0.63, 1.59 and 4.51 percent per percentile point against 0.26 and 0.35 for the
+two that flattened. Within-recording spread ran 21% to 46% of the median.
+
+So on this data the method **refuses more often than it answers**, and that is
+the correct behaviour rather than a failure of the method. It is also why 6.1
+remains unset: see 5.5.
+
 ### 5.3 The stationary animal problem
 
 A stationary animal produces no undulation, and a stationary animal is exactly
