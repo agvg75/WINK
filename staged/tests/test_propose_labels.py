@@ -182,6 +182,30 @@ check("the word 'RNAi' is not what the context test uses",
       "rnai" not in pl.VECTOR_RE.pattern.lower(),
       "it appears in 5 of 551 paths; l4440 appears in 164")
 
+# --- an isoform suffix is not one letter -------------------------------------
+# Three forms, and an early version read all of them as a single isoform.
+# Reading dys-1AH as one isoform named AH merges two arms under one label.
+letters, note = pl.describe_isoforms("dys-1", "E")
+check("a single letter is one isoform", letters == ["E"] and "ISOFORM E" in note)
+letters, note = pl.describe_isoforms("dys-1", "AH")
+check("two letters are TWO isoforms, not one called AH",
+      letters == ["A", "H"] and "2 SEPARATE" in note)
+letters, note = pl.describe_isoforms("dys-1", "A-J")
+check("a hyphenated span is a RANGE, every isoform in it",
+      letters == list("ABCDEFGHIJ") and "RANGE" in note,
+      f"{len(letters)} isoforms")
+check("no suffix means no isoform claim",
+      pl.describe_isoforms("dys-1", "") == ([], ""))
+
+# L and S mean long and short - but only for the gene where that is the
+# convention. A gene running a letter series can have a real isoform L.
+_, pezo = pl.describe_isoforms("pezo-1", "L")
+_, dys = pl.describe_isoforms("dys-1", "L")
+check("pezo-1L is the LONG isoform", "long ISOFORM" in pezo,
+      "corroborated by ReagentHub: AVG11 is Ppezo-1L::GFP")
+check("...while dys-1L is isoform L, not 'long'", "ISOFORM L" in dys,
+      "the convention is keyed by gene, not applied to every trailing L")
+
 # --- worm numbers are recorded, not discarded --------------------------------
 notes = [c for c in with_vector if c["field"] == "note"]
 check("w3 is recorded as a worm number",

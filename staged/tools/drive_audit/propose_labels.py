@@ -609,13 +609,55 @@ VECTOR_RE = re.compile(r"^l4+4*0$", re.I)          # l4440, and the l440/l44440 
 # rather than silently folded into the gene - which matters here, because
 # dystrophin isoforms are their own research line (DMD_ISOFORM: Dp427, Dp71,
 # Dp116, Dp140).
-GENE_RE = re.compile(r"^([a-z]{3,4}-\d{1,3})([a-z])?$", re.I)
-# L and S are not arbitrary isoform letters - they name the LONG and SHORT
-# isoforms. Corroborated by ReagentHub without being told: AVG10 is
-# Ppezo-1S::GFP and AVG11 is Ppezo-1L::GFP, two strains built to separate
-# them. Reported by meaning rather than by letter, since "isoform L" says
-# nothing to a reader and "long isoform" says the whole thing.
-ISOFORM_NAMES = {"L": "long", "S": "short"}
+# THE SUFFIX IS AN ISOFORM SPEC AND IT IS NOT ONE LETTER. Three forms, and an
+# earlier version of this read every one of them as a single isoform:
+#
+#   dys-1E     isoform E
+#   dys-1AH    isoforms A and H       - TWO isoforms, not one called "AH"
+#   dys-1A-J   isoforms A through J   - a RANGE, so every isoform in it
+#
+# Reading dys-1AH as one isoform named AH would silently merge two arms of an
+# experiment under one label.
+GENE_RE = re.compile(r"^([a-z]{3,4}-\d{1,3})([a-z](?:-?[a-z])*)?$", re.I)
+# L and S name the LONG and SHORT isoforms - but only where that is the
+# convention, and pezo-1 is the confirmed case. A gene running a letter series
+# could have a genuine isoform L, so this is keyed BY GENE rather than applied
+# to every trailing L on the drive.
+#
+# Corroborated by ReagentHub without being asked: AVG10 is Ppezo-1S::GFP and
+# AVG11 is Ppezo-1L::GFP, two strains built to separate them.
+ISOFORM_NAMES = {"pezo-1": {"L": "long", "S": "short"}}
+
+
+def describe_isoforms(gene, suffix):
+    """Which isoforms a suffix names, and how to say it.
+
+    Returns (letters, note). An empty suffix gives ([], "").
+    """
+    if not suffix:
+        return [], ""
+    named = ISOFORM_NAMES.get(gene.lower(), {})
+    upper = suffix.upper()
+    if "-" in upper:
+        start, _, end = upper.partition("-")
+        if len(start) == 1 and len(end) == 1 and start <= end:
+            letters = [chr(c) for c in range(ord(start), ord(end) + 1)]
+            return letters, (
+                f"the suffix {upper} is a RANGE - isoforms {start} through "
+                f"{end}, {len(letters)} of them, not one isoform")
+        letters = [c for c in upper if c.isalpha()]
+    else:
+        letters = list(upper)
+    if len(letters) == 1:
+        letter = letters[0]
+        if letter in named:
+            return letters, (f"the suffix {letter} means the {named[letter]} "
+                             f"ISOFORM of {gene}, not a separate allele")
+        return letters, (f"the suffix {letter} means ISOFORM {letter} of "
+                         f"{gene}, not a separate allele")
+    spelled = ", ".join(letters[:-1]) + f" and {letters[-1]}"
+    return letters, (f"the suffix {upper} names {len(letters)} SEPARATE "
+                     f"isoforms of {gene} - {spelled} - not one isoform")
 WORM_NUMBER_RE = re.compile(r"^w\d{1,2}$", re.I)
 # UNTRANSFORMED SISTERS are the control for an extrachromosomal array: worms
 # from the same cohort that did not take up the array. A third control type
@@ -705,19 +747,11 @@ def propose_conditions(row, segments, rnai_context):
             elif GENE_RE.match(word) and not LAB_STRAIN_RE.match(word):
                 seen.add(key)
                 match = GENE_RE.match(word)
-                gene = match.group(1).lower()
-                isoform = (match.group(2) or "").upper()
-                if isoform:
-                    gene = f"{gene}{isoform}"
-                    named = ISOFORM_NAMES.get(isoform)
-                    isoform_note = (
-                        f"; the trailing {isoform} means the {named} ISOFORM "
-                        f"of {match.group(1).lower()}, not a separate allele"
-                        if named else
-                        f"; the trailing {isoform} means ISOFORM {isoform} of "
-                        f"{match.group(1).lower()}, not a separate allele")
-                else:
-                    isoform_note = ""
+                base = match.group(1).lower()
+                suffix = (match.group(2) or "")
+                letters, note = describe_isoforms(base, suffix)
+                gene = f"{base}{suffix.upper()}" if suffix else base
+                isoform_note = f"; {note}" if note else ""
                 if rnai_context:
                     out.append(_proposal(
                         row, "condition", f"{gene} RNAi", "rnai_gene", word,
