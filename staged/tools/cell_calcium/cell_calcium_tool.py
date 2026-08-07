@@ -170,6 +170,12 @@ class App(CockpitApp):
         single frame. A tool whose whole job is to say what the data supports
         must not take the operator's word for what the data is.
         """
+        # ONE ID PER USER CLICK. A report that this check 'fired three
+        # times' could not be settled after the fact - three clicks and
+        # one click doing the work thrice look identical in the log.
+        # Three ids means three clicks; one id on three lines is a bug.
+        from process_ui import run_id_for
+        run = run_id_for()
         probe = self.v["probe"].get()
         source = self.v["folder"].get()
         described = None
@@ -213,9 +219,26 @@ class App(CockpitApp):
                     lines.append(
                         f"  {s['name'][:28]:28s} {s['n_t']:6d} {fps:>6s} "
                         f"{dur:>6s} {size:>10s} {s['n_channels']:3d}")
+            elif not described.get("found_any", True):
+                # A COUNT OF ZERO CANNOT CARRY A PER-ITEM FIGURE. This used to
+                # read "0 image(s), 1 frame(s) each", because the frame count
+                # defaults to 1 and nothing said the scan found nothing. Say
+                # what was searched for, so the answer is actionable rather
+                # than merely negative.
+                lines.append(f"  NO IMAGES FOUND in this folder.")
+                lines.append(f"  Looked for: {described.get('looked_for', '?')}"
+                             f"  (searched sub-folders too)")
+                lines.append(f"  If the images are there, their extension is "
+                             f"not one of these - tell Andres what it is "
+                             f"rather than renaming them.")
             else:
                 lines.append(f"  {described['n_series']} image(s), "
                              f"{described['max_frames']} frame(s) each")
+                if not described.get("suffix_matched", True):
+                    lines.append(
+                        f"  (none matched the signal suffix "
+                        f"'{self.v['signal_suffix'].get()}', so every image "
+                        f"was used)")
             lines.append("")
         lines.append(f"{cap['n_frames']} frame(s), {cap['bit_depth']}-bit\n")
         ok = [k for k, m in cap["measurements"].items() if m["supported"]]
@@ -235,7 +258,8 @@ class App(CockpitApp):
             lines.append(f"  {n}\n")
         self._say("\n".join(lines))
         self.log("Capability checked",
-                 f"{len(ok)} supported, {len(no)} not", status="info")
+                 f"{len(ok)} supported, {len(no)} not", status="info",
+                 run_id=run)
         self.set_status(f"{len(ok)} of {len(ok) + len(no)} measurements "
                         f"supported by this recording.")
 

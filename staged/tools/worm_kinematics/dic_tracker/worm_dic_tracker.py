@@ -343,6 +343,22 @@ class DICWormTracker:
                 # A user-traced outline is an identity calibration, not merely
                 # a post-hoc QC hint. Reject fragments and large background
                 # structures before either can become the next-frame hint.
+                # UNDERIVED CONSTANTS, RECORDED AS SUCH AND NOT TUNED HERE.
+                # 0.55 and 1.60 have no derivation anywhere in this repo. They
+                # are the sole reason the AVG6 test returned ZERO detections
+                # across 234 frames rather than a scatter: the legacy
+                # foreground rule delivered a hollow outline of 19,450 px
+                # against a hand-drawn reference of about 36,000, a ratio of
+                # 0.539, which misses the floor by one percentage point on
+                # EVERY frame.
+                #
+                # Deliberately left alone. Moving the band to make that test
+                # pass would tune a threshold to hide a segmentation defect,
+                # and the defect is being fixed at its source instead. A rule
+                # that rejects at 53.9% of a hand-drawn reference is brittle
+                # whichever mask feeds it, and the band needs a derivation of
+                # its own - how much a correct mask may legitimately vary
+                # frame to frame - before anyone touches the numbers.
                 if area < 0.55*self.area_ref or area > 1.60*self.area_ref:
                     continue
             if self.strict_target_identity and self.area_ref:

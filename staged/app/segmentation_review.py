@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 import json
+import sys
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -60,7 +61,8 @@ class FrameRangeRecipe:
         self.frame_end = int(self.frame_end)
         if self.frame_start < 0 or self.frame_end < self.frame_start:
             raise ValueError("Invalid segmentation frame range.")
-        if self.mode not in {"global", "local_adaptive", "space_time"}:
+        if self.mode not in {"global", "local_adaptive", "space_time",
+                             "fine_texture"}:
             raise ValueError("Unknown segmentation mode in frame range.")
         if self.feature not in {"gray", "local_contrast", "difference"}:
             raise ValueError("Unknown segmentation feature in frame range.")
@@ -100,7 +102,8 @@ class SegmentationConfig:
     source: str = ""
 
     def validate(self):
-        if self.mode not in {"global", "local_adaptive", "space_time"}:
+        if self.mode not in {"global", "local_adaptive", "space_time",
+                             "fine_texture"}:
             raise ValueError("Unknown segmentation mode.")
         if self.polarity not in {"bright", "dark"}:
             raise ValueError("Polarity must be bright or dark.")
@@ -227,6 +230,52 @@ def effective_threshold_map(shape, frame_index, config, base_threshold=None):
     return numerator / denominator
 
 
+def require_cv2():
+    """PROBE BY USE, not by import, and fail loudly.
+
+    cv2 is present in the lab runtime and absent from the bundled one. An
+    import that merely succeeds proves less than a call: the failure this
+    guards against is a tool that runs in both environments and QUIETLY
+    PRODUCES DIFFERENT MEASURED VALUES, which is far worse than one that
+    refuses to start. So this exercises a real operation and reports the
+    interpreter, because "which Python am I in" is the question that follows.
+    """
+    try:
+        probe = np.zeros((8, 8), np.uint8)
+        cv2.GaussianBlur(probe, (0, 0), 1.0)
+        cv2.connectedComponentsWithStats(probe)
+    except Exception as exc:                                 # noqa: BLE001
+        raise RuntimeError(
+            f"OpenCV (cv2) is required for fine-texture segmentation and is "
+            f"not usable in this Python environment.\n\n"
+            f"  interpreter: {sys.executable}\n"
+            f"  error: {type(exc).__name__}: {exc}\n\n"
+            f"Start the tool from Launch_Lab_Hub.bat so it runs in the lab "
+            f"environment. Do NOT fall back to another segmentation rule - "
+            f"that would return different measured values from the same "
+            f"recording depending on which Python opened it."
+        ) from exc
+
+
+def texture_mask(frame):
+    """The validated fine-texture foreground, adapted to this module's contract.
+
+    `acquisition_probe.texture_foreground` returns (mask, normalised_image)
+    or None; everything here returns a bare boolean mask. The adapter exists
+    so the rule can be reached through the ordinary segmentation_config route
+    rather than by editing the tracker's fallback branch.
+
+    None means "no object found", which becomes an empty mask - honest, and
+    distinguishable downstream from a mask that found the wrong thing.
+    """
+    require_cv2()
+    import acquisition_probe
+    result = acquisition_probe.texture_foreground(frame)
+    if result is None:
+        return np.zeros(np.asarray(frame).shape[:2], dtype=bool)
+    return np.asarray(result[0], dtype=bool)
+
+
 def segment_frame(frame, frame_index, config, reference=None):
     """Return a mask only. Raw/corrected intensities are intentionally absent."""
     config.validate()
@@ -235,6 +284,11 @@ def segment_frame(frame, frame_index, config, reference=None):
             "Segmentation map has not completed preview, accept, and lock.")
     recipe = config.recipe_for_frame(frame_index)
     mode = recipe.mode if recipe else config.mode
+    if mode == "fine_texture":
+        # Bypasses thresholding entirely: the rule does its own band-pass,
+        # percentile and morphology, and imposing this module's cleanup on
+        # top would change a validated result.
+        return texture_mask(frame)
     feature_name = recipe.feature if recipe else config.feature
     polarity = recipe.polarity if recipe else config.polarity
     feature = _feature(frame, feature_name, reference)

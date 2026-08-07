@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import datetime as _dt
 from dataclasses import dataclass, field
 from time import perf_counter
 import textwrap
@@ -297,6 +298,18 @@ def standardize_matplotlib_window(fig, title=None, width=1120, height=820, x=80,
         pass
 
 
+def run_id_for(counter=[0]):
+    """A short id identifying ONE user-initiated invocation.
+
+    Mint it once at the top of a handler and pass it to every log line
+    that handler writes. Then a triple in the hood is self-diagnosing:
+    three ids means the user clicked three times, one id repeated means
+    the handler ran its work three times and that is the bug.
+    """
+    counter[0] += 1
+    return f"r{counter[0]:03d}"
+
+
 @dataclass
 class ProcessLog:
     """Tiny process/timer model that can back a sidebar or export."""
@@ -320,9 +333,19 @@ class ProcessLog:
         finally:
             row["elapsed_s"] = round(perf_counter() - start, 4)
 
-    def add(self, name, detail="", status="info", elapsed_s=None):
+    def add(self, name, detail="", status="info", elapsed_s=None,
+            run_id=None):
+        # A CLOCK TIME AND A RUN ID, SO A REPEAT DIAGNOSES ITSELF. A report
+        # of "the capability check fired three times" could not be settled
+        # afterwards: nothing distinguished three clicks from one click doing
+        # the work three times, and by the time it was investigated the
+        # click count was unrecoverable. With these, three DIFFERENT ids are
+        # three invocations - ordinary - and three lines sharing ONE id are a
+        # real defect. See run_id_for() for how callers mint one.
         self.steps.append({"step": str(name), "detail": str(detail or ""),
-                           "status": str(status), "elapsed_s": elapsed_s})
+                           "status": str(status), "elapsed_s": elapsed_s,
+                           "at": _dt.datetime.now().strftime("%H:%M:%S"),
+                           "run_id": run_id})
 
     def as_text(self, max_rows=12):
         visible = self.steps[-max_rows:]
@@ -332,7 +355,10 @@ class ProcessLog:
             detail = row.get("detail", "")
             if detail:
                 detail = " - " + " ".join(textwrap.wrap(str(detail), width=58))
-            lines.append(f"* {row.get('status','info')}: {row.get('step','')}{timer}{detail}")
+            stamp = row.get("at") or ""
+            marker = f" [{row['run_id']}]" if row.get("run_id") else ""
+            lines.append(f"* {stamp} {row.get('status','info')}"
+                         f": {row.get('step','')}{marker}{timer}{detail}")
         return "\n".join(lines)
 
 
@@ -979,8 +1005,9 @@ class CockpitApp(tk.Tk):
         except Exception:
             pass
 
-    def log(self, step, detail="", status="info"):
-        self.process_log.add(step, detail, status=status)
+    def log(self, step, detail="", status="info", run_id=None):
+        self.process_log.add(step, detail, status=status,
+                             run_id=run_id)
         self.refresh_hood()
 
     def refresh_hood(self):

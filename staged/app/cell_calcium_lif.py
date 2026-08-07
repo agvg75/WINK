@@ -173,7 +173,28 @@ def read_series(path, index, channel=0):
                      for f in img.get_iter_t(c=channel, z=0)])
 
 
-def describe_source(path, *, signal_suffix="_ch00", pattern="*.tif"):
+# EVERY EXTENSION A TIFF ACTUALLY ARRIVES AS. The scan used the glob
+# "*.tif", which does NOT match ".tiff" - fnmatch requires the pattern to
+# reach the end of the name. A real folder of 3,676 Basler ".tiff" frames
+# therefore read as empty, and the viewer reported "0 image(s), 1 frame(s)
+# each".
+#
+# MATCHED BY EXTENSION RATHER THAN BY GLOB, and case-folded explicitly.
+# Path.glob is case-insensitive on Windows and case-SENSITIVE on macOS and
+# Linux, so a folder of ".TIF" files would work here and silently fail on the
+# lab's MacBook. Relying on the platform to fold case is a portability trap
+# that would only surface on someone else's machine.
+IMAGE_EXTENSIONS = (".tif", ".tiff")
+
+
+def image_files(folder, extensions=IMAGE_EXTENSIONS):
+    """Every image file under a folder, whatever case the extension is in."""
+    wanted = {e.lower() for e in extensions}
+    return sorted(item for item in Path(folder).rglob("*")
+                  if item.is_file() and item.suffix.lower() in wanted)
+
+
+def describe_source(path, *, signal_suffix="_ch00", pattern=None):
     """What is this source, and what shape is its data?
 
     Accepts a .lif or a folder of TIFFs and answers the same questions of both,
@@ -191,8 +212,9 @@ def describe_source(path, *, signal_suffix="_ch00", pattern="*.tif"):
         }
     if p.is_dir():
         import tifffile
-        files = sorted(p.rglob(pattern))
-        sig = [f for f in files if signal_suffix in f.name] or files
+        files = (sorted(p.rglob(pattern)) if pattern else image_files(p))
+        matched_suffix = [f for f in files if signal_suffix in f.name]
+        sig = matched_suffix or files
         n_frames, depth = 1, 8
         if sig:
             with tifffile.TiffFile(sig[0]) as tf:
@@ -201,8 +223,18 @@ def describe_source(path, *, signal_suffix="_ch00", pattern="*.tif"):
         return {
             "kind": "folder", "path": str(p), "series": [],
             "n_files": len(files), "n_series": len(sig),
+            # WHETHER ANYTHING WAS FOUND AT ALL, kept separate from the
+            # counts. "0 images, 1 frame each" was possible because the frame
+            # count defaults to 1 and nothing recorded that the scan came back
+            # empty. A count of zero and a per-item figure cannot both be
+            # meaningful, and the report must not print them together.
+            "found_any": bool(files),
+            "suffix_matched": bool(matched_suffix),
+            "looked_for": (pattern if pattern
+                           else "/".join(IMAGE_EXTENSIONS)),
             "n_movies": 1 if n_frames > 1 else 0,
-            "max_frames": n_frames, "bit_depth": depth,
+            "max_frames": n_frames if sig else 0,
+            "bit_depth": depth,
         }
     raise cc.CalciumError(
         f"{path} is neither a .lif file nor a folder.")

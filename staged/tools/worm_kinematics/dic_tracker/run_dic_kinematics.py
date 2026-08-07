@@ -1019,6 +1019,13 @@ def main(argv=None):
         "--frame-end", type=int, default=None,
         help="Last frame to analyse, 1-based inclusive.")
     parser.add_argument(
+        "--foreground", choices=("legacy", "fine-texture"), default="legacy",
+        help="Which rule finds the animal. 'legacy' is the tracker's own "
+             "local-standard-deviation measure, unchanged. 'fine-texture' is "
+             "the validated rule from motion signature spec 5.4.0, reached "
+             "through the segmentation-config route. Default stays legacy "
+             "until the validation set has been run - see the spec.")
+    parser.add_argument(
         "--ignore-border-objects", action="store_true",
         help="Default the 'ignore large objects touching the frame edge' option "
              "on (used by the mechanosensation module, where a probe/pick "
@@ -1146,6 +1153,28 @@ def main(argv=None):
 
     exclusion_masks = _guidance_exclusion(G, plt, messagebox)
     segmentation_config = find_accepted_config(path, "track_one_worm")
+    if args.foreground == "fine-texture" and segmentation_config is None:
+        # THE VALIDATED RULE, REACHED THROUGH THE ORDINARY CONFIG ROUTE.
+        # _mask's fallback branch is deliberately untouched: this arrives as a
+        # segmentation_config exactly as a reviewed map would, so there is one
+        # path into the tracker rather than two.
+        #
+        # Measured on AVG6 frame 4499, where the tracker's own local_std(9)
+        # rule returns 1,389 blobs with the largest at 19,450 px against a
+        # hand-outlined reference of about 36,000: the ratio is 0.539, the
+        # acceptance band rejects below 0.55, and every frame fails by one
+        # percentage point. texture_foreground returns ONE blob of 36,115 px
+        # on the same frame, and one blob of 10,778 px on frame 8549 where
+        # the animal is immersed in lawn.
+        from segmentation_review import SegmentationConfig, require_cv2
+        require_cv2()
+        segmentation_config = SegmentationConfig(
+            mode="fine_texture", source=str(path),
+            target_tools=["track_one_worm"],
+            accepted=True, locked=True, blinding_acknowledged=True)
+        segmentation_config.validate()
+        note = ((note + "; ") if note else "") + \
+            "foreground: validated fine-texture rule"
     tr = worm_dic_tracker.DICWormTracker(
         G, fps=fps, um_per_px=um_per_px, worm_id=worm_id,
         assay_mode=assay_mode,

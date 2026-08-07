@@ -81,24 +81,38 @@ def long_path(path):
     return "\\\\?\\" + path
 
 
-def walk_keys(root, label, *, want_paths=False, cap=3600.0):
-    """Every file under root as a key, optionally with its path."""
+def walk_keys(root, label, *, want_paths=False, cap=3600.0, ignore=()):
+    """Every file under root as a key, optionally with its path.
+
+    `ignore` holds directories to skip entirely. THE DESTINATION MUST BE ONE
+    OF THEM. On a resume, files already copied are sitting on the target
+    drive, and counting them makes their sources look "already held
+    elsewhere" - so they drop out of the job list and NEVER APPEAR IN THE
+    MANIFEST. The copy would be correct and the record would be short by
+    however many files the previous run managed, which is the provenance gap
+    this whole consolidation exists to close.
+    """
     started = time.time()
     keys = set()
     paths = []
     files = 0
     stack = [root]
+    ignored = {os.path.normcase(os.path.abspath(p)) for p in ignore}
     while stack:
         if time.time() - started > cap:
             print(f"  [{label}] STOPPED AT CAP", flush=True)
             break
         current = stack.pop()
+        if os.path.normcase(os.path.abspath(current)) in ignored:
+            continue
         try:
             with os.scandir(current) as entries:
                 for entry in entries:
                     try:
                         if entry.is_dir(follow_symlinks=False):
-                            if entry.name not in SKIP_NAMES:
+                            if entry.name not in SKIP_NAMES and \
+                                    os.path.normcase(os.path.abspath(
+                                        entry.path)) not in ignored:
                                 stack.append(entry.path)
                             continue
                         size = entry.stat(follow_symlinks=False).st_size
@@ -197,42 +211,9 @@ def main():
     print("A location missing from --others would make its files look "
           "unique.\n")
 
-    elsewhere = set()
-    for spec in args.others:
-        label, path = split(spec)
-        if not os.path.exists(path):
-            sys.exit(f"REFUSING TO RUN: --others location {label} ({path}) "
-                     f"is not reachable. Its files would wrongly read as "
-                     f"absent, and material already held there would be "
-                     f"copied as if it were unique.")
-        keys, _ = walk_keys(path, label, cap=args.max_seconds)
-        elsewhere |= keys
-
-    sources = []
-    for spec in args.sources:
-        label, path = split(spec)
-        if not os.path.exists(path):
-            sys.exit(f"REFUSING TO RUN: source {label} ({path}) is not "
-                     f"reachable.")
-        sources.append((label, path))
-
-    # A source drive is also "elsewhere" for the OTHER source drives, so each
-    # is compared against every location except itself.
-    source_keys = {}
-    source_paths = {}
-    for label, path in sources:
-        keys, paths = walk_keys(path, label, want_paths=True,
-                                cap=args.max_seconds)
-        source_keys[label] = keys
-        source_paths[label] = paths
-
-    # RESUME INTO THE EXISTING RUN, NOT BESIDE IT. The first version minted a
-    # fresh timestamp every time and created a new folder, so the per-file
-    # "already present" check could never see the previous run's work - it was
-    # looking in a directory that had just been created empty. Restarting
-    # after an interruption would have silently recopied everything into a
-    # second folder: hours wasted, and two half-copies on the drive with
-    # nothing saying which was which.
+    # DECIDED BEFORE ANYTHING IS WALKED. The destination has to be known
+    # in advance so it can be excluded from the comparison - see
+    # walk_keys' `ignore`.
     existing = sorted(
         name for name in os.listdir(args.target)
         if name.startswith("single_copy_")
@@ -250,6 +231,54 @@ def main():
     else:
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         target_root = os.path.join(args.target, f"single_copy_{stamp}")
+    consolidation_dirs = [os.path.join(args.target, name)
+                          for name in (os.listdir(args.target)
+                                       if os.path.isdir(args.target)
+                                       else [])
+                          if name.startswith('single_copy_')]
+    if consolidation_dirs:
+        print(f"excluding {len(consolidation_dirs)} consolidation "
+              f"folder(s) from the comparison - they are this tool's own"
+              f" output, not an independent copy")
+
+    elsewhere = set()
+    for spec in args.others:
+        label, path = split(spec)
+        if not os.path.exists(path):
+            sys.exit(f"REFUSING TO RUN: --others location {label} ({path}) "
+                     f"is not reachable. Its files would wrongly read as "
+                     f"absent, and material already held there would be "
+                     f"copied as if it were unique.")
+        keys, _ = walk_keys(path, label, cap=args.max_seconds,
+                           ignore=consolidation_dirs)
+        elsewhere |= keys
+
+    sources = []
+    for spec in args.sources:
+        label, path = split(spec)
+        if not os.path.exists(path):
+            sys.exit(f"REFUSING TO RUN: source {label} ({path}) is not "
+                     f"reachable.")
+        sources.append((label, path))
+
+    # A source drive is also "elsewhere" for the OTHER source drives, so each
+    # is compared against every location except itself.
+    source_keys = {}
+    source_paths = {}
+    for label, path in sources:
+        keys, paths = walk_keys(path, label, want_paths=True,
+                                cap=args.max_seconds,
+                                ignore=consolidation_dirs)
+        source_keys[label] = keys
+        source_paths[label] = paths
+
+    # RESUME INTO THE EXISTING RUN, NOT BESIDE IT. The first version minted a
+    # fresh timestamp every time and created a new folder, so the per-file
+    # "already present" check could never see the previous run's work - it was
+    # looking in a directory that had just been created empty. Restarting
+    # after an interruption would have silently recopied everything into a
+    # second folder: hours wasted, and two half-copies on the drive with
+    # nothing saying which was which.
 
     jobs = []
     for label, path in sources:
