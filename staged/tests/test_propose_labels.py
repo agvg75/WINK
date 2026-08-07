@@ -108,6 +108,58 @@ check("...and it contains the strains seen on the drive",
       all(pl.token_key(s) in pl.KNOWN_STRAINS
           for s in ("N2", "JPS518", "BZ33", "LS292", "AVG1", "ZW495")))
 
+# --- the two controls are the same kind of claim ------------------------------
+# L4440 is the control for an RNAi experiment exactly as N2 is the control for
+# a mutant or edited strain. Recognising only the first left every wild-type
+# control arm unlabelled: N2 was proposed as a strain and nothing else, which
+# is true and misses what the folder is for.
+pl.load_strains()
+rnai_row = {"path": r"L:\02_Duchenne Muscular Dystrophy\Monica\l4440 zw w1",
+            "folder": "l4440 zw w1", "area": "02"}
+segs = pl.path_segments(rnai_row["path"])
+conds = pl.propose_conditions(rnai_row, segs, True)
+check("L4440 is proposed as the RNAi control",
+      any(c["field"] == "condition" and "control" in c["proposed_value"]
+          and c["confidence"] == "control_exact" for c in conds))
+
+wt_row = {"path": r"L:\05_Proprioception\Andres pezo\13021_N2_OP50_pumping",
+          "folder": "13021_N2_OP50_pumping", "area": "05"}
+segs = pl.path_segments(wt_row["path"])
+conds = pl.propose_conditions(wt_row, segs, False)
+check("N2 is proposed as the control for mutants and edited strains",
+      any(c["field"] == "condition" and c["confidence"] == "control_exact"
+          and "N2" in c["proposed_value"] for c in conds),
+      "the counterpart of L4440")
+strains = pl.propose_strains(wt_row, segs, [])
+check("...while still being proposed as a strain",
+      any(s["proposed_value"] == "N2" and s["confidence"] == "strain_exact"
+          for s in strains),
+      "N2 is both a strain and a control arm; the folder needs both")
+check("both controls share one tier",
+      pl.TIERS["control_exact"] == 2)
+
+# --- a gene name is a knockdown only when the vector is nearby ----------------
+gene_row = {"path": r"L:\02_Duchenne Muscular Dystrophy\Monica\dys-1 zw w3",
+            "folder": "dys-1 zw w3", "area": "02"}
+segs = pl.path_segments(gene_row["path"])
+with_vector = pl.propose_conditions(gene_row, segs, True)
+without = pl.propose_conditions(gene_row, segs, False)
+check("with L4440 among the siblings, dys-1 is a knockdown",
+      any(c["proposed_value"] == "dys-1 RNAi"
+          and c["confidence"] == "rnai_gene" for c in with_vector))
+check("without it, the same token is flagged ambiguous",
+      any(c["field"] == "condition" and c["ambiguity"] for c in without),
+      "dys-1 is equally a dys-1 mutant, and nothing in the path decides it")
+check("the word 'RNAi' is not what the context test uses",
+      "rnai" not in pl.VECTOR_RE.pattern.lower(),
+      "it appears in 5 of 551 paths; l4440 appears in 164")
+
+# --- worm numbers are recorded, not discarded --------------------------------
+notes = [c for c in with_vector if c["field"] == "note"]
+check("w3 is recorded as a worm number",
+      any("worm 3" in n["proposed_value"] for n in notes),
+      "before the strain list landed, w1 through w13 were proposed as STRAINS")
+
 # --- the person-shaped folder is filtered ------------------------------------
 by_initial = {}
 for junk in ("DEFL", "DMSO", "People", "deepcutprotraining"):

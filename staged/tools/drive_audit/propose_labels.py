@@ -51,8 +51,9 @@ import xlsx_lite   # noqa: E402
 
 TIERS = {
     "strain_exact": 1,
-    # The empty vector is unambiguous; a gene name needs the vector nearby.
-    "rnai_control": 2,
+    # A control is unambiguous - L4440 for RNAi, N2 for mutants and edited
+    # strains. A gene name needs the vector nearby before it means knockdown.
+    "control_exact": 2,
     "rnai_gene": 3,
     # A designation matching this lab's own AG/COP pattern. Not yet
     # cross-referenced to a project, but unambiguously a strain.
@@ -599,6 +600,18 @@ VECTOR_RE = re.compile(r"^l4+4*0$", re.I)          # l4440, and the l440/l44440 
 GENE_RE = re.compile(r"^[a-z]{3,4}-\d{1,3}$", re.I)
 WORM_NUMBER_RE = re.compile(r"^w\d{1,2}$", re.I)
 
+# THE TWO CONTROLS ARE THE SAME KIND OF THING. L4440 is the control for an
+# RNAi experiment exactly as N2 is the control for a mutant or edited strain,
+# and a folder holding either is a control arm. Recognising only the first
+# would leave every wild-type control arm on the drive unlabelled - N2 was
+# being proposed as a strain and nothing else, which is true and misses the
+# point of the folder.
+CONTROLS = {
+    "n2": ("N2 (wild type, control)",
+           "the control for a mutant or edited strain, the counterpart of "
+           "L4440 in an RNAi experiment"),
+}
+
 
 def propose_conditions(row, segments, rnai_context):
     """The `condition` column: RNAi treatment and its control.
@@ -621,10 +634,17 @@ def propose_conditions(row, segments, rnai_context):
                 exact = word.lower() == "l4440"
                 out.append(_proposal(
                     row, "condition", "L4440 (empty RNAi vector, control)",
-                    "rnai_control", word, segment, "RNAi vocabulary",
+                    "control_exact", word, segment, "RNAi vocabulary",
                     "the empty vector control for an RNAi experiment"
                     + ("" if exact else
                        f" - spelled {word!r} here, which is a typo for L4440"),
+                    scope=scope_of(segments, index)))
+            elif key in CONTROLS:
+                seen.add(key)
+                label, why = CONTROLS[key]
+                out.append(_proposal(
+                    row, "condition", label, "control_exact", word, segment,
+                    "control vocabulary", why,
                     scope=scope_of(segments, index)))
             elif GENE_RE.match(word) and not LAB_STRAIN_RE.match(word):
                 seen.add(key)
