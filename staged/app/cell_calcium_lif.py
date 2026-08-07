@@ -26,8 +26,57 @@ import numpy as np
 
 import cell_calcium as cc
 
-# DimID in the Leica header. 1 and 2 are the image plane; 4 is time.
+# DimID in the Leica header. 1 and 2 are the image plane; 3 is z, 4 is time.
 DIM_X, DIM_Y, DIM_Z, DIM_T = "1", "2", "3", "4"
+
+# Length in a DimensionDescription is the total physical extent of the axis,
+# and the unit is stated alongside it. Everything is converted to micrometres
+# on the way out so no caller has to know what a Leica file writes.
+UNIT_TO_UM = {"m": 1e6, "meter": 1e6, "metre": 1e6,
+              "mm": 1e3, "um": 1.0, "µm": 1.0, "μm": 1.0, "nm": 1e-3}
+
+# Above this, the header is not describing a pixel. Set from the data rather
+# than from taste: across the 387 .lif files on the scope computer the largest
+# genuine value is 25.8 um/px and the median is 0.107, so a millimetre sits
+# 39x above anything real while still catching the metre-per-pixel that a
+# derived image reports. An objective that gave a 1 mm pixel would not be a
+# microscope objective.
+MAX_CREDIBLE_UM_PER_PX = 1e3
+
+
+def _extent_um(dim):
+    """Physical size of one element along a dimension, in micrometres.
+
+    Returns None when the header carries no length, which is the honest
+    answer for an uncalibrated series - a scope that recorded no zoom or
+    objective writes zero here, and a zero must not be read as a scale.
+
+    The span runs from the FIRST element to the LAST, so it covers n - 1
+    steps, not n. This is the same convention the time axis already uses
+    above, and getting it wrong biases a small stack badly: over 5 planes
+    the two readings differ by 25%.
+    """
+    if dim is None:
+        return None
+    try:
+        length = float(dim.get("Length", 0) or 0)
+        n = int(dim.get("NumberOfElements", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if n < 2 or length <= 0:
+        return None
+    factor = UNIT_TO_UM.get((dim.get("Unit") or "m").strip().lower())
+    if factor is None:
+        return None
+    um = length * factor / (n - 1)
+    # A light microscope does not have a millimetre pixel. Leica writes the
+    # ELEMENT INDEX into Length on derived images - FLIM decay maps, pattern
+    # matching scatter plots - so Length comes back as n - 1 with the unit
+    # still reading metres, and the arithmetic above yields exactly 1 m per
+    # pixel. That is a missing calibration wearing a number's clothes, and
+    # reporting it as a scale would put a 1,000,000x error into whatever
+    # measured from it.
+    return um if 0 < um < MAX_CREDIBLE_UM_PER_PX else None
 
 
 def _header_xml(path):
@@ -48,9 +97,14 @@ def _header_xml(path):
 def series_list(path):
     """Every image series in the file, described from its own header.
 
-    Returns dicts with name, n_x/n_y/n_t, n_channels, bit_depth, duration_s
-    and fps. fps is None where there is no time dimension, and callers must
-    treat that as "no time series" rather than substituting a default.
+    Returns dicts with name, n_x/n_y/n_z/n_t, n_channels, bit_depth,
+    duration_s, fps and the spatial calibration um_per_px / um_per_px_y /
+    um_per_z.
+
+    fps and the calibrations are None where the header does not carry them,
+    and callers must treat that as "not recorded" rather than substituting a
+    default. A missing micrometres-per-pixel is the difference between a
+    measurement and a number.
     """
     root = ET.fromstring(_header_xml(path))
     out = []
@@ -85,6 +139,9 @@ def series_list(path):
                     "duration_s": span if n_t > 1 else None,
                     "fps": ((n_t - 1) / span) if (n_t > 1 and span > 0)
                     else None,
+                    "um_per_px": _extent_um(dims.get(DIM_X)),
+                    "um_per_px_y": _extent_um(dims.get(DIM_Y)),
+                    "um_per_z": _extent_um(dims.get(DIM_Z)),
                 })
             walk(child)
 
