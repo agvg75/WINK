@@ -781,10 +781,39 @@ counting.
 
 **A note on how items 1 and 2 interact.** Temporal tracking would fix
 fragmentation, coil-bridging and mis-selection together, because an animal is
-continuous in time and its length cannot change discontinuously. But on a
-multi-worm field it becomes multi-object tracking with animals entering and
-leaving, which is a substantially larger problem than single-worm tracking and
-must be scoped as such rather than assumed to fall out of item 2.
+continuous in time and its length cannot change discontinuously. On a
+multi-worm field it would become multi-object tracking with entries and exits,
+a substantially larger problem. **Measured, that is not required here.**
+
+### 9.5.3 How often is there more than one animal? Rarely.
+
+Measured across 360 frames, 60 per recording, by **total worm-textured area**
+rather than by counting components — because fragmentation makes one animal
+look like several, while total area is unaffected by how badly any individual
+fragments. Calibrated against the two frames that segmented cleanly as one
+animal.
+
+| | share of frames |
+|---|---|
+| consistent with ONE animal (<1.6x) | **99.4%** |
+| consistent with TWO or more (>=1.6x) | **0.6%** |
+| >=2.5x | **0.0%** |
+
+Ratio p50/p90/p99 = 1.34 / 1.45 / 1.56. **The distribution is tight and
+unimodal, and that is the evidence** — a population with frequent two-animal
+frames would show a second mode near 2.3 to 2.7, and there is none in 360
+frames. The 1.34 median rather than 1.00 is baseline inflation from summing
+lawn specks and fragments, not a second animal.
+
+**Consequence: multi-object tracking is NOT required.** A second animal
+wandering into frame is an occasional event to be **detected and handled** -
+flagged, and the frame either excluded or measured per-animal - rather than a
+condition the architecture must be built around. Single-animal tracking with a
+multi-worm guard is the right scope.
+
+The 9.5.2 consequences still stand: the selector must not be "largest
+component", `body_length_px` is per-animal, and enclosure is per-animal. What
+changes is only the size of the tracking problem behind them.
 
 ---
 
