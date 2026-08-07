@@ -244,11 +244,31 @@ mid-grey and close to the agar in intensity; the shadow is the darkest thing in
 the frame. Every intensity rule tried segmented the shadow and the agar
 texture rather than the animal:
 
-| rule | result on one single-worm frame |
-|---|---|
-| difference from a local illumination median | **430 components**, largest a tail fragment |
-| dark 2nd percentile | 5 components, largest a 216x137 fragment |
-| Otsu on raw | 26% of the frame; shadow, texture and worm merged |
+| rule | keys on | result on one single-worm frame |
+|---|---|---|
+| difference from a local illumination median | intensity | **430 components**, largest a tail fragment |
+| dark 2nd percentile | intensity | 5 components, largest a 216x137 fragment |
+| Otsu on raw | intensity | 26% of the frame; shadow, texture and worm merged |
+| relief dipole, `-d/dy` at the body scale | relief amplitude | 7 components, **all agar wrinkles**; the animal is not among them |
+| bandpass, sigma 2-14 | spatial scale | 12 components, all 24-73 px fragments |
+
+**None of them found the animal.** The reason is visible in a hand-annotated
+frame supplied 6 August 2026 (`5521_cop1524`, midline drawn by eye, head up):
+
+- **The worm is not the darkest thing in the frame, and barely differs from
+  the agar in intensity at all.** Every intensity rule is therefore chasing
+  either the shadow or unrelated agar.
+- **The agar carries broad relief of comparable amplitude to the animal's.** A
+  dipole or gradient detector fires on the substrate just as strongly, which is
+  why the relief rule returned seven wrinkles and no worm.
+- **What the animal does have that the agar does not is fine longitudinal
+  texture** - visible cuticle striation along the body - at a scale well below
+  the agar's wrinkle scale, together with a body width around 30 px against
+  agar features of 100 px and more.
+
+So the discriminating properties are **texture and scale, plus motion** - not
+darkness, and not relief amplitude. A rule built on any single frame's
+intensity will not work on this set at any threshold.
 
 A length, width or scale derived from any of those is wrong **and looks
 entirely reasonable**, which is the failure mode this whole module exists to
