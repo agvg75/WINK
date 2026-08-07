@@ -604,8 +604,26 @@ def propose_strains(row, segments, projects, rnai_context=False):
 # an RNAi experiment, so the context test is whether a SIBLING folder under the
 # same parent carries L4440 - not whether the word appears.
 VECTOR_RE = re.compile(r"^l4+4*0$", re.I)          # l4440, and the l440/l44440 typos
-GENE_RE = re.compile(r"^[a-z]{3,4}-\d{1,3}$", re.I)
+# A TRAILING LETTER IS AN ISOFORM, not a typo and not a different allele:
+# dys-1E is isoform E of dys-1. Captured separately so the isoform is reported
+# rather than silently folded into the gene - which matters here, because
+# dystrophin isoforms are their own research line (DMD_ISOFORM: Dp427, Dp71,
+# Dp116, Dp140).
+GENE_RE = re.compile(r"^([a-z]{3,4}-\d{1,3})([a-z])?$", re.I)
+# L and S are not arbitrary isoform letters - they name the LONG and SHORT
+# isoforms. Corroborated by ReagentHub without being told: AVG10 is
+# Ppezo-1S::GFP and AVG11 is Ppezo-1L::GFP, two strains built to separate
+# them. Reported by meaning rather than by letter, since "isoform L" says
+# nothing to a reader and "long isoform" says the whole thing.
+ISOFORM_NAMES = {"L": "long", "S": "short"}
 WORM_NUMBER_RE = re.compile(r"^w\d{1,2}$", re.I)
+# UNTRANSFORMED SISTERS are the control for an extrachromosomal array: worms
+# from the same cohort that did not take up the array. A third control type
+# alongside L4440 for RNAi and N2 for mutants, and the right one for a
+# transgenic line, because the background and the cohort are identical - only
+# the array differs.
+SISTERS_RE = re.compile(r"^(sis|sister|sisters|sib|sibs|siblings|"
+                        r"untransformed|nontransformed)$", re.I)
 
 # N2's ROLE DEPENDS ON THE EXPERIMENT, and getting this backwards mislabels
 # the arm. L4440 is the control for an RNAi experiment; N2 is the control for
@@ -654,6 +672,18 @@ def propose_conditions(row, segments, rnai_context):
                     + ("" if exact else
                        f" - spelled {word!r} here, which is a typo for L4440"),
                     scope=scope_of(segments, index)))
+            elif SISTERS_RE.match(word):
+                seen.add(key)
+                out.append(_proposal(
+                    row, "condition",
+                    "untransformed sisters (control for an extrachromosomal "
+                    "array)", "control_exact", word, segment,
+                    "control vocabulary",
+                    "worms from the same cohort that did not take up the "
+                    "array - the right control for a transgenic line, since "
+                    "background and cohort are identical and only the array "
+                    "differs",
+                    scope=scope_of(segments, index)))
             elif key in CONTROLS:
                 seen.add(key)
                 label, why = CONTROLS[key]
@@ -674,19 +704,34 @@ def propose_conditions(row, segments, rnai_context):
                         scope=scope_of(segments, index)))
             elif GENE_RE.match(word) and not LAB_STRAIN_RE.match(word):
                 seen.add(key)
-                gene = word.lower()
+                match = GENE_RE.match(word)
+                gene = match.group(1).lower()
+                isoform = (match.group(2) or "").upper()
+                if isoform:
+                    gene = f"{gene}{isoform}"
+                    named = ISOFORM_NAMES.get(isoform)
+                    isoform_note = (
+                        f"; the trailing {isoform} means the {named} ISOFORM "
+                        f"of {match.group(1).lower()}, not a separate allele"
+                        if named else
+                        f"; the trailing {isoform} means ISOFORM {isoform} of "
+                        f"{match.group(1).lower()}, not a separate allele")
+                else:
+                    isoform_note = ""
                 if rnai_context:
                     out.append(_proposal(
                         row, "condition", f"{gene} RNAi", "rnai_gene", word,
                         segment, "RNAi vocabulary",
                         "gene name in a folder set that also contains L4440, "
-                        "so this is a knockdown rather than a mutant",
+                        "so this is a knockdown rather than a mutant"
+                        + isoform_note,
                         scope=scope_of(segments, index)))
                 else:
                     out.append(_proposal(
                         row, "condition", gene, "path_text", word, segment,
                         "path text",
-                        "gene name with no L4440 anywhere in the sibling set",
+                        "gene name with no L4440 anywhere in the sibling set"
+                        + isoform_note,
                         ambiguity=(f"{gene} could be an RNAi knockdown or a "
                                    f"{gene} mutant strain - nothing here "
                                    f"distinguishes them"),
