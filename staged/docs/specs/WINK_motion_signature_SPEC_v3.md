@@ -349,6 +349,36 @@ Established by eye against raw frames from all six recordings, 6 August 2026:
 The rule must work in both regimes: use the shadow as corroboration where it
 exists, never as a precondition.
 
+### 5.4.4 Substrate must eventually be scored PER ANIMAL, and here is why
+
+The gate in `detect_substrate` scores a frame. That is adequate for its first
+job — catching a whole recording made off food, so that pumping and defecation
+report `present = null` rather than `present = false`. It is **not** adequate
+for the job it acquires as soon as bout budgets exist.
+
+**Pumping stops off food.** So an animal that leaves the lawn part-way through
+a recording produces a genuine **not-performing** stretch. Per-frame substrate
+scoring marks the whole recording "lawn", because the lawn is still in frame —
+the animal simply is not on it — and that stretch then reads as an
+**unexplained gap** in the bout budget.
+
+That is precisely the distinction section 3.3 of the grant plan exists to
+protect, and **substrate is the evidence that settles it**. Where the animal
+sits off the lawn, the silence is biology and belongs in the rate as a real
+low value. Where the animal is on the lawn and nothing is detected, the
+silence is either biology or a detection failure and must be resolved some
+other way. Without per-animal substrate the two are indistinguishable, and a
+recording where the worm wandered off food will read as a recording where the
+detector stopped working.
+
+So this is not a completeness note. **Per-animal substrate scoring is a
+prerequisite for attributing unusable time to a cause**, which is the third of
+the three outputs in section 10.
+
+Observed in the frozen six: `52021_AG405 food density` has an animal off the
+lawn while lawn is present elsewhere in the frame. A per-frame score calls
+that recording a lawn recording.
+
 ### 5.4.3 A single-frame estimate of a directional property is worthless
 
 **General, not specific to illumination.** Measuring any direction from one

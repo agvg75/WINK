@@ -383,6 +383,241 @@ def detect_substrate(gray_frames, *, limit=8):
     }
 
 
+# Tip extension. The stopping rule is deliberately tight, because the tail is
+# where the animal's texture is weakest and an over-eager extension runs off
+# into the substrate exactly where the evidence is thinnest.
+TIP_STEP_PX = 3.0
+TIP_MAX_STEPS = 40
+TIP_MIN_RATIO = 1.6        # x the background's own fine energy
+TIP_PATIENCE = 2           # consecutive failing steps before stopping
+
+
+def _skeleton_ends(worm, *, prune=12):
+    """Midline points and its TRUE ends, with spurs pruned first.
+
+    A skeleton of any real outline sprouts short spurs from boundary
+    irregularities, and each one is an endpoint. Counting ends without pruning
+    reports a clean single animal as branched - measured on `5521_cop1524`,
+    which is a whole animal traced correctly and reported three ends.
+
+    Pruning shortens every branch equally, so genuine ends survive and spurs
+    below `prune` pixels vanish.
+    """
+    from skimage.morphology import skeletonize
+    skel = skeletonize(worm > 0)
+    if skel.sum() < 20:
+        return None, None
+    kernel = np.ones((3, 3), np.uint8)
+    pruned = skel.astype(np.uint8)
+    for _ in range(int(prune)):
+        neighbours = cv2.filter2D(pruned, -1, kernel,
+                                  borderType=cv2.BORDER_CONSTANT) - pruned
+        tips = (pruned > 0) & (neighbours <= 1)
+        if not tips.any():
+            break
+        pruned[tips] = 0
+    if pruned.sum() < 10:
+        pruned = skel.astype(np.uint8)      # pruned everything; keep the raw
+    ys, xs = np.nonzero(pruned)
+    pts = np.stack([xs, ys], 1).astype(float)
+    neighbours = cv2.filter2D(pruned, -1, kernel,
+                              borderType=cv2.BORDER_CONSTANT) - pruned
+    end_mask = (pruned > 0) & (neighbours <= 1)
+    ey, ex = np.nonzero(end_mask)
+    ends = np.stack([ex, ey], 1).astype(float)
+    return pts, ends
+
+
+def extend_tips(gray, worm, *, step=TIP_STEP_PX, max_steps=TIP_MAX_STEPS):
+    """Grow the mask along the body axis while the animal's texture persists.
+
+    THE STOPPING BAND IS NOT THE SUBSTRATE BAND. The lawn's wrinkles live at
+    sigma 6-24, which is what `detect_substrate` measures. Extending on that
+    band would walk straight into the substrate, and would do so at the tail
+    where the animal's own signal is weakest. This tests the FINE band, sigma
+    1-3, where the lawn is quiet and the cuticle is not.
+
+    The threshold is the background's own fine energy times TIP_MIN_RATIO, so
+    it adapts per recording rather than being a fixed number.
+
+    Returns (extended_mask, detail). `detail` records how far each end grew,
+    because **a length that is mostly extension must be visibly different from
+    one that is mostly measured** and extension must never enter
+    `body_length_px` silently.
+    """
+    f = np.asarray(gray, dtype=np.float32)
+    span = float(f.max() - f.min())
+    if span < 1:
+        return worm, {"extended_px": [], "extension_total_px": 0.0}
+    f = (f - f.min()) / span * 255.0
+    fine = cv2.GaussianBlur(
+        np.abs(cv2.GaussianBlur(f, (0, 0), 1.0)
+               - cv2.GaussianBlur(f, (0, 0), 3.0)), (0, 0), 4.0)
+    outside = cv2.dilate(worm, np.ones((61, 61), np.uint8)) == 0
+    if outside.sum() < 1000:
+        return worm, {"extended_px": [], "extension_total_px": 0.0}
+    floor = float(np.percentile(fine[outside], 95)) * TIP_MIN_RATIO
+
+    pts, ends = _skeleton_ends(worm)
+    if pts is None or len(ends) == 0:
+        return worm, {"extended_px": [], "extension_total_px": 0.0,
+                      "note": "no skeleton endpoints to extend from"}
+    dist = cv2.distanceTransform(worm, cv2.DIST_L2, 5)
+    radius = max(3.0, float(np.median(dist[dist > 0])))
+    grown = worm.copy()
+    height, width = worm.shape
+    per_end = []
+    for end in ends[:2]:
+        near = pts[np.hypot(*(pts - end).T) < 25]
+        if len(near) < 4:
+            per_end.append(0.0)
+            continue
+        direction = end - near.mean(0)
+        norm = np.linalg.norm(direction)
+        if norm < 1e-6:
+            per_end.append(0.0)
+            continue
+        direction = direction / norm
+        travelled, misses = 0.0, 0
+        for _ in range(max_steps):
+            probe_at = end + direction * (travelled + step)
+            x, y = int(round(probe_at[0])), int(round(probe_at[1]))
+            if not (0 <= x < width and 0 <= y < height):
+                break
+            patch = fine[max(0, y - 3):y + 4, max(0, x - 3):x + 4]
+            if patch.size and float(patch.max()) >= floor:
+                travelled += step
+                misses = 0
+                cv2.circle(grown, (x, y), int(round(radius)), 1, -1)
+            else:
+                misses += 1
+                if misses >= TIP_PATIENCE:
+                    break
+                travelled += step
+        per_end.append(round(travelled, 1))
+    grown = cv2.morphologyEx(grown, cv2.MORPH_CLOSE,
+                             np.ones((7, 7), np.uint8))
+    return grown, {
+        "extended_px": per_end,
+        "extension_total_px": round(float(sum(per_end)), 1),
+        "fine_energy_floor": round(floor, 2),
+    }
+
+
+def posture_flags(worm, *, border=2):
+    """Reasons this animal cannot be measured, rather than a repaired number.
+
+    Two exclusions, both of which currently produce believable wrong lengths:
+
+    * **Off frame.** Part of the animal is outside the field, so any length is
+      a length of the visible part. Not repairable.
+    * **Self-overlapping.** A hairpin or omega whose limbs the mask has
+      bridged. The traced distance is then the doubled path, not a body
+      length. Detected from local width: where two limbs merge the distance
+      transform is far above the body's own median.
+    """
+    height, width = worm.shape
+    ys, xs = np.nonzero(worm)
+    if not len(ys):
+        return {"measurable": False, "reasons": ["no animal"]}
+    touches = (xs.min() <= border or ys.min() <= border
+               or xs.max() >= width - 1 - border
+               or ys.max() >= height - 1 - border)
+    dist = cv2.distanceTransform(worm, cv2.DIST_L2, 5)
+    pts, ends = _skeleton_ends(worm)
+    widths = None
+    fat_fraction = 0.0
+    if pts is not None:
+        widths = 2.0 * dist[pts[:, 1].astype(int), pts[:, 0].astype(int)]
+        typical = float(np.median(widths[widths > 0]))
+        fat_fraction = float(np.mean(widths > typical * 1.7)) if typical else 0
+    reasons = []
+    if touches:
+        reasons.append("the animal touches the frame edge, so part of it is "
+                       "out of view and any length is a length of the visible "
+                       "part")
+    if fat_fraction > 0.08:
+        reasons.append(f"{fat_fraction:.0%} of the midline is more than 1.7x "
+                       f"the body's own width, which is two limbs of a "
+                       f"self-overlapping posture merged by the mask - the "
+                       f"traced distance is a doubled path, not a length")
+    # END COUNT IS NOT AN EXCLUSION CRITERION, and an earlier version made it
+    # one. Swept against known cases, no spur-prune length separates them: at
+    # a prune of 45 a clean whole animal and a known fragment both report two
+    # ends or fewer, while an off-frame animal reports four. It is reported as
+    # a diagnostic and nothing is excluded on it.
+    n_ends = 0 if pts is None else len(ends)
+    return {
+        "measurable": not reasons,
+        "reasons": reasons,
+        "touches_frame_edge": bool(touches),
+        "merged_limb_fraction": round(fat_fraction, 3),
+        "n_midline_ends": int(n_ends),
+    }
+
+
+def continues_beyond(worm, labels, stats, own_label, *, reach=220,
+                     corridor_deg=35, min_area_fraction=0.12,
+                     min_area_floor=400):
+    """Does the animal carry on into another component past a tip?
+
+    THE CASE THIS EXISTS FOR. `42821_AG406` in the frozen development set is a
+    fragment of an animal that mostly lies outside the field, plus a partial
+    second worm. Its mask stops SHORT of the frame edge, so the edge test does
+    not fire, and it reports a completely believable 478 px. That is the
+    "largest component" hazard arriving inside the development set.
+
+    A mask that has stopped early leaves the rest of the animal sitting in
+    another component, roughly along the body axis. Looking for one is a
+    direct test of "there is more animal than this", where the edge test only
+    asks "did I reach the wall".
+    """
+    pts, ends = _skeleton_ends(worm)
+    if pts is None or not len(ends):
+        return {"continues": False, "hits": []}
+    # THE CONTINUATION MUST BE WORM-SIZED, not merely present. Scored against
+    # any component over a fixed 400 px, a lawn speck inside the corridor
+    # excluded `5521_cop1524` - the one animal in the set known to be traced
+    # correctly end to end. A real continuation of a body is a substantial
+    # piece of it, so the floor is relative to the animal already found.
+    own_area = float(worm.sum())
+    min_area = max(min_area_floor, own_area * min_area_fraction)
+    hits = []
+    for end in ends:
+        near = pts[np.hypot(*(pts - end).T) < 25]
+        if len(near) < 4:
+            continue
+        direction = end - near.mean(0)
+        norm = np.linalg.norm(direction)
+        if norm < 1e-6:
+            continue
+        direction = direction / norm
+        for index in range(1, stats.shape[0]):
+            if index == own_label or stats[index, cv2.CC_STAT_AREA] < min_area:
+                continue
+            cx = stats[index, cv2.CC_STAT_LEFT] + stats[index, cv2.CC_STAT_WIDTH] / 2
+            cy = stats[index, cv2.CC_STAT_TOP] + stats[index, cv2.CC_STAT_HEIGHT] / 2
+            offset = np.array([cx, cy]) - end
+            distance = float(np.linalg.norm(offset))
+            if distance < 1 or distance > reach:
+                continue
+            cosine = float(np.dot(offset / distance, direction))
+            if cosine >= np.cos(np.radians(corridor_deg)):
+                hits.append({"area": int(stats[index, cv2.CC_STAT_AREA]),
+                             "distance_px": round(distance, 1),
+                             "off_axis_deg": round(
+                                 float(np.degrees(np.arccos(
+                                     min(max(cosine, -1), 1)))), 1)})
+    return {
+        "continues": bool(hits),
+        "hits": hits,
+        "reason": (f"the body axis runs on into {len(hits)} further "
+                   f"component(s) within {reach} px, so this mask is a "
+                   f"FRAGMENT of a longer animal and its length is the length "
+                   f"of the fragment" if hits else ""),
+    }
+
+
 def measured_bit_depth(frames):
     """Effective bit depth from the QUANTISATION STEP, not from the container.
 
