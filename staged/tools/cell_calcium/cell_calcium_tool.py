@@ -32,9 +32,16 @@ import cell_calcium as cc                    # noqa: E402
 import cell_calcium_images as cci            # noqa: E402
 import cell_calcium_lif as ccl               # noqa: E402
 from process_ui import CockpitApp            # noqa: E402
+import preview_build                         # noqa: E402
 
 TOOL_NAME = "Cultured cell calcium (probe-aware)"
-TOOL_VERSION = "0.1.0"
+# A PREVIEW EXPORT MUST SAY SO FOREVER. A CSV outlives the build
+# that made it, and preview numbers quoted beside released ones a
+# year later are indistinguishable unless the file itself says which
+# it is. The commit hash makes it recoverable rather than merely
+# labelled.
+TOOL_VERSION = ("0.1.0-" + preview_build.version_string()
+                if preview_build.PREVIEW else "0.1.0")
 
 
 class App(CockpitApp):
@@ -54,6 +61,7 @@ class App(CockpitApp):
         self.result = None
         self.capability = None
         self.source_info = None
+        preview_build.install(self, context=TOOL_NAME)
         self._build_controls()
         self._build_center()
         self.set_status("Choose the folder holding one subfolder per "
@@ -492,6 +500,7 @@ class App(CockpitApp):
         json_path = out_dir / f"summary_{stamp}.json"
         json_path.write_text(json.dumps(
             {"tool": TOOL_NAME, "version": TOOL_VERSION,
+             **preview_build.stamp(),
              "probe": self.v["probe"].get(),
              "bit_depth": self.v["bit_depth"].get(),
              "cell_threshold": self.v["threshold"].get(),
