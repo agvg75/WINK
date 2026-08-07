@@ -1,4 +1,16 @@
-"""Versioned, resumable review state for single-animal transmitted-light tools."""
+"""Versioned, resumable review state for single-animal transmitted-light tools.
+
+A SAVED SESSION THAT DOES NOT FIT IS A REASON TO IGNORE IT, NOT TO QUIT.
+Both tools that resume through here used to do this:
+
+    except Exception as exc:
+        messagebox.showerror("Resume failed", str(exc)); return
+
+which ends the tool. Starting fresh was always available and the tool knew
+it, so anyone hitting that concludes the tool is broken and works around it
+silently. `resume_or_start_fresh` below exists so the safe behaviour is the
+easy one and a third tool cannot reintroduce the trap.
+"""
 from __future__ import annotations
 
 import datetime as _datetime
@@ -57,6 +69,15 @@ def load_tracker_session(path, tracker, *, tool, source):
         raise ValueError("Unsupported tracker review-session version.")
     if document.get("tool") != str(tool):
         raise ValueError("This review session belongs to a different tool.")
+    # DO NOT LOOSEN THIS TO MAKE A MISMATCH GO AWAY. `states` is POSITIONAL -
+    # one entry per frame, indexed by frame number. Applying a 500-entry state
+    # array to a 520-frame stack does not fail; it silently misaligns every
+    # corrected spine, and the result looks like data. Corruption that looks
+    # like data is the failure class this project keeps turning up, and it is
+    # far worse than a refusal.
+    #
+    # The right response to a mismatch is to DISCARD the saved session and
+    # start fresh - see resume_or_start_fresh - never to relax the comparison.
     if int(document.get("frame_count", -1)) != int(tracker.T):
         raise ValueError("The review session does not match this recording's frame count.")
     saved_source = document.get("source", {})
@@ -92,3 +113,84 @@ def load_tracker_session(path, tracker, *, tool, source):
             i for i, state in enumerate(states)
             if state and state.get("suggested_manual_anchor")]
     return document
+
+
+def describe(path):
+    """What a saved session holds, WITHOUT validating that it fits.
+
+    Deliberately separate from `load_tracker_session`: this is what a person
+    needs in order to decide whether discarding the file costs them two
+    minutes or an hour, and they need it precisely when the session does NOT
+    fit and so cannot be loaded.
+
+    Returns None if the file is missing or unreadable, because a session that
+    cannot even be described is not one anybody will mourn.
+    """
+    try:
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    states = document.get("states") or []
+    # `provenance` is set to "manual" only where a person fixed that frame by
+    # hand. `needs_help` is the tracker's own flag and is not a correction.
+    corrections = sum(1 for state in states
+                      if state and state.get("provenance") == "manual")
+    return {
+        "frame_count": int(document.get("frame_count", len(states))),
+        "corrections": corrections,
+        "needs_help": sum(1 for state in states
+                          if state and state.get("needs_help")),
+        "saved_utc": document.get("saved_utc", ""),
+        "tool": document.get("tool", ""),
+    }
+
+
+def summarise(path):
+    """One human sentence naming what discarding this session would cost."""
+    facts = describe(path)
+    if not facts:
+        return "The saved session could not be read."
+    when = (facts["saved_utc"] or "")[:16].replace("T", " ")
+    return (f"The saved session covers {facts['frame_count']:,} frames and "
+            f"holds {facts['corrections']:,} hand-corrected frame"
+            f"{'' if facts['corrections'] == 1 else 's'}"
+            + (f", saved {when} UTC." if when else "."))
+
+
+def resume_or_start_fresh(path, tracker, *, tool, source, confirm, inform):
+    """Try to resume; on any mismatch offer a fresh start. NEVER a dead end.
+
+    `confirm(title, message) -> bool` and `inform(title, message)` are passed
+    in so this module stays free of any UI toolkit.
+
+    Returns True if the saved session was resumed, False if the caller should
+    track from scratch. IT DOES NOT RAISE for a session that does not fit -
+    that is the whole point. The strict frame-count check in
+    `load_tracker_session` stays exactly as strict; what changes is that a
+    refusal now costs the saved file rather than the whole sitting.
+    """
+    path = Path(path)
+    if not path.exists():
+        return False
+    if not confirm("Resume review?",
+                   f"A saved review session exists for this recording.\n\n"
+                   f"{summarise(path)}\n\n"
+                   "Resume the corrected spines and continue reviewing?"):
+        return False
+    try:
+        load_tracker_session(path, tracker, tool=tool, source=source)
+        return True
+    except Exception as exc:                              # noqa: BLE001
+        if confirm("Saved session does not fit",
+                   f"{exc}\n\n{summarise(path)}\n\n"
+                   "This usually means the analysis interval differs from the "
+                   "one the session was saved with. The saved corrections are "
+                   "stored per frame, so they cannot be applied to a "
+                   "different number of frames without misaligning them.\n\n"
+                   "Start fresh instead? The saved session is left on disk "
+                   "and is not overwritten until you save again."):
+            return False
+        inform("Review cancelled",
+               "Nothing was changed. Re-open the tracker and choose the same "
+               "analysis interval the session was saved with to resume it.")
+        raise SystemExit(0)

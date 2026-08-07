@@ -49,7 +49,9 @@ except ModuleNotFoundError:
         print("This tool needs the Lab tools Python environment (numpy is missing).")
     raise SystemExit
 
-from tracker_review_session import load_tracker_session, save_tracker_session
+from tracker_review_session import (load_tracker_session,
+                                    resume_or_start_fresh,
+                                    save_tracker_session)
 from virtual_frame_stack import DiskBackedFrameStack
 
 
@@ -434,13 +436,12 @@ def main():
             "last_frame":selected.name,"frame_count":len(G),"analysis_crop_xyxy":list(crop),
             "source_frame_ranges":[[a+1,b+1] for a,b in ranges],"source_frame_indices_1based":[i+1 for i in actual_source_indices]}
     session_path=selected.parent/"NIKE_Review_Sessions"/f"{recording_key}_neuron_review.json"
-    resumed=False
-    if session_path.exists() and messagebox.askyesno(
-            "Resume review?","Resume the saved neuron/body review session for this recording?"):
-        try:
-            load_tracker_session(session_path,tr,tool="neuron_tracker",source=source);resumed=True
-        except Exception as exc:
-            messagebox.showerror("Resume failed",str(exc));return
+    # Same trap as the single-worm tracker had, line for line: a saved session
+    # that did not fit ended the tool while a fresh start was available.
+    resumed=resume_or_start_fresh(
+        session_path,tr,tool="neuron_tracker",source=source,
+        confirm=lambda title,message:messagebox.askyesno(title,message),
+        inform=lambda title,message:messagebox.showinfo(title,message))
     if not resumed:
         local_starts=[];cursor=0
         for a,b in ranges:local_starts.append((cursor,a,b));cursor+=b-a+1

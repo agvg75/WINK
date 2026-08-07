@@ -54,7 +54,9 @@ except ModuleNotFoundError:
         print("This tool needs the Lab tools Python environment (numpy is missing).")
     raise SystemExit
 
-from tracker_review_session import load_tracker_session, save_tracker_session
+from tracker_review_session import (load_tracker_session,
+                                    resume_or_start_fresh,
+                                    save_tracker_session)
 from virtual_frame_stack import DiskBackedFrameStack
 
 
@@ -461,6 +463,43 @@ def _parse_frame_range(text, n_frames):
     if e < s:
         s, e = e, s
     return (s - 1, e - 1)
+
+
+def _inherited_interval(args, n_frames, messagebox=None):
+    """The interval a calling tool handed over, as 0-based inclusive, or None.
+
+    Returns None when no range was given, so the slider still runs for anyone
+    launching the tracker directly.
+
+    A RANGE THAT DOES NOT FIT THE RECORDING IS REFUSED, NOT CLAMPED. Silently
+    trimming it would analyse a different span than the caller assessed and
+    report it under the caller's numbers, which is the same corruption class
+    as a misaligned state array: wrong, and indistinguishable from right.
+    """
+    start, end = getattr(args, "frame_start", None), getattr(args, "frame_end", None)
+    if start is None and end is None:
+        return None
+    if start is None or end is None:
+        raise SystemExit(
+            "--frame-start and --frame-end must be given together; a half "
+            "specified range cannot be inherited.")
+    first, last = int(start) - 1, int(end) - 1          # 1-based -> 0-based
+    if first < 0 or last < first or last >= n_frames:
+        message = (f"The calling tool asked for frames {start}-{end}, but "
+                   f"this recording has {n_frames}. Nothing was analysed - "
+                   f"the range was not trimmed to fit, because analysing a "
+                   f"different span than the one that was assessed would "
+                   f"report the wrong frames under the right label.")
+        if messagebox is not None:
+            messagebox.showerror("Inherited range does not fit", message)
+        raise SystemExit(message)
+    if last - first + 1 < 3:
+        message = (f"The inherited interval {start}-{end} is under 3 frames, "
+                   f"which is too short to track.")
+        if messagebox is not None:
+            messagebox.showerror("Inherited range too short", message)
+        raise SystemExit(message)
+    return first, last
 
 
 def _choose_analysis_interval(G, plt):
@@ -883,6 +922,20 @@ def main(argv=None):
     parser.add_argument(
         "source", nargs="?",
         help="Movie, TIFF stack, or one frame from a numbered image series.")
+    # THE RANGE MUST BE INHERITED, NOT RE-ENTERED. A caller that has already
+    # committed a frame range - the single-channel GCaMP tool does - used to
+    # hand over only the recording path, so the range was chosen again here
+    # with a slider. A slider cannot reliably land on an exact frame, and the
+    # saved review state is indexed per frame, so "close enough" is a
+    # mismatch. Passing the range removes the reproduction problem entirely.
+    parser.add_argument(
+        "--frame-start", type=int, default=None,
+        help="First frame to analyse, 1-based inclusive. Given with "
+             "--frame-end, the interval chooser is skipped and this exact "
+             "range is used.")
+    parser.add_argument(
+        "--frame-end", type=int, default=None,
+        help="Last frame to analyse, 1-based inclusive.")
     parser.add_argument(
         "--ignore-border-objects", action="store_true",
         help="Default the 'ignore large objects touching the frame edge' option "
@@ -982,7 +1035,16 @@ def main(argv=None):
     # tracking, review) then operates on this window; the note records which
     # original frames were analysed.
     total_loaded = int(G.shape[0])
-    interval = _choose_analysis_interval(G, plt)
+    inherited = _inherited_interval(args, total_loaded, messagebox)
+    if inherited is not None:
+        # A range was handed over by the caller. Do NOT ask again - asking is
+        # what created the mismatch this fixes.
+        interval = inherited
+        note = ((note + "; ") if note else "") + \
+            f"analysis interval {inherited[0] + 1}-{inherited[1] + 1} " \
+            f"inherited from the calling tool"
+    else:
+        interval = _choose_analysis_interval(G, plt)
     if interval is None:
         a_start, a_end = 0, total_loaded - 1
     else:
@@ -1014,17 +1076,13 @@ def main(argv=None):
         segmentation_config=segmentation_config,**performance_options)
     timings.update(tr.timings)
     recording_key, source, session_path = _recording_context(path,len(G),crop=crop)
-    resumed = False
-    if session_path.exists() and messagebox.askyesno(
-            "Resume review?",
-            f"A saved review session exists for {recording_key}.\n\n"
-            "Resume the corrected spines and continue reviewing?"):
-        try:
-            load_tracker_session(
-                session_path, tr, tool="single_worm_tracker", source=source)
-            resumed = True
-        except Exception as exc:
-            messagebox.showerror("Resume failed", str(exc)); return
+    # A saved session that does not fit is a reason to ignore it, not to end
+    # the tool. This used to be `showerror(...); return`, which quit outright
+    # while a fresh start was available the whole time.
+    resumed = resume_or_start_fresh(
+        session_path, tr, tool="single_worm_tracker", source=source,
+        confirm=lambda title, message: messagebox.askyesno(title, message),
+        inform=lambda title, message: messagebox.showinfo(title, message))
     if not resumed:
         head, outline = _seed(G, plt)
         if head is None:

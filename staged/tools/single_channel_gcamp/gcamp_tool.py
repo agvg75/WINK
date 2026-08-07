@@ -1105,10 +1105,31 @@ class App(CockpitApp):
             messagebox.showerror("Worm tracker", "Choose a recording first.", parent=self)
             return
         tracker = ROOT / "tools" / "worm_kinematics" / "dic_tracker" / "run_dic_kinematics.py"
+        # HAND OVER THE RANGE THAT WAS ALREADY COMMITTED. This used to pass
+        # the recording path alone, so the tracker asked for the interval
+        # again with a slider. A slider cannot land on an exact frame, the
+        # review state is stored per frame, and the near-miss then read as a
+        # frame-count mismatch - a problem created entirely by re-asking a
+        # question already answered.
+        #
+        # episode_range is 0-based with inclusive ends (gcamp_session writes
+        # "source frames, 0-based, ends inclusive"); the tracker's flags are
+        # 1-based to match the frame numbers it shows the user.
+        command = [sys.executable, str(tracker), source]
+        episode = getattr(self, "episode_range", None)
+        inherited = ""
+        if episode:
+            first, last = int(episode[0]), int(episode[1])
+            command += ["--frame-start", str(first + 1),
+                        "--frame-end", str(last + 1)]
+            inherited = (f" Carrying over frames {first + 1}-{last + 1} "
+                         f"({last - first + 1} frames), so the interval does "
+                         f"not have to be chosen again.")
         try:
-            subprocess.Popen([sys.executable, str(tracker), source])
+            subprocess.Popen(command)
             self.status.set("Opened the single-worm tracker on this recording "
-                            "(seed the head, review, finalize to get the kinematics CSV).")
+                            "(seed the head, review, finalize to get the "
+                            "kinematics CSV)." + inherited)
         except Exception as exc:
             messagebox.showerror("Worm tracker", f"Could not start the tracker:\n{exc}", parent=self)
 
