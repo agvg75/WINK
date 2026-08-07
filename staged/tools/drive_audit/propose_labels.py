@@ -50,6 +50,9 @@ import xlsx_lite   # noqa: E402
 
 TIERS = {
     "strain_exact": 1,
+    # A designation matching this lab's own AG/COP pattern. Not yet
+    # cross-referenced to a project, but unambiguously a strain.
+    "lab_strain_prefix": 2,
     "project_token_exact": 2,
     "person_surname_exact": 3,
     "project_token_fuzzy": 4,
@@ -112,7 +115,14 @@ MAX_GIVEN_LEN = 12
 FUZZY_RATIO = 0.88
 MIN_FUZZY_LEN = 6
 YEAR_RANGE = (2000, 2026)
-# A strain designation: letters then digits, e.g. cop1367, ok1234, AG405, e1370.
+# THIS LAB'S OWN DESIGNATIONS: AG or COP followed by digits. Confirmed by
+# Andres, and they are the reason the anchoring-prefix rule works at all -
+# 41921 is 19 April 2021 and cop1367 is an allele, and the ONLY thing that
+# separates them is the prefix. A designation matching this is a strain with
+# high confidence; a bare number never is.
+LAB_STRAIN_RE = re.compile(r"^(AG|COP)\d{2,5}$", re.I)
+# The general case: letters then digits, e.g. ok1234, e1370, n2. Weaker,
+# because plenty of things are letters followed by digits.
 STRAIN_RE = re.compile(r"^[a-z]{1,4}\d{2,5}$", re.I)
 BARE_NUMBER_RE = re.compile(r"^\d{4,5}$")
 
@@ -457,13 +467,23 @@ def propose_strains(row, segments, projects):
                     "Projects", "strain listed against a project",
                     evidence=f"project {code}",
                     scope=scope_of(segments, index)))
+            elif LAB_STRAIN_RE.match(word):
+                seen.add(key)
+                out.append(_proposal(
+                    row, "strain", word.upper(), "lab_strain_prefix", word,
+                    segment, "lab designation pattern",
+                    "AG/COP prefix followed by digits - this lab's own strain "
+                    "naming. The prefix is what separates an allele from a "
+                    "date: 41921 is 19 April 2021, cop1367 is an allele",
+                    scope=scope_of(segments, index)))
             elif STRAIN_RE.match(word):
                 seen.add(key)
                 out.append(_proposal(
                     row, "strain", word, "path_text", word, segment,
                     "path text",
-                    "letter-prefixed designation; not in any authority table "
-                    "because the Projects strains column is still blank",
+                    "letter-prefixed designation, not this lab's AG/COP "
+                    "pattern and not in any authority table because the "
+                    "Projects strains column is still blank",
                     scope=scope_of(segments, index)))
     return out
 

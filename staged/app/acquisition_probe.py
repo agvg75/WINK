@@ -270,3 +270,45 @@ def measured_um_per_px(body_length_px, body_length_um=1140.0):
     if not body_length_px:
         return None
     return float(body_length_um) / float(body_length_px)
+
+
+# A day 1 adult is about this long. Much of the archive carries no calibration
+# metadata at all, and a known animal is the only ruler in the frame.
+DAY1_ADULT_UM = 1100.0
+
+
+def um_per_px_from_adult_length(body_length_px, *, stage="undulation",
+                                adult_um=DAY1_ADULT_UM):
+    """Scale from a known day 1 adult. STAGE-DEPENDENT - read this.
+
+    This is the motion-signature spec's stage 1 output that gives a scale to
+    recordings with no calibration metadata, which is most of the archive.
+
+    IT IS ONLY AS GOOD AS THE LENGTH IT IS GIVEN, and that length comes from
+    a segmentation. `stage` records which route produced it, because the
+    routes are not equally trustworthy and a scale carries that all the way
+    into every micrometre it converts:
+
+      undulation       length from a resolved body wave. Best available.
+      coherent_motion  length from a moving region with no wave resolved.
+                       Wider uncertainty; the spec requires it be marked.
+      failed           no length. Returns None rather than a number.
+
+    IT ALSO ASSUMES THE SEGMENTED OBJECT IS THE ANIMAL. On the pezo-1 CRISPR
+    set the animals are lit obliquely and cast a dark shadow alongside the
+    body; an intensity threshold segments the SHADOW, which is a different
+    shape and a different length. A scale derived from that is wrong and
+    looks entirely reasonable. Confirm what was segmented before trusting a
+    scale from this function.
+    """
+    if not body_length_px or stage == "failed":
+        return None
+    return {
+        "um_per_px": float(adult_um) / float(body_length_px),
+        "body_length_px": float(body_length_px),
+        "assumed_adult_um": float(adult_um),
+        "stage": stage,
+        "caveat": ("derived from an assumed day 1 adult length, not from a "
+                   "calibration target; only valid if the segmented object "
+                   "is the whole animal and the animal is a day 1 adult"),
+    }

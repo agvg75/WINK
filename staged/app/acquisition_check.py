@@ -67,6 +67,20 @@ PUMP_COMFORTABLE_FRAMES_PER_EVENT = 6.0
 PUMP_MIN_FPS = 30.0
 PUMP_COMFORTABLE_FPS = 40.0
 
+# THE SPATIAL FLOOR IS A DIAMETER, NOT AN AXIAL LENGTH. A pump is a
+# contraction ACROSS the bulb, so what has to be resolved is how many pixels
+# lie across it. Taking the pharynx as a fraction of body LENGTH - about 1/20,
+# giving 25 px on a 500 px animal - measures the wrong axis and overestimates
+# detectability roughly twofold.
+#
+# Worked on the pezo-1 CRISPR set: at about 0.45 px/um from an 1100 um day 1
+# adult, the terminal bulb is 14-16 px across. That is above the floor and
+# well below comfortable, so those recordings should land in MARGINAL and be
+# routed to human review rather than passing silently. The marginal category
+# is expected to be populated; it is not a rounding error to be tidied away.
+GRINDER_MIN_PX = 10
+GRINDER_COMFORTABLE_PX = 25
+
 
 def pump_sampling_margin(fps, event_s=PUMP_EVENT_S):
     """Frames per pump event - reported instead of a bare pass.
@@ -127,7 +141,13 @@ MEASUREMENTS = {
     "pumping": {
         "label": "Pharyngeal pumping rate",
         "min_body_px": 0, "samples_per_undulation": 0, "needs_spine": False,
-        "min_fps": PUMP_MIN_FPS, "min_grinder_px": 8,
+        "min_fps": PUMP_MIN_FPS,
+        # DIAMETER, not axial length. Bulb detectability is set by how many
+        # pixels lie across the structure, because that is what a contraction
+        # changes. An axial-length fraction overestimates it roughly twofold
+        # and would call a marginal recording comfortable.
+        "min_grinder_px": GRINDER_MIN_PX,
+        "comfortable_grinder_px": GRINDER_COMFORTABLE_PX,
         "why": ("A pump is a discrete event, not a waveform. The measurement "
                 "is counting individual transients without merging or missing "
                 "them, and that is set by how long one pump LASTS, not by how "
@@ -258,8 +278,22 @@ def check(*, fps, um_per_px, body_length_um=1140.0, wants=(),
                     f"the head, not the animal")
             elif float(grinder_px) < grinder_floor:
                 fails.append(
-                    f"the grinder is {float(grinder_px):.0f} px against a "
-                    f"floor of {grinder_floor} px")
+                    f"the grinder is {float(grinder_px):.0f} px across "
+                    f"against a floor of {grinder_floor} px")
+            else:
+                comfortable = spec.get("comfortable_grinder_px") or 0
+                record["grinder_px"] = float(grinder_px)
+                record["spatial_margin"] = round(
+                    float(grinder_px) / grinder_floor, 2)
+                if float(grinder_px) < comfortable:
+                    record["spatial_verdict"] = "marginal"
+                    out["warnings"].append(
+                        f"The grinder is {float(grinder_px):.0f} px across, "
+                        f"above the {grinder_floor} px floor but below "
+                        f"{comfortable} px. MARGINAL: route to human review "
+                        f"rather than treating the result as established.")
+                else:
+                    record["spatial_verdict"] = "recoverable"
         record["supported"] = not fails
         record["fix"] = (_fix(fails, spec, fps, hz, um_per_px, body_length_um)
                          if fails else None)
