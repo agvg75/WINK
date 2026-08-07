@@ -132,6 +132,26 @@ class ConfocalStack:
                     f"Intensities top out at {observed_max}, far below the "
                     f"{theoretical} a {declared}-bit image allows - the data "
                     f"may be lower bit depth stored in a wider container.")
+            # THE ABOVE MISSES THE OTHER WAY A CONTAINER LIES. Data that has
+            # been LEFT-SHIFTED into the wider word does reach the top of the
+            # range, so the maximum looks correct, while only every Nth code
+            # occurs. Detectable only from the step between adjacent codes.
+            # Found on this lab's own transmitted-light recordings: 8-bit data
+            # in 16-bit words, stepping by 128.
+            try:
+                unique = np.unique(self.array)
+                step = int(np.min(np.diff(unique))) if unique.size > 1 else 1
+            except Exception:
+                step = 1
+            if step > 1:
+                effective = int(declared) - int(round(np.log2(step)))
+                notes.append(
+                    f"Intensity codes step by {step} rather than 1, so this "
+                    f"is about {effective}-bit data left-shifted into a "
+                    f"{declared}-bit container. It reaches the top of the "
+                    f"range, so a maximum-based check sees nothing wrong, but "
+                    f"only {unique.size} distinct values exist. Any threshold "
+                    f"or ratio derived from the declared depth is optimistic.")
         for note in (self.metadata.get("raw_metadata_blob") or {}).get("axis_notes", []):
             notes.append(note)
         if self.metadata.get("calibration_source") == "manual":

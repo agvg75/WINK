@@ -349,6 +349,36 @@ Established by eye against raw frames from all six recordings, 6 August 2026:
 The rule must work in both regimes: use the shadow as corroboration where it
 exists, never as a precondition.
 
+### 5.4.3 A single-frame estimate of a directional property is worthless
+
+**General, not specific to illumination.** Measuring any direction from one
+frame of an animal returns the animal's **posture**, not the property being
+measured. A single posture puts most of the body at one angle, so samples
+taken perpendicular to the local axis are correlated along the whole body and
+the estimate inherits the shape.
+
+Measured on `41921_cop1367`:
+
+| | azimuth | concentration R |
+|---|---|---|
+| one frame | 146 deg | 0.56 |
+| twenty-five frames | **94 deg** | **0.86** |
+
+A 52 degree error, with a consistency figure high enough to look trustworthy.
+
+**Two requirements follow, and they apply to every directional quantity this
+module computes** — shadow azimuth, flow direction, body orientation, turning
+bias:
+
+1. **Sample across postures.** Pool frames spread through the recording, not a
+   burst, since consecutive frames share a posture too.
+2. **Report concentration alongside angle.** An angle without its resultant
+   length cannot be told from a well-determined one, and **a weak estimate
+   must be visibly weak.** Never emit a bare bearing.
+
+Implemented as `acquisition_probe.measure_shadow_over_frames()`, which pools
+per-frame estimates and returns `consistency` next to `azimuth_deg`.
+
 ### 5.4.2 Bit depth: a 16-bit container holding 8 bits
 
 The TIFFs are `uint16`, which invites the assumption that a conversion to

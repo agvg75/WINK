@@ -325,6 +325,7 @@ class CalciumError(Exception):
 
 
 def check_recording(*, n_frames, probe=None, ratiometric=None, bit_depth=8,
+                    measured_bits=None,
                     typical_signal=None, wants=()):
     """Can this recording support the measurements intended?
 
@@ -370,11 +371,30 @@ def check_recording(*, n_frames, probe=None, ratiometric=None, bit_depth=8,
         out["probe_note"] = spec_probe["note"]
 
     levels = 2 ** int(bit_depth)
+    # THE BIT DEPTH HERE IS DECLARED, and a declared depth is a claim about the
+    # container. Pass `measured_bits` from acquisition_probe.measured_bit_depth()
+    # and the two are cross-examined, because a file can declare 16 and carry 8:
+    # 8-bit data left-shifted into a 16-bit word reaches 65535, so a
+    # maximum-based check sees nothing wrong while only every 128th code
+    # occurs. Found on this lab's own recordings.
+    if measured_bits is not None and float(measured_bits) < int(bit_depth) - 1:
+        out["warnings"].append(
+            f"The file declares {int(bit_depth)}-bit but only about "
+            f"{float(measured_bits):g} bits of it are populated - the codes "
+            f"step in jumps rather than one at a time, which is lower bit "
+            f"depth stored in a wider container. Every check below that uses "
+            f"the declared depth is therefore optimistic, and a ratio "
+            f"computed from these values moves in coarser steps than the "
+            f"declared depth suggests.")
+        out["effective_bit_depth"] = float(measured_bits)
+    effective_bits = (float(measured_bits) if measured_bits is not None
+                      else int(bit_depth))
     # Expressed in BIT DEPTH rather than in a level count. Written first as
     # "levels < 64 * 4", which is 256 - and 8-bit gives exactly 256, so the
     # warning stayed silent on the one case it exists for. Ratiometric calcium
     # wants 12-bit or better; that is the statement, so that is the test.
-    if is_ratio and int(bit_depth) < MIN_RATIOMETRIC_BITS:
+    # Tested against the EFFECTIVE depth where one is supplied.
+    if is_ratio and effective_bits < MIN_RATIOMETRIC_BITS:
         out["warnings"].append(
             f"{bit_depth}-bit data has {levels} grey levels. A ratio of two "
             f"small integers moves in coarse jumps - at an intensity of 3 "

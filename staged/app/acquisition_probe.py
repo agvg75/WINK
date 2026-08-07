@@ -296,6 +296,116 @@ def _compass(angle):
                                         360 - abs(angle - t[0])))[1]
 
 
+# A textureless background is plain agar or liquid. Worms neither pump nor
+# defecate without food, so those readouts were never possible there - which
+# makes substrate a CHEAP ELIGIBILITY GATE rather than a segmentation detail.
+SUBSTRATE_TEXTURE_MIN = 1.8
+
+
+def detect_substrate(gray_frames, *, limit=8):
+    """Lawn or not, from background texture. An eligibility gate, not a hint.
+
+    The reasoning, which is what makes this cheap and reliable:
+
+    * Worms do not pump or defecate without food.
+    * So neither readout occurs on plain agar or in liquid.
+    * Neither of those provides background texture.
+    * The texture foreground rule needs a lawn, and pumping and defecation
+      only happen on a lawn.
+
+    So the rule is available exactly where those readouts exist. There is no
+    coverage gap and no preparation-aware selector is needed.
+
+    The consequence for the schema matters more than the detection: on a
+    textureless background pumping and defecation get **present = null**, not
+    present = false. The recording could not support the observation, so its
+    silence is not evidence about the animal, and it never enters the eligible
+    pool. That is the section 8 distinction, derived from the substrate rather
+    than from looking and failing to find anything.
+    """
+    ratios = []
+    for frame in list(gray_frames)[:limit]:
+        f = np.asarray(frame, dtype=np.float32)
+        span = float(f.max() - f.min())
+        if span < 1:
+            continue
+        f = (f - f.min()) / span * 255.0
+        fine = np.abs(cv2.GaussianBlur(f, (0, 0), 1.0)
+                      - cv2.GaussianBlur(f, (0, 0), 3.0))
+        coarse = np.abs(cv2.GaussianBlur(f, (0, 0), 4.0)
+                        - cv2.GaussianBlur(f, (0, 0), 16.0))
+        # Ratio rather than absolute fine energy, so it does not simply track
+        # overall contrast. A lawn has fine structure everywhere; agar has
+        # broad shading and almost none.
+        ratios.append(float(np.percentile(fine, 75))
+                      / max(float(np.percentile(coarse, 75)), 1e-6) * 100)
+    if not ratios:
+        return None
+    score = float(np.median(ratios))
+    textured = score >= SUBSTRATE_TEXTURE_MIN
+    return {
+        "texture_score": round(score, 2),
+        "threshold": SUBSTRATE_TEXTURE_MIN,
+        "substrate": "lawn" if textured else "textureless",
+        "textured": textured,
+        "supports_feeding_readouts": textured,
+        "note": ("Background carries fine texture, consistent with a bacterial "
+                 "lawn. Pumping and defecation are possible here."
+                 if textured else
+                 "Background is textureless, so this is plain agar or liquid. "
+                 "Worms do not pump or defecate without food, so those "
+                 "readouts were NEVER POSSIBLE in this recording. They must "
+                 "be reported as present = null, not present = false - the "
+                 "recording could not support the observation, and its "
+                 "silence is not evidence about the animal."),
+    }
+
+
+def measured_bit_depth(frames):
+    """Effective bit depth from the QUANTISATION STEP, not from the container.
+
+    A declared bit depth is a claim about the container. What matters for any
+    ratio, threshold or normalisation is how many codes can actually occur.
+
+    Two ways a container lies, and they need different tests:
+
+    * **Low-range**: 12-bit data in a 16-bit word, so nothing exceeds 4095.
+      Detectable from the maximum.
+    * **Left-shifted**: 8-bit data shifted into the top of a 16-bit word, so
+      values DO reach 65535 but only every 128th code occurs. **Invisible to a
+      maximum test** and detectable only from the step between adjacent codes.
+
+    The second case is the one found on this lab's own recordings, and it is
+    the one a max-based check misses.
+
+    Returns levels actually available, the step, and the effective bits.
+    """
+    stack = np.stack([np.asarray(f) for f in frames]) if not isinstance(
+        frames, np.ndarray) else np.asarray(frames)
+    if stack.ndim == 4:
+        stack = stack[..., 0]
+    if stack.ndim == 2:
+        stack = stack[None, ...]
+    full_scale = 65535 if stack.dtype == np.uint16 else 255
+    # Per frame, then pooled by median: across frames the union fills in codes
+    # no single frame contains and the step collapses to 1.
+    steps = []
+    for frame in stack:
+        unique = np.unique(frame)
+        if unique.size > 1:
+            steps.append(int(np.min(np.diff(unique))))
+    step = int(np.median(steps)) if steps else 1
+    available = int((full_scale + 1) // max(step, 1))
+    return {
+        "quantisation_step": step,
+        "levels_available": available,
+        "effective_bits": round(float(np.log2(max(available, 2))), 1),
+        "container_bits": 16 if stack.dtype == np.uint16 else 8,
+        "observed_max": int(stack.max()),
+        "left_shifted": step > 1,
+    }
+
+
 def measure_intensity(raw_frames):
     """Sensor-range findings, in the terms that made a calcium series useless.
 
@@ -311,32 +421,21 @@ def measure_intensity(raw_frames):
     flat = stack.ravel()
     if flat.size > 4_000_000:
         flat = flat[:: flat.size // 4_000_000]
-    unique = np.unique(flat)
-    levels = int(unique.size)
-    # A 16-BIT CONTAINER IS NOT 16 BITS OF DATA. These cameras write 8-bit
-    # values left-shifted into a 16-bit word, so the quantisation step is 128
-    # and only 512 of the 65536 codes can ever occur. Comparing levels against
-    # the container failed a perfectly good recording at 333 of 65536, when
-    # the honest figure was 333 of 512.
-    #
-    # The step must be measured PER FRAME and pooled by median. Taking it
-    # across pooled frames gives 2 instead of 128, because separate frames sit
-    # at slightly different offsets and their union fills in codes that no
-    # single frame contains.
-    steps = []
-    for frame in stack:
-        u = np.unique(frame)
-        if u.size > 1:
-            steps.append(int(np.min(np.diff(u))))
-    step = int(np.median(steps)) if steps else 1
-    available = int((full_scale + 1) // max(step, 1))
+    levels = int(np.unique(flat).size)
+    # Delegated, NOT reimplemented. An earlier version computed the step here
+    # as well as in measured_bit_depth() and the two disagreed - 1560 usable
+    # levels against 512 on the same recording, because they sampled different
+    # frames. Two implementations of one measurement is the same class of
+    # defect this whole audit is about.
+    depth = measured_bit_depth(stack)
     return {
         "dtype": str(dtype),
-        "bit_depth_container": 16 if dtype == np.uint16 else 8,
-        "quantisation_step": step,
-        "bit_depth_effective": round(float(np.log2(max(available, 2))), 1),
+        "bit_depth_container": depth["container_bits"],
+        "quantisation_step": depth["quantisation_step"],
+        "bit_depth_effective": depth["effective_bits"],
+        "left_shifted": depth["left_shifted"],
         "grey_levels_used": levels,
-        "grey_levels_available": available,
+        "grey_levels_available": depth["levels_available"],
         "zero_fraction": round(float((flat == 0).mean()), 4),
         "saturated_fraction": round(float((flat >= full_scale).mean()), 5),
         "mean": round(float(flat.mean()), 2),
@@ -397,8 +496,43 @@ def probe(source, *, sample_frames=40, declared_fps=None, um_per_px=None,
         "focus_laplacian_var": measure_focus(gray[len(gray) // 2]),
         "declared_um_per_px": float(um_per_px) if um_per_px else None,
         "shadow": measure_shadow_over_frames(gray),
+        "substrate": detect_substrate(gray),
+        "bit_depth": measured_bit_depth(raw),
         "disagreements": [],
     }
+
+    # TWO SEGMENTATIONS, REPORTED SIDE BY SIDE RATHER THAN RECONCILED. The
+    # spatial-illumination rule above is the general one; the fine-texture
+    # rule is validated on lawn recordings only. Where both run and disagree,
+    # say so out loud instead of silently preferring one - the texture rule is
+    # not yet tested across the whole population it would become the default
+    # for.
+    texture_len = None
+    found = texture_foreground(gray[len(gray) // 2])
+    if found is not None:
+        worm, _ = found
+        contours, _ = cv2.findContours(worm, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_NONE)
+        if contours:
+            best = max(contours, key=cv2.contourArea)
+            texture_len = _elongated_length_px(cv2.contourArea(best),
+                                               cv2.arcLength(best, True))
+    out["body_length_px_texture"] = (round(texture_len, 1) if texture_len
+                                     else None)
+    out["body_length_method"] = "spatial_illumination"
+    if body_px and texture_len:
+        ratio = max(body_px, texture_len) / max(min(body_px, texture_len), 1e-6)
+        out["body_length_methods_agree"] = ratio <= 1.35
+        if ratio > 1.35:
+            out["segmentation_disagreement"] = (
+                f"The two segmentations disagree about body length: "
+                f"{body_px:.0f} px from the spatial-illumination rule and "
+                f"{texture_len:.0f} px from the fine-texture rule, a factor "
+                f"of {ratio:.2g}. The texture rule is validated on lawn "
+                f"recordings and the illumination rule is the general one; "
+                f"neither is silently preferred here. On a lawn recording "
+                f"trust the texture figure, and confirm by overlaying the "
+                f"mask on the raw pixels before using either.")
 
     # The two claims worth cross-examining, because both have silently
     # corrupted a real result in this lab.

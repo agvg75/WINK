@@ -165,6 +165,18 @@ def main():
     for note in probe["disagreements"]:
         report.add(FAIL, "Declared numbers disagree with the recording", note)
 
+    # ---- two segmentations, kept visible rather than reconciled ----------
+    if probe.get("segmentation_disagreement"):
+        report.add(WARN, "The two segmentations disagree about body length",
+                   probe["segmentation_disagreement"])
+    elif probe.get("body_length_px_texture"):
+        report.add(INFO,
+                   f"Both segmentations agree "
+                   f"({probe['body_length_px']:.0f} px illumination, "
+                   f"{probe['body_length_px_texture']:.0f} px texture)",
+                   f"length reported from the "
+                   f"{probe['body_length_method']} rule")
+
     # ---- per-measurement verdicts ---------------------------------------
     # The check works in pixels per animal; when nothing is calibrated, feed
     # it the scale the measured animal implies so the verdicts rest on the
@@ -214,6 +226,24 @@ def main():
                          f"zero",
                    "A near-empty frame produces enormous ratios from "
                    "quantisation noise divided by a near-zero baseline.")
+    # ---- substrate: an eligibility gate for the feeding readouts ---------
+    sub = probe.get("substrate")
+    if sub is not None:
+        if args.assay in OBLIQUE_REQUIRED and not sub["textured"]:
+            report.add(FAIL,
+                       f"Substrate is {sub['substrate']}, so {args.assay} was "
+                       f"never possible here",
+                       f"texture score {sub['texture_score']:g} against "
+                       f"{sub['threshold']:g}. {sub['note']}")
+        else:
+            report.add(INFO, f"Substrate looks like a {sub['substrate']}",
+                       f"texture score {sub['texture_score']:g}. "
+                       + ("Pumping and defecation are possible here."
+                          if sub["textured"] else
+                          "No food, so no pumping or defecation - which is "
+                          "only a problem if those were the intended "
+                          "readouts."))
+
     # ---- oblique illumination, where the assay requires it ---------------
     if args.assay in OBLIQUE_REQUIRED:
         shadow = probe.get("shadow")
