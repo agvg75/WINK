@@ -18,7 +18,8 @@ sheet says: "A person match narrows but does not identify, since students work
 across lines. A project token match is stronger. A strain match is
 strongest." Exact normalised matches outrank fuzzy ones within each kind.
 
-    1  strain_exact           a strain designation from the Projects sheet
+    1  strain_exact           a strain named in ReagentHub or the Projects sheet
+    2  lab_strain_prefix      AVG/AG/COP/VG naming, but NOT in ReagentHub
     2  project_token_exact    a token from the Projects sheet, whole-word
     3  person_surname_exact   a surname from the People sheet, whole-token
     4  project_token_fuzzy    near-miss on a project token
@@ -122,13 +123,30 @@ YEAR_RANGE = (2000, 2026)
 # 41921 is 19 April 2021 and cop1367 is an allele, and the ONLY thing that
 # separates them is the prefix. A designation matching this is a strain with
 # high confidence; a bare number never is.
-LAB_STRAIN_RE = re.compile(r"^(AG|COP|VG)\d{2,5}$", re.I)
-# Wild type. One digit, so the general letters-then-digits pattern below will
-# not match it, and it is far too common on this drive to miss.
-KNOWN_STRAINS = {"n2"}
-# The general case: letters then digits, e.g. ok1234, e1370, n2. Weaker,
-# because plenty of things are letters followed by digits.
-STRAIN_RE = re.compile(r"^[a-z]{1,4}\d{2,5}$", re.I)
+# AVG is the prefix for strains GENERATED IN THIS LAB. Confirmed against the
+# confocal filenames on the drive: AVG60, AVG63, AVG84, AVG85. It must be
+# listed before AG or a regex alternation would match the AG inside it and
+# leave a stray V; anchoring the whole token avoids that, but the ordering is
+# kept explicit so nobody reorders it into a bug.
+# ONE digit minimum, not two. ReagentHub holds AVG1 and AVG2, and a {2,5}
+# quantifier silently skips them - the two lowest-numbered strains the lab
+# ever made.
+LAB_STRAIN_RE = re.compile(r"^(AVG|AG|COP|VG)\d{1,5}$", re.I)
+# THE STRAIN LIST IS AN AUTHORITY, NOT A PATTERN. Exported from ReagentHub,
+# which holds every strain the lab has. Matching against 249 exact names beats
+# any regex, and the reason is visible in what the old general pattern
+# proposed as strains on this drive:
+#
+#   w1, w2, w3 ... w13   worm replicate numbers
+#   op50                 the bacteria they eat
+#   l4440                an RNAi vector
+#   dys1, pezo1, unc43   gene names
+#
+# None of those is a strain. An exact match against the hub cannot make that
+# class of mistake, so the general letters-then-digits pattern is GONE rather
+# than demoted - it had no residual value once the list existed.
+REAGENTHUB_CSV = Path(__file__).with_name("reagenthub_strains.csv")
+KNOWN_STRAINS = {}       # normalised name -> {"strain", "genotype", "gene_name"}
 BARE_NUMBER_RE = re.compile(r"^\d{4,5}$")
 
 
@@ -163,6 +181,18 @@ def phrase_key(text):
 
 def path_segments(path):
     return [p for p in re.split(r"[\\/]+", str(path)) if p and ":" not in p]
+
+
+def load_strains(csv_path=REAGENTHUB_CSV):
+    """The lab's strain list, exported from ReagentHub."""
+    if not Path(csv_path).exists():
+        return KNOWN_STRAINS
+    with open(csv_path, newline="", encoding="utf-8-sig") as handle:
+        for row in csv.DictReader(handle):
+            name = (row.get("strain") or "").strip()
+            if name:
+                KNOWN_STRAINS[token_key(name)] = row
+    return KNOWN_STRAINS
 
 
 GIVEN_NAMES_CSV = Path(__file__).with_name("given_names.csv")
@@ -528,29 +558,23 @@ def propose_strains(row, segments, projects):
                     scope=scope_of(segments, index)))
             elif key in KNOWN_STRAINS:
                 seen.add(key)
+                hit = KNOWN_STRAINS[key]
+                genotype = (hit.get("genotype") or "").strip()
                 out.append(_proposal(
-                    row, "strain", word.upper(), "lab_strain_prefix", word,
-                    segment, "known strain",
-                    "N2 is the wild-type reference strain; a single digit, so "
-                    "the general letters-then-digits pattern misses it",
+                    row, "strain", hit["strain"], "strain_exact", word,
+                    segment, "ReagentHub",
+                    "exact match against the lab's strain list",
+                    evidence=(f"genotype {genotype[:70]}" if genotype else ""),
                     scope=scope_of(segments, index)))
             elif LAB_STRAIN_RE.match(word):
                 seen.add(key)
                 out.append(_proposal(
                     row, "strain", word.upper(), "lab_strain_prefix", word,
                     segment, "lab designation pattern",
-                    "AG/COP prefix followed by digits - this lab's own strain "
-                    "naming. The prefix is what separates an allele from a "
-                    "date: 41921 is 19 April 2021, cop1367 is an allele",
-                    scope=scope_of(segments, index)))
-            elif STRAIN_RE.match(word):
-                seen.add(key)
-                out.append(_proposal(
-                    row, "strain", word, "path_text", word, segment,
-                    "path text",
-                    "letter-prefixed designation, not this lab's AG/COP "
-                    "pattern and not in any authority table because the "
-                    "Projects strains column is still blank",
+                    "matches this lab's AVG/AG/COP/VG naming but is NOT in "
+                    "ReagentHub - either it is missing from the hub or the "
+                    "designation is wrong. Worth resolving, because every "
+                    "strain the lab has should be in there",
                     scope=scope_of(segments, index)))
     return out
 
@@ -608,6 +632,7 @@ def propose_given_names(row, segments, people_initials):
 
 def run(labels_path, authority_path, out_path):
     people, projects = load_authority(authority_path)
+    load_strains()
     by_key = defaultdict(list)
     for person in people:
         by_key[person["_key"]].append(person)

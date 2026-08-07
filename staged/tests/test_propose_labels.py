@@ -81,8 +81,32 @@ check("...and never proposes a strain",
       "dates and allele numbers are the same shape")
 check("a letter-prefixed designation DOES propose a strain",
       any(p["matched_token"] == "cop1367" for p in strains))
-check("bare digits are refused by the strain pattern",
-      not pl.STRAIN_RE.match("41921") and bool(pl.STRAIN_RE.match("cop1367")))
+check("bare digits are refused by the lab pattern",
+      not pl.LAB_STRAIN_RE.match("41921")
+      and bool(pl.LAB_STRAIN_RE.match("cop1367")))
+check("AVG is recognised, and at ONE digit",
+      bool(pl.LAB_STRAIN_RE.match("AVG1"))
+      and bool(pl.LAB_STRAIN_RE.match("AVG85")),
+      "ReagentHub holds AVG1 and AVG2; a {2,5} quantifier skipped them")
+
+# --- the strain list is an authority, not a pattern ---------------------------
+# The general letters-then-digits pattern was REMOVED, not demoted. On this
+# drive it proposed worm replicate numbers (w1..w13), the bacteria they eat
+# (op50), an RNAi vector (l4440) and gene names (dys1, pezo1) as strains.
+check("there is no general letters-then-digits strain pattern any more",
+      not hasattr(pl, "STRAIN_RE"),
+      "an exact list cannot mistake a worm number for a strain")
+for junk in ("w1", "w13", "op50", "l4440", "dys1", "pezo1", "unc43"):
+    check(f"{junk!r} is not proposed as a strain",
+          not pl.LAB_STRAIN_RE.match(junk) and pl.token_key(junk)
+          not in pl.KNOWN_STRAINS)
+check("the ReagentHub export is present and non-trivial",
+      pl.REAGENTHUB_CSV.exists()
+      and len(pl.load_strains()) > 200,
+      f"{len(pl.load_strains())} strains")
+check("...and it contains the strains seen on the drive",
+      all(pl.token_key(s) in pl.KNOWN_STRAINS
+          for s in ("N2", "JPS518", "BZ33", "LS292", "AVG1", "ZW495")))
 
 # --- the person-shaped folder is filtered ------------------------------------
 by_initial = {}
