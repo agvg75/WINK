@@ -417,9 +417,20 @@ class Reviewer:
 
 def _seed(G, plt):
     from skimage.draw import polygon2mask
-    fig, ax = plt.subplots(figsize=(11, 7)); ax.imshow(G[0], cmap="gray")
+    import display_range
+    fig, ax = plt.subplots(figsize=(11, 7.8))
+    frame = np.asarray(G[0])
+    # BRIGHTNESS AND CONTROL OVER IT, because the outline drawn here sets the
+    # reference length and area that every later frame is accepted against.
+    # At default scaling a mid-grey worm on oblique-lit agar is close to
+    # invisible, and an outline drawn around something unseen produces a
+    # reference no real detection matches.
+    picture = ax.imshow(frame, cmap="gray")
+    fig.subplots_adjust(bottom=0.16)
+    display_range.attach_sliders(fig, picture, frame, plt)
     ax.set_title("STEP 1: click the worm's HEAD (sets which end is anterior)\n"
-                 "right-click = undo,   Enter = confirm")
+                 "right-click = undo,   Enter = confirm\n"
+                 "Use the Black/White sliders below if the worm is hard to see")
     fig.canvas.draw()
     hp = plt.ginput(0, timeout=0)
     if not hp:
@@ -463,6 +474,68 @@ def _parse_frame_range(text, n_frames):
     if e < s:
         s, e = e, s
     return (s - 1, e - 1)
+
+
+class _ProgressWindow:
+    """A window that EXISTS while the computation runs.
+
+    THE BUG THIS FIXES. `_seed` ends with plt.close(fig); tracking then runs
+    for minutes; the review window is not created until afterwards. So the
+    window did not freeze or grey out - it CEASED TO EXIST, and from outside
+    that is indistinguishable from a crash. Students concluded the tool had
+    died and started over, which wastes the whole computation they were
+    waiting on.
+
+    A static "please wait" window would still look hung, so this is driven by
+    a callback from the tracking loops and moves. Matplotlib is single
+    threaded here, so flush_events() is what keeps the window painted while
+    the same thread computes; that is enough for the window to look alive
+    without moving tracking off-thread.
+    """
+
+    def __init__(self, plt, total, title="Tracking"):
+        self.plt = plt
+        self.total = max(int(total), 1)
+        self.fig, self.ax = plt.subplots(figsize=(7.5, 2.4))
+        self.fig.canvas.manager.set_window_title(title)
+        self.ax.set_xlim(0, 1); self.ax.set_ylim(0, 1); self.ax.axis("off")
+        self.bar = self.ax.barh([0.35], [0.0], height=0.28, left=0.02,
+                                color="#3878c0")[0]
+        self.ax.barh([0.35], [0.96], height=0.28, left=0.02,
+                     color="#dddddd", zorder=0)
+        self.text = self.ax.text(0.02, 0.78, "Starting...", fontsize=11)
+        self.note = self.ax.text(
+            0.02, 0.06,
+            "This window stays open while the computation runs. "
+            "It is not frozen - closing it will not stop the analysis.",
+            fontsize=8, color="#666666")
+        self.fig.tight_layout()
+        self._last = -1.0
+        self.fig.canvas.draw()
+        self.plt.pause(0.001)
+
+    def __call__(self, done, total=None, phase=""):
+        total = max(int(total or self.total), 1)
+        fraction = min(max(done / total, 0.0), 1.0)
+        # Repaint on whole percents only. Redrawing every frame on a 9,000
+        # frame recording would cost more than the tracking.
+        if fraction - self._last < 0.01 and done + 1 < total:
+            return
+        self._last = fraction
+        self.bar.set_width(0.96 * fraction)
+        self.text.set_text(f"{phase or 'Working'}: frame {done + 1:,} of "
+                           f"{total:,}   ({fraction * 100:.0f}%)")
+        try:
+            self.fig.canvas.draw_idle()
+            self.fig.canvas.flush_events()
+        except Exception:                                   # noqa: BLE001
+            pass          # a closed window must never take the analysis down
+
+    def close(self):
+        try:
+            self.plt.close(self.fig)
+        except Exception:                                   # noqa: BLE001
+            pass
 
 
 def _inherited_interval(args, n_frames, messagebox=None):
@@ -513,9 +586,15 @@ def _choose_analysis_interval(G, plt):
     from matplotlib.widgets import Slider, Button
     n = int(G.shape[0])
     state = {"start": 0, "end": n - 1, "i": 0, "trimmed": False}
-    fig, ax = plt.subplots(figsize=(11, 7))
-    fig.subplots_adjust(bottom=0.22)
-    im = ax.imshow(np.asarray(G[0]), cmap="gray"); ax.axis("off")
+    import display_range
+    fig, ax = plt.subplots(figsize=(11, 7.6))
+    fig.subplots_adjust(bottom=0.30)
+    first = np.asarray(G[0])
+    im = ax.imshow(first, cmap="gray"); ax.axis("off")
+    # The same brightness control as the seeding screen: choosing where a
+    # recording starts and ends means seeing when the animal enters and
+    # leaves, which default scaling can hide entirely.
+    display_range.attach_sliders(fig, im, first, plt, bottom=0.005)
 
     def redraw():
         frame = np.asarray(G[state["i"]])
@@ -1087,7 +1166,16 @@ def main(argv=None):
         head, outline = _seed(G, plt)
         if head is None:
             messagebox.showerror("Seeding", "Need a head click."); return
-        tr.track_all(head_seed=head, outline_mask=outline);timings.update(tr.timings)
+        # A WINDOW EXISTS FOR THE WHOLE COMPUTATION. The seeding figure was
+        # closed just above and the review figure is not built until below,
+        # so without this there is nothing on screen for minutes.
+        watcher = _ProgressWindow(plt, tr.T, title="Tracking the worm")
+        try:
+            tr.track_all(head_seed=head, outline_mask=outline,
+                         progress=watcher)
+        finally:
+            watcher.close()
+        timings.update(tr.timings)
         save_tracker_session(
             session_path, tr, tool="single_worm_tracker", source=source)
 

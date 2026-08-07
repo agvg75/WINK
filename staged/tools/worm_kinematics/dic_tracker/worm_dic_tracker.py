@@ -463,8 +463,18 @@ class DICWormTracker:
         return st
 
     # ---- full pass ----
-    def track_all(self, head_seed, outline_mask=None):
+    def track_all(self, head_seed, outline_mask=None, progress=None):
+        """`progress(done, total, phase)` is called as frames are processed.
+
+        Optional and defaulted to None so nothing here depends on a UI. It
+        exists because the caller closed its window before this ran and
+        opened the next one after, so a long recording showed NOTHING on
+        screen for minutes - indistinguishable from a crash, and students
+        reasonably concluded the tool had died and started over.
+        """
         phase=time.perf_counter()
+        self._progress = progress if callable(progress) else (
+            lambda done, total, phase="": None)
         """head_seed = (x, y) clicked on the HEAD in frame 1 (sets polarity).
         outline_mask = optional hand outline of the worm in frame 1; if given it
         sets the reference length and area used for trimming and QC.
@@ -486,6 +496,7 @@ class DICWormTracker:
         hint = tuple(head_seed)
         previous_mask = None
         for i in range(self.T):
+            self._progress(i, self.T, "finding the worm")
             if i in self.clip_start_set and i != 0:
                 hint = None
                 previous_mask = None
@@ -607,7 +618,10 @@ class DICWormTracker:
 
     def _run_pass(self, masks, head_seed):
         prev_head = tuple(head_seed); prev_pts = None; gap = 1
+        report = getattr(self, "_progress", None) or (
+            lambda done, total, phase="": None)
         for i in range(self.T):
+            report(i, self.T, "tracing the midline")
             clip_restart = i in self.clip_start_set and i != 0
             if clip_restart:
                 prev_head = None

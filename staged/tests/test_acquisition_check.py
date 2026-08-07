@@ -90,12 +90,61 @@ check("the Nyquist answer for a 4-5 Hz pump rate is explicitly not enough",
       not ac.check(fps=20.0, um_per_px=10.0,
                    wants=("pumping",))["measurements"]["pumping"]["supported"],
       "4 samples x 5 Hz = 20 fps, and a 150 ms pump spans 3 frames there")
-check("clearing the floor with little room warns rather than passing quietly",
-      any("little room" in w for w in
-          ac.check(fps=30.0, um_per_px=10.0, wants=("pumping",))["warnings"]),
-      "undercounting looks like a low pump rate, not like a failure")
-check("a comfortable frame rate raises nothing",
-      ac.check(fps=45.0, um_per_px=10.0, wants=("pumping",))["warnings"] == [])
+# THE COMFORTABLE TIER WAS IMPOSSIBLE AND IS GONE. It read 40 fps (6 frames
+# per 150 ms pump), but every rig in this lab tops out at 30. So the warning
+# it drove fired on EVERY recording the lab can ever make - at 30 fps a pump
+# spans 4.5 frames against a 6-frame threshold - and the acquisition standard
+# told a student to film faster than her camera can. A warning nobody can
+# clear is noise, and noise teaches people to ignore warnings that matter.
+at_ceiling = ac.check(fps=30.0, um_per_px=10.0,
+                      wants=("pumping",))["measurements"]["pumping"]
+check("30 fps counts pumping",
+      at_ceiling["supported"]
+      and at_ceiling["pumping_presence"] == "countable")
+check("...and is flagged as sitting at the camera ceiling",
+      at_ceiling["at_camera_ceiling"]
+      and "faster camera" in at_ceiling["margin_note"],
+      "the only way to gain margin is hardware, not a setting")
+check("...without an unclearable warning attached",
+      not any("comfort" in w.lower() for w in
+              ac.check(fps=30.0, um_per_px=10.0,
+                       wants=("pumping",))["warnings"]),
+      "this warning used to fire on every recording the lab will ever own")
+
+# PRESENT BUT NOT COUNTABLE. Andres scores pumping by eye at 15 fps by
+# catching the direction reversal, which needs two samples in the event
+# rather than four. Between 15 and 30 the pumping is visible and the RATE is
+# not recoverable - and since defecation and crawling are often filmed below
+# 30, this band is expected to be well populated.
+band = ac.check(fps=20.0, um_per_px=10.0,
+                wants=("pumping",))["measurements"]["pumping"]
+check("20 fps is present but not countable",
+      band["pumping_presence"] == "present but not countable")
+check("...which is still not 'supported', because the rate is the readout",
+      not band["supported"])
+check("...and the reason distinguishes seeing from counting",
+      "VISIBLE" in " ".join(band["fails"])
+      and "COUNT" in " ".join(band["fails"]))
+check("below 15 fps pumping is not even present",
+      ac.check(fps=10.0, um_per_px=10.0, wants=("pumping",))
+      ["measurements"]["pumping"].get("pumping_presence") is None)
+
+check("the fix never says 'or faster' at the ceiling",
+      "or faster" not in (band["fix"] or ""),
+      "30 fps IS the maximum; there is nothing above it to reach for")
+
+# A RECOMMENDATION NO RIG CAN MEET MUST SAY SO, which is how the 40 fps tier
+# got into the standard unnoticed in the first place.
+reachable = ac.recommend(wants=("pumping",), gait="crawl")
+check("a reachable recommendation carries no warning",
+      reachable["exceeds_camera"] == ""
+      and reachable["min_fps"] <= reachable["camera_max_fps"])
+unreachable = ac.recommend(wants=("omega_turns",), gait="swim",
+                           undulation_hz=6.0)
+check("a recommendation above the camera maximum says it is impossible",
+      unreachable["min_fps"] > unreachable["camera_max_fps"]
+      and "cannot be acquired here" in unreachable["exceeds_camera"],
+      f"{unreachable['min_fps']:g} fps asked of a 30 fps rig")
 check("the spatial requirement abstains rather than guessing from body length",
       "spatial_unverified" in pump,
       "a pumping recording frames the head, not the animal")

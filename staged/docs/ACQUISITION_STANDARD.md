@@ -47,9 +47,27 @@ line points straight at a row here.
 
 ### Pharyngeal pumping is a different kind of measurement
 
-| You want to measure | Grinder (px) | Floor | Comfortable |
+| You want to measure | Grinder (px) | To score it PRESENT | To COUNT it |
 |---|---|---|---|
-| Pharyngeal pumping rate | 8 | **30 fps** | 40 fps |
+| Pharyngeal pumping rate | 8 | 15 fps | **30 fps** |
+
+**30 fps is also the maximum every camera in this lab can do.** So pumping is
+filmed at the ceiling, with no margin, and there is no "comfortable" setting
+to reach for — a 150 ms pump spans 4.5 frames at 30 fps and that is as good
+as the hardware gets. If you need more margin the answer is a faster camera,
+not a different setting.
+
+An earlier version of this page listed 40 fps as comfortable. **That was
+impossible on our rigs** and the checker warned about it on every recording,
+which is worse than not warning at all.
+
+**Between 15 and 30 fps you can still see pumping, you just cannot count it.**
+Below 30 the pumps merge or fall between frames and the rate comes out too
+low — which does not look like a failure, it looks like a slow worm. So a
+recording in that band is reported as *present but not countable*, and
+because defecation and crawling are often filmed below 30, that category is
+expected to be common. It is a limit of the camera, not a fault in the
+analysis.
 
 **Do not compute this one from the undulation rule.** Everything above is a
 waveform, and four samples per cycle reconstructs it. A pump is not a

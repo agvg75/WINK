@@ -61,11 +61,41 @@ import math
 # fake calcium dose-response.
 PUMP_EVENT_S = 0.15
 PUMP_MIN_FRAMES_PER_EVENT = 4.0
-PUMP_COMFORTABLE_FRAMES_PER_EVENT = 6.0
 # 4 frames / 0.15 s = 26.7, rounded up to a frame rate a camera actually
-# offers. Comfortable is 6 / 0.15 = 40.
+# offers.
 PUMP_MIN_FPS = 30.0
-PUMP_COMFORTABLE_FPS = 40.0
+
+# THERE IS NO COMFORTABLE TIER FOR PUMPING, AND PRETENDING OTHERWISE GAVE
+# ADVICE NOBODY COULD FOLLOW. This used to read
+#
+#     PUMP_COMFORTABLE_FRAMES_PER_EVENT = 6.0
+#     PUMP_COMFORTABLE_FPS = 40.0            # 6 / 0.15
+#
+# which is arithmetically fine and physically impossible: EVERY RIG IN THIS
+# LAB TOPS OUT AT 30 fps (Andres, 7 Aug 2026). So the acquisition standard
+# told Mackenzie to prefer a frame rate her camera cannot reach, and the
+# warning below fired on every recording the lab will ever own - at the 30 fps
+# ceiling a 150 ms pump spans 4.5 frames against a 6-frame "comfort"
+# threshold. A warning that can never be cleared is noise, and noise trains
+# people to ignore warnings that matter.
+#
+# The honest statement is that the countable floor EQUALS the hardware
+# ceiling. Pumping is filmed with zero margin, and the only way to gain any
+# is a faster camera - not a different setting.
+CAMERA_MAX_FPS = 30.0
+
+# BELOW THE COUNTABLE FLOOR, PUMPING IS STILL VISIBLE - just not countable.
+# Andres scores pumping by eye at 15 fps, and what he detects is not the
+# contraction shape but that the grinder moving one way in one frame moves
+# the other way in the next. That needs two samples inside the event, not
+# four: 2 / 0.15 s = 13.3, rounded to a rate cameras offer.
+#
+# So a recording between 15 and 30 fps is PRESENT-BUT-NOT-COUNTABLE. Given
+# defecation and crawling are often filmed below 30, that category is
+# expected to be well populated, and that is an acquisition constraint rather
+# than a failure of any detector.
+PUMP_PRESENT_FRAMES_PER_EVENT = 2.0
+PUMP_PRESENT_FPS = 15.0
 
 # THE SPATIAL FLOOR IS A DIAMETER, NOT AN AXIAL LENGTH. A pump is a
 # contraction ACROSS the bulb, so what has to be resolved is how many pixels
@@ -270,21 +300,40 @@ def check(*, fps, um_per_px, body_length_um=1140.0, wants=(),
         if floor_fps:
             margin = pump_sampling_margin(fps)
             record["frames_per_event"] = round(margin, 2)
-            record["comfortable_frames_per_event"] = \
-                PUMP_COMFORTABLE_FRAMES_PER_EVENT
-            if fps < floor_fps:
+            record["present_fps"] = PUMP_PRESENT_FPS
+            record["camera_max_fps"] = CAMERA_MAX_FPS
+            if fps < PUMP_PRESENT_FPS:
                 fails.append(
                     f"the frame rate is {fps:g} fps against a floor of "
                     f"{floor_fps:g}, so a {PUMP_EVENT_S * 1000:.0f} ms pump "
                     f"spans only {margin:.1f} frames and one falling between "
                     f"frames is missed entirely, not merely attenuated")
-            elif margin < PUMP_COMFORTABLE_FRAMES_PER_EVENT:
-                out["warnings"].append(
-                    f"Pumping clears its {floor_fps:g} fps floor with little "
-                    f"room: {margin:.1f} frames per pump against "
-                    f"{PUMP_COMFORTABLE_FRAMES_PER_EVENT:g} for comfort. "
-                    f"Undercounting here does not look like a failure, it "
-                    f"looks like a low pump rate.")
+            elif fps < floor_fps:
+                # PRESENT BUT NOT COUNTABLE. Enough to see that pumping is
+                # happening, not enough to count pumps without undercounting.
+                # Reported as its own outcome rather than as a failure,
+                # because the recording is fine and the camera is the limit.
+                fails.append(
+                    f"the frame rate is {fps:g} fps, above the "
+                    f"{PUMP_PRESENT_FPS:g} fps at which pumping is still "
+                    f"VISIBLE but below the {floor_fps:g} fps needed to COUNT "
+                    f"it: a {PUMP_EVENT_S * 1000:.0f} ms pump spans "
+                    f"{margin:.1f} frames, so presence can be scored and rate "
+                    f"cannot")
+                record["pumping_presence"] = "present but not countable"
+            elif fps >= floor_fps:
+                # The floor and the hardware ceiling are the same number, so
+                # clearing the floor is as good as this ever gets. Say so
+                # once, as a fact about the rig, rather than warning about a
+                # margin that cannot be improved.
+                record["pumping_presence"] = "countable"
+                record["at_camera_ceiling"] = fps >= CAMERA_MAX_FPS
+                if fps >= CAMERA_MAX_FPS:
+                    record["margin_note"] = (
+                        f"{margin:.1f} frames per pump at the "
+                        f"{CAMERA_MAX_FPS:g} fps camera maximum. This is the "
+                        f"most margin the hardware can give; only a faster "
+                        f"camera would add any.")
         grinder_floor = spec.get("min_grinder_px")
         if grinder_floor:
             if grinder_px is None:
@@ -341,11 +390,16 @@ def _fix(fails, spec, fps, hz, um_per_px, body_um):
         parts.append(
             "and extract spines rather than centroids - see tractability.py, "
             "which decides from a traced frame whether that is possible")
-    if any("floor of" in f and "fps" in f for f in fails):
+    if any(("floor of" in f or "needed to COUNT" in f) and "fps" in f
+           for f in fails):
+        # NOT "or faster". The floor equals the camera maximum, so 30 fps is
+        # the instruction and there is nothing above it to reach for.
         parts.append(
-            f"film at {spec['min_fps']:g} fps or faster (currently {fps:g}) - "
-            f"this floor comes from how long a pump LASTS, not from the pump "
-            f"rate, so do not recompute it from Nyquist")
+            f"film at {spec['min_fps']:g} fps (currently {fps:g}), which is "
+            f"also the camera maximum - this floor comes from how long a pump "
+            f"LASTS, not from the pump rate, so do not recompute it from "
+            f"Nyquist. Below {PUMP_PRESENT_FPS:g} fps pumping cannot even be "
+            f"scored as present")
     if any("grinder" in f for f in fails):
         parts.append(
             f"magnify until the grinder covers {spec['min_grinder_px']}+ px")
@@ -375,8 +429,19 @@ def recommend(*, wants, gait="crawl", body_length_um=1140.0,
     # is taken as a separate maximum rather than folded into the arithmetic.
     event_floor = max((s.get("min_fps") or 0) for s in specs)
     fps = max(fps, event_floor)
+    # A RECOMMENDATION NO RIG CAN MEET MUST SAY SO. Returning a bare number
+    # above the ceiling is how the 40 fps "comfortable" pumping tier came to
+    # sit in the acquisition standard, telling a student to film faster than
+    # her camera can.
+    unreachable = (f"{round(fps, 1):g} fps exceeds the {CAMERA_MAX_FPS:g} fps "
+                   f"maximum of every rig in this lab. This combination of "
+                   f"readouts cannot be acquired here - drop one, film the "
+                   f"slower gait, or use a faster camera."
+                   if fps > CAMERA_MAX_FPS else "")
     return {
         "min_fps": round(fps, 1),
+        "camera_max_fps": CAMERA_MAX_FPS,
+        "exceeds_camera": unreachable,
         # An event-duration readout has no body-length floor - pumping frames
         # the head, not the animal - so there is no scale it implies. None
         # rather than a number, because a 0 here would read as "any scale".
