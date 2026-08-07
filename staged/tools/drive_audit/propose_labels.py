@@ -51,6 +51,9 @@ import xlsx_lite   # noqa: E402
 
 TIERS = {
     "strain_exact": 1,
+    # The empty vector is unambiguous; a gene name needs the vector nearby.
+    "rnai_control": 2,
+    "rnai_gene": 3,
     # A designation matching this lab's own AG/COP pattern. Not yet
     # cross-referenced to a project, but unambiguously a strain.
     "lab_strain_prefix": 2,
@@ -181,6 +184,11 @@ def phrase_key(text):
 
 def path_segments(path):
     return [p for p in re.split(r"[\\/]+", str(path)) if p and ":" not in p]
+
+
+def _parent(row):
+    segments = path_segments(row["path"])
+    return "\\".join(segments[:-1])
 
 
 def load_strains(csv_path=REAGENTHUB_CSV):
@@ -579,6 +587,75 @@ def propose_strains(row, segments, projects):
     return out
 
 
+# RNAi VOCABULARY. A gene name in a folder name is a TREATMENT, not a strain
+# and not an assay: silencing dystrophin is written `dys-1`, and it is paired
+# with `L4440`, the empty vector, as the control.
+#
+# THE WORD "RNAi" IS NOT THE SIGNAL. Measured on this drive: 5 of 551 paths
+# contain it, while `l4440` appears 164 times. The control vector is what marks
+# an RNAi experiment, so the context test is whether a SIBLING folder under the
+# same parent carries L4440 - not whether the word appears.
+VECTOR_RE = re.compile(r"^l4+4*0$", re.I)          # l4440, and the l440/l44440 typos
+GENE_RE = re.compile(r"^[a-z]{3,4}-\d{1,3}$", re.I)
+WORM_NUMBER_RE = re.compile(r"^w\d{1,2}$", re.I)
+
+
+def propose_conditions(row, segments, rnai_context):
+    """The `condition` column: RNAi treatment and its control.
+
+    `rnai_context` says whether L4440 appears anywhere in this folder's
+    sibling set. With it, a gene name is an RNAi treatment. Without it, the
+    same token could equally be a mutant allele, and that ambiguity is
+    reported rather than resolved - a `dys-1` folder is a dystrophin RNAi
+    knockdown or a dys-1 mutant, and the difference matters.
+    """
+    out = []
+    seen = set()
+    for index, segment in enumerate(segments):
+        for word in re.split(r"[^A-Za-z0-9-]+", segment):
+            key = token_key(word)
+            if not key or key in seen:
+                continue
+            if VECTOR_RE.match(word):
+                seen.add(key)
+                exact = word.lower() == "l4440"
+                out.append(_proposal(
+                    row, "condition", "L4440 (empty RNAi vector, control)",
+                    "rnai_control", word, segment, "RNAi vocabulary",
+                    "the empty vector control for an RNAi experiment"
+                    + ("" if exact else
+                       f" - spelled {word!r} here, which is a typo for L4440"),
+                    scope=scope_of(segments, index)))
+            elif GENE_RE.match(word) and not LAB_STRAIN_RE.match(word):
+                seen.add(key)
+                gene = word.lower()
+                if rnai_context:
+                    out.append(_proposal(
+                        row, "condition", f"{gene} RNAi", "rnai_gene", word,
+                        segment, "RNAi vocabulary",
+                        "gene name in a folder set that also contains L4440, "
+                        "so this is a knockdown rather than a mutant",
+                        scope=scope_of(segments, index)))
+                else:
+                    out.append(_proposal(
+                        row, "condition", gene, "path_text", word, segment,
+                        "path text",
+                        "gene name with no L4440 anywhere in the sibling set",
+                        ambiguity=(f"{gene} could be an RNAi knockdown or a "
+                                   f"{gene} mutant strain - nothing here "
+                                   f"distinguishes them"),
+                        scope=scope_of(segments, index)))
+            elif WORM_NUMBER_RE.match(word):
+                seen.add(key)
+                out.append(_proposal(
+                    row, "note", f"worm {word[1:]}", "path_text", word,
+                    segment, "path text",
+                    "worm number, a replicate identifier - recorded so it is "
+                    "not read as a strain",
+                    scope=scope_of(segments, index)))
+    return out
+
+
 def propose_given_names(row, segments, people_initials):
     """The person-shaped folder, which on this drive holds a FIRST name.
 
@@ -648,6 +725,16 @@ def run(labels_path, authority_path, out_path):
             f"{labels_path} does not look like the label CSV: it needs a "
             f"'path' column.")
 
+    # An RNAi experiment is marked by its control vector, not by the word
+    # "RNAi" - which appears in 5 of 551 paths while L4440 appears in 164.
+    # A gene name is a knockdown if any SIBLING folder carries the vector.
+    rnai_parents = {}
+    for row in rows:
+        parent = _parent(row)
+        if any(VECTOR_RE.match(w) for seg in path_segments(row["path"])
+               for w in re.split(r"[^A-Za-z0-9-]+", seg) if w):
+            rnai_parents[parent] = True
+
     proposals = []
     for row in rows:
         segments = path_segments(row["path"])
@@ -663,6 +750,8 @@ def run(labels_path, authority_path, out_path):
         proposals += propose_people(row, segments, people, by_key, context)
         proposals += year_proposals
         proposals += propose_strains(row, segments, projects)
+        proposals += propose_conditions(row, segments,
+                                        rnai_parents.get(_parent(row), False))
         proposals += propose_given_names(row, segments, by_initial)
 
     # Scope outranks tier within a folder: a fuzzy hit on the folder being
@@ -694,7 +783,7 @@ def report(rows, proposals, out_path):
         covered[p["field"]].add(p["path"])
 
     print(f"{'field':10} {'folders covered':>16}  {'proposals':>10}  tiers")
-    for field in ("assay", "person", "year", "strain"):
+    for field in ("assay", "person", "year", "strain", "condition", "note"):
         items = by_field.get(field, [])
         tiers = Counter(p["confidence"] for p in items)
         share = len(covered[field]) / len(rows) * 100 if rows else 0
@@ -707,7 +796,7 @@ def report(rows, proposals, out_path):
     # is the thing that made the first pass look like 94% coverage.
     print(f"\n{'field':10} {'on the folder':>14}  {'inherited':>10}  "
           f"{'distinct facts':>15}")
-    for field in ("assay", "person", "year", "strain"):
+    for field in ("assay", "person", "year", "strain", "condition", "note"):
         items = by_field.get(field, [])
         own = [p for p in items if p["scope_rank"] == 0]
         inherited = [p for p in items if p["scope_rank"] > 0]

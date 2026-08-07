@@ -1,0 +1,7 @@
+strain,genotype,description,source,made_by,reference,drive_folders,drive_files,drive_gb,drive_years,needs_before_entry
+COP1367,pezo-1(cop1367),pezo-1 CRISPR mutant,Vazquez lab,Vazquez lab,G3 pezo-1 paper,1,107976,170.0,2021,"allele designation inferred from the COP strain-naming convention - confirm against the G3 paper before entry"
+COP1553,pezo-1(cop1553),pezo-1 CRISPR mutant,Vazquez lab,Vazquez lab,G3 pezo-1 paper,1,10718,16.9,2021,"allele designation inferred from the COP strain-naming convention - confirm against the G3 paper before entry"
+AG405,,pezo-1 mutant,Andy Golden lab,Golden lab,G3 pezo-1 paper,1,65794,103.6,2021,"allele designation not known - take it from the G3 paper"
+AG406,,pezo-1 mutant,Andy Golden lab,Golden lab,G3 pezo-1 paper,1,7041,11.1,2021,"allele designation not known - take it from the G3 paper"
+AVG6,"dys-1(eg33) I.; Pmyo-3::GCaMP2",body-wall GCaMP2 in the dystrophic BZ33 background,this lab,AVG,,101,43253,68.3,2020-2021,"genotype composed from the stated BZ33 background - BZ33 is dys-1(eg33) I. in the hub. Sibling of AVG27, which is already entered as hDMD_Ce R04B5.5::hDMD::unc-54, dys-1(eg33), myo-3::GCaMP2"
+VG02,,full deletion of dys-1 using two CRISPR cut sites flanking the gene,this lab,AVG,,1,789,1.2,2025,"allele designation not recorded - a full-deletion allele should get one. Most recent of the six, so entry lapsed recently rather than only historically"
