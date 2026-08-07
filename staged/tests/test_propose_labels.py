@@ -121,14 +121,20 @@ check("two genuinely different people do NOT collapse",
 check("...and are flagged as unresolved",
       "different people" in p["ambiguity"])
 
-# --- the Owoyemi row must not assert twins -----------------------------------
+# --- the Owoyemi row, now evidenced rather than inferred ---------------------
+# HISTORY THIS TEST EXISTS TO PRESERVE. The claim "Owoyemi T and K are twins"
+# was first made from two initials in poster lists, withdrawn to UNCONFIRMED
+# because that is an inference and not knowledge, and only then confirmed by
+# the lab roster listing both as separate undergraduates. The guess turned out
+# right. Refusing it until a document said so was still correct, because the
+# identical guess about Gomez L and M would have been wrong.
 note = pl.AMBIGUITY_NOTES["owoyemi"]
-check("the Owoyemi note records the site's single Taiyelolu",
+check("the Owoyemi note names both people", "Kehinde" in note and
       "Taiyelolu" in note)
-check("...and does NOT assert twins",
-      "twin" not in note.lower() and "Kehinde" not in note,
-      "that was an inference from two initials, not knowledge")
-check("...marking the second row unconfirmed", "UNCONFIRMED" in note)
+check("...and says they are separate", "two" in note.lower())
+check("...citing the roster rather than an inference", "roster" in note.lower())
+check("...spelled Taiyelolu, not the Taylelu first guessed",
+      "Taylelu" not in note)
 
 # --- the input is never written to -------------------------------------------
 tmp = Path(tempfile.mkdtemp(prefix="wink_props_"))

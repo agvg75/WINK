@@ -74,16 +74,18 @@ AMBIGUITY_NOTES = {
     "gomez": "Gomez L and Gomez M are different people.",
     "hughes": "Hughes K and Hughes-Wiles K are the same person.",
     "hugheswiles": "Hughes K and Hughes-Wiles K are the same person.",
-    # NOT recorded as twins. An earlier draft encoded Owoyemi T and K as
-    # Taylelu and Kehinde, twin brother and sister. That was an inference
-    # from two initials appearing in poster lists, not knowledge, and
-    # encoding it would have manufactured two confident people out of one
-    # observation. The lab people page lists exactly one Owoyemi, Taiyelolu.
-    # The second row is flagged for a human to confirm or delete.
-    "owoyemi": ("The lab people page lists one Owoyemi (Taiyelolu, matched "
-                "to Owoyemi T). Whether Owoyemi K is a separate person or a "
-                "duplicate row is UNCONFIRMED - do not treat either reading "
-                "as established."),
+    # TWO PEOPLE, AND THE ROUTE TO THAT MATTERS MORE THAN THE ANSWER.
+    # An early draft encoded Owoyemi T and K as twins on the strength of two
+    # initials appearing in poster lists. That was an inference presented as
+    # knowledge, and it was pulled back to UNCONFIRMED rather than encoded.
+    # The lab roster then listed Kehinde Owoyemi and Taiyelolu Owoyemi as
+    # separate undergraduates, each with two abstracts and an LSAMP poster
+    # award, which is evidence. The original guess happened to be right; it
+    # was still right to refuse it until a document said so, because the
+    # identical guess about Gomez L and M would have been wrong.
+    # Note the spelling: Taiyelolu, not Taylelu.
+    "owoyemi": ("Owoyemi K (Kehinde) and Owoyemi T (Taiyelolu) are two "
+                "separate people, listed individually on the lab roster."),
 }
 # Filled from given_names.csv at load time: normalised given name -> the
 # authority person it identifies. The drive is organised by given name and
@@ -191,6 +193,19 @@ def load_given_names(people, csv_path=GIVEN_NAMES_CSV):
         person["_given_note"] = note
         if given:
             GIVEN_NAMES.setdefault(token_key(given), []).append(person)
+        # NICKNAMES ARE NOT A NICETY HERE. The drive is organised by what
+        # people are actually called, not by what a roster records. A folder
+        # named `\Danny\` belongs to Damiano Marchiafava and matches nothing
+        # without this. Indexed alongside the formal given name so either
+        # spelling of a person resolves to the same row.
+        nickname = str(person.get("nickname", "")).strip()
+        if not nickname:
+            hit = seeded.get((token_key(person["surname"]),
+                              str(person.get("initials", "")).strip().upper()))
+            nickname = (hit or {}).get("nickname", "").strip()
+        person["_nickname"] = nickname
+        if nickname:
+            GIVEN_NAMES.setdefault(token_key(nickname), []).append(person)
     return people
 
 
