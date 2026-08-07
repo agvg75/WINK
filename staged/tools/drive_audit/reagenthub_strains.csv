@@ -1,5 +1,7 @@
 strain,genotype,gene_name
 AA776,cyp-44A1(ok216) II.,
+AG405,pezo-1(av143) IV.,pezo-1
+AG406,pezo-1(av144) IV.,pezo-1
 AML1,zfls18: zfls42,
 AML14,wtfEx4,
 AQ866,ser-4(ok512) III.,
@@ -27,6 +29,7 @@ AVG27,"hDMD_Ce R04B5.5::hDMD::unc-54, dys-1(eg33), myo-3::GCaMP2",
 AVG28,,
 AVG29,,
 AVG3,"uyEx1[Ppam-1a1::GFP, Pmyo-2::mCherry]",
+AVG6,dys-1(eg33) I.; Pmyo-3::GCaMP2,dys-1
 BA1,,
 BA24,fer-1(hc24) I.,
 BC12384,,
@@ -51,6 +54,9 @@ CB7272,ccIs4251 I; mIs12 II; dpy-17(e164) III; frIs7 IV; uIs69 V.,
 CB928,unc-31(e928) IV.,
 CB929,,
 CF1038,daf-16(mu86) I.,
+COP1367,pezo-1(knu384),pezo-1
+COP1524,pezo-1(knu490) IV.,pezo-1
+COP1553,pezo-1(knu508) IV.,pezo-1
 CX10,,
 CX3260,,
 CX4,odr-7(ky4) X.,
@@ -240,6 +246,7 @@ VC224,,
 VC240,,
 VC769,+/szT1 [lon-2(e678)] I; ifa-1(ok1257)/szT1 X.,
 VC969,,
+VG02,,dys-1
 VM4888,,
 VP303,rde-1(ne219) V; kbIs7.,
 WM118,rde-1(ne300) V; neIs9 X.,
