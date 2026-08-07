@@ -575,6 +575,14 @@ def propose_strains(row, segments, projects, rnai_context=False):
                     ("the background this RNAi was performed on"
                      if rnai_context else
                      "exact match against the lab's strain list"),
+                    # THE SUPPRESSOR FLAG MUST LIVE ON BOTH BRANCHES. It was
+                    # only on the lab-prefix branch, so entering AVG6 into
+                    # ReagentHub moved it here and silently removed the flag
+                    # from all 101 of its folders - a data change quietly
+                    # deleting a finding. Caught by a test, not by reading.
+                    ambiguity=("RNAi on a non-N2 background is a suppressor "
+                               "screen rather than a straight knockdown"
+                               if rnai_context and key != "n2" else ""),
                     evidence=(f"genotype {genotype[:70]}" if genotype else ""),
                     scope=scope_of(segments, index)))
             elif LAB_STRAIN_RE.match(word):
