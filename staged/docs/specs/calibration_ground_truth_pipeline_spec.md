@@ -1,7 +1,7 @@
 # WINK: Calibration and Ground Truth Pipeline
-## Build specification for Codex
+## Build specification
 
-Status: draft, ready for Codex review pass
+Status: draft for review
 Author: Andres (Vidal Gadea Lab), drafted with Claude
 Depends on: existing per module correction logs (append only JSONL, sarcomere peaks and planned flattening/boundary corrections), the batch audit log (see WINK_batch_audit_module_SPEC.md), and legacy human scored datasets that predate the modules entirely
 
@@ -142,7 +142,7 @@ A dataset ledger recording every legacy dataset, which modules have consumed it,
 
 ---
 
-## 8. Open questions for Andres before Codex starts
+## 8. Open questions for Andres before the build starts
 
 Which legacy datasets exist in a recoverable, machine readable form right now, versus which exist only as lab notebook or spreadsheet records that would need transcription. This determines whether intake is an adapter writing task or partly a data recovery task, and the estimate changes a lot between those.
 

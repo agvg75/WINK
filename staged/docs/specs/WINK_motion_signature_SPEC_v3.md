@@ -1,6 +1,6 @@
 # Motion signature classifier: detecting muscle-group activity from pixel motion
 
-Status: **RECONSTRUCTED** — draft for Codex review, revision 3
+Status: **RECONSTRUCTED** — draft for review, revision 3
 Date: 6 August 2026
 Companion to: `WINK_grant_plan_SPEC.md` (sections 3.1, 3.3, 5.1)
 Supersedes: revisions 1 and 2

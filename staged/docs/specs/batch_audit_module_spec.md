@@ -1,7 +1,7 @@
 # WINK: Batch Audit Module
-## Build specification for Codex
+## Build specification
 
-Status: draft, ready for Codex review pass
+Status: draft for review
 Author: Andres (Vidal Gadea Lab), drafted with Claude
 Depends on: an existing per item confidence signal in the calling module (the abstain gate pattern already built in `gcamp_recoverable.py` is the reference implementation), the Sample planner's statistical core (Welch / Mann-Whitney / Shapiro-Wilk / Levene fork already validated against SciPy)
 
@@ -134,7 +134,7 @@ Reuse the existing contact sheet pagination UI pattern from the GCaMP triage too
 
 ---
 
-## 11. Open questions for Andres before Codex starts
+## 11. Open questions for Andres before the build starts
 
 Default AQL per module category. A single dataset wide default (5 percent suggested above) is a placeholder, the riskier modules in section 9 probably warrant a stricter default, worth deciding module by module rather than accepting one number everywhere.
 

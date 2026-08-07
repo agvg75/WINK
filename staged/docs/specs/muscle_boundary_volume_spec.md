@@ -1,5 +1,5 @@
 # WINK: Muscle Boundary and Volume
-## Build specification for Codex
+## Build specification
 
 Phase 2 of `confocal_stack_and_neurite_tracer_spec.md`. That document assumed
 this module would be Napari-based and framed the work as rewiring an existing

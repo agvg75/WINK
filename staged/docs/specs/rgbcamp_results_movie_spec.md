@@ -1,5 +1,5 @@
 # WINK: Synchronized Results Movie (RGBCaMP)
-## Build specification for Codex
+## Build specification
 
 Status: draft for review. Not yet placed in `docs/specs/`.
 
@@ -408,7 +408,7 @@ Beside the CSV, sharing its base name:
 
 ---
 
-## 13. Open questions for Andres before Codex starts
+## 13. Open questions for Andres before the build starts
 
 1. ~~Normalisation default~~ — resolved: per-recording, selectable at render
    time (§4.3, §9).

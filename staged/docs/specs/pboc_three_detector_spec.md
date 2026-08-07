@@ -1,5 +1,5 @@
 # WINK: pBoc Detection on Three Independent Axes
-## Build specification for Codex
+## Build specification
 
 Changes `tools/defecation/pboc_engine.py`. No existing measurement formula is
 replaced; the current detector becomes one of three and keeps its behaviour.
@@ -460,7 +460,7 @@ manual annotations.
 
 ---
 
-## 12. Open questions for Andres before Codex starts
+## 12. Open questions for Andres before the build starts
 
 1. **Minimum usable fraction** — what is it, and is it per recording or per
    animal? Must be fixed before any run (§7.1).

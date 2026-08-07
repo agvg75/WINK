@@ -1,7 +1,7 @@
 # WINK: Confocal Stack Support and 3D Neurite Tracing
-## Build specification for Codex
+## Build specification
 
-Status: draft, ready for Codex review pass
+Status: draft for review
 Author: Andres (Vidal Gadea Lab), drafted with Claude
 Depends on: existing WINK Python stack (numpy, scipy, scikit image, opencv, tifffile, matplotlib, tkinter), planned Napari dependency for the volume module
 
@@ -223,9 +223,9 @@ them wastes time:
 
 ---
 
-## 6. Open questions for Andres before Codex starts
+## 6. Open questions for Andres before the build starts
 
-Should the confocal loader also become the standard entry point for the RGBCaMP pipeline's multichannel input, or does that stay on its current Fiji extractor path for now? Not required for this phase, worth deciding before Codex builds something that only half generalizes.
+Should the confocal loader also become the standard entry point for the RGBCaMP pipeline's multichannel input, or does that stay on its current Fiji extractor path for now? Not required for this phase, worth deciding before building something that only half generalizes.
 
 Radius estimation for the neurite tracer: is a simple thresholded cross section acceptable for version one, or is physical radius accuracy important enough from the start to warrant the fuller circular cross section fit up front?
 

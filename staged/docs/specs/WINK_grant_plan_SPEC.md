@@ -1,6 +1,6 @@
 # Claude Science cohort: execution plan and measurement model
 
-Status: draft for Codex review
+Status: draft for review
 Date: 6 August 2026
 Project: A whole-animal platform for tissue-specific muscular dystrophy phenotyping
 Funded period: 1 September to 1 December 2026
