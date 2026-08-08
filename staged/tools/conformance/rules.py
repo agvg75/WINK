@@ -72,7 +72,13 @@ RULES = [
             r"derived", r"derivation", r"measured", r"because",
             r"UNDERIVED", r"set from", r"per spec", r"spec \d",
             # alpha blends and colour weights are not thresholds
-            r"rgb", r"alpha", r"blend", r"overlay"),
+            r"rgb", r"alpha", r"blend", r"overlay",
+            # TEXT THAT WARNS ABOUT A CONSTANT IS NOT THE CONSTANT.
+            # The provisional-results notice in population_swimming
+            # quotes the very gates it warns about, and the scanner
+            # duly flagged the warning as the violation.
+            r"notice", r"warning", r"defect", r"provisional",
+            r"showwarning", r"do not adapt"),
         "files": ["app/*.py", "tools/**/*.py"],
     },
     {
@@ -322,3 +328,56 @@ ANCHOR_PROTOCOL = (
     "changed. If the result diverges, that is a finding about the pipeline "
     "or about the paper, and it is investigated as one - not closed by "
     "adjusting a parameter until the numbers agree.")
+
+
+# ------------------------------------------------------------- lore -----
+# Incidents worth keeping that are not themselves patterns. A rule catches a
+# shape in the code; these are shapes in how the work goes wrong.
+LORE = [
+    {
+        "id": "act-before-verify",
+        "date": "2026-08-07",
+        "what": (
+            "A scanner finding was acted on as an instruction before the "
+            "source was read. The scanner flagged 0.45 px/um and 495 px in "
+            "acquisition_check.py, a fix was ordered - make the grinder "
+            "constants micrometre-based and gate them on a calibrated scale - "
+            "and only the verification step revealed that the constants never "
+            "depended on those numbers at all. They come from anatomy: a 33 um "
+            "bulb on an 1100 um adult. The retracted figures appeared solely "
+            "in an illustrative comment."),
+        "cost_if_unchecked": (
+            "The ordered fix would have routed pumping eligibility through "
+            "um_per_px, which is unset for most of this archive, and reported "
+            "'unavailable' for nearly every recording - a regression, to fix "
+            "a defect that was in the prose."),
+        "what_caught_it": (
+            "The spot-verify-before-acting step. It was in the instruction "
+            "and it earned its place on its first use."),
+        "rule_or_not": (
+            "NOT MECHANIZABLE as a pattern. A scanner cannot tell an "
+            "illustration from a dependency; only reading can. The mechanism "
+            "is the verification step itself, which is now standing practice: "
+            "spot-verify every finding against source before acting, "
+            "especially while the scanner is young."),
+    },
+    {
+        "id": "generation-as-propagation-vector",
+        "date": "2026-08-07",
+        "what": (
+            "The literal 1.60 appears in the tracker's identity band, the "
+            "basal slowing gates, and defecation_feasibility. It was not "
+            "copied by hand between them: the same model re-emitted it "
+            "independently in three places."),
+        "cost_if_unchecked": (
+            "A constant spreads through a codebase with no edit that a review "
+            "would catch, because there is no copy-paste to notice and each "
+            "site looks locally reasonable."),
+        "what_caught_it": "the conformance scanner's underived-constant rule",
+        "rule_or_not": (
+            "RULE, already present - underived-constant catches the literal "
+            "wherever it lands. What is new is knowing the vector, which is "
+            "why cross-module literal agreement is worth treating as evidence "
+            "rather than coincidence."),
+    },
+]

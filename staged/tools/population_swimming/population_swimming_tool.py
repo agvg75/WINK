@@ -90,6 +90,38 @@ class App(CockpitApp):
         self._build_controls();self._build_center()
         # Callback-exception reporting is inherited from CockpitApp.
         self.status.trace_add("write",lambda *_:self.set_status(self.status.get()));self.set_status(self.status.get())
+        self._provisional_notice()
+
+    def _provisional_notice(self):
+        """Say, on launch, that the area gates here are known to be wrong.
+
+        NO LOGIC IS CHANGED BY THIS. The gates stay as they are because the
+        fix is blocked on a repro corpus that does not exist yet, and the
+        propagation protocol forbids porting basal slowing's calibrated
+        version without first reproducing the failure here.
+
+        But this tool is reachable from the Hub with status 'ready', and a
+        student running it today gets numbers whose defect is documented in a
+        waiver they will never read. Saying it on launch is the least that
+        can be done without touching the arithmetic.
+        """
+        from tkinter import messagebox
+        messagebox.showwarning(
+            "Provisional results - known gate defect",
+            "This tool's object-size gates are FIXED PIXEL COUNTS "
+            "(min_area=40, max_area=2500, max_link_px=60) and do not adapt "
+            "to the recording's scale.\n\n"
+            "They only admit an adult worm between roughly 10 and 20 um/px. "
+            "On a 4K plate recording at about 2.5 um/px a worm covers around "
+            "14,720 px against a 2,500 px ceiling, so EVERY ANIMAL IS "
+            "REJECTED and only debris that happens to fall inside the band "
+            "is tracked.\n\n"
+            "The tool does not fail in that case - it returns tracks of the "
+            "wrong objects. Check the overlay before trusting any count.\n\n"
+            "Basal slowing had the same defect and now derives its gates from "
+            "the recording. Porting that fix here is blocked until the "
+            "failure can be reproduced on this tool directly.",
+            parent=self)
 
     def _build_controls(self):
         # Two control pages in the one cockpit panel: the setup form, and the

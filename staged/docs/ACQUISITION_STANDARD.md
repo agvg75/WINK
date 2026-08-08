@@ -194,3 +194,42 @@ animals per plate.
 *Requirements come from `app/acquisition_check.py`; per-assay profiles from
 `app/acquisition_advisor.py`. If a tool's needs change, they change there and
 this table follows.*
+
+
+---
+
+## Turn on per-frame timestamps, if your camera has them
+
+**This costs nothing at capture and settles a question that cannot be
+answered afterwards.**
+
+Most scientific cameras can stamp each frame with the time it was actually
+taken — Basler calls it a hardware timestamp, and it goes into the file with
+the image. When that is on, a recording **tells you its own frame rate**, and
+nobody has to remember, type, or infer one.
+
+When it is off, the frame rate has to be recovered from whatever is left:
+
+| what survives | how good it is |
+|---|---|
+| a per-frame timestamp | **exact.** Also shows dropped frames |
+| a number written in a notebook | fine, if the notebook is found |
+| file modification times | a proposal. Some copy operations rewrite them |
+| nothing | absolute-time measures are unsupported. Not approximated — unsupported |
+
+Measured on Naga's Basler series: 3,676 frames with no embedded timestamps,
+so the interval had to be estimated from file mtimes at 33.0 ms. That
+estimate is good — it agrees end to end across 121 s — but it is an estimate,
+and it would not have survived a copy that rewrote the mtimes.
+
+**Why it matters beyond convenience.** With per-frame timestamps, a decay
+constant or a time-to-peak is fitted against **when the frames actually
+happened** rather than frame index times a nominal interval. Those two agree
+until a frame is dropped, and then they disagree silently — the fit shifts and
+nothing looks wrong. A recording with a dropped frame and no timestamps
+reports a decay that is simply a little fast.
+
+Irregular frame timing is then reported as an **acquisition finding**, naming
+the frame and the size of the gap, rather than averaged into an interval.
+
+**One switch, once per rig. Future data then describes itself.**

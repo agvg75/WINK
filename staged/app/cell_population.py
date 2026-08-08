@@ -297,3 +297,73 @@ CORRECTION_PROVENANCE = (
     "human_merged",       # two proposals covering one cell
     "human_reshaped",     # boundary corrected, identity unchanged
 )
+
+
+# ------------------------------------------------------- the time base --
+# A PER-FRAME ACQUISITION TIMESTAMP AUTO-ESTABLISHES THE TIME BASE. No user
+# declaration, because there is nothing for a person to add: the camera wrote
+# when each frame was taken, and that is better evidence than anything anyone
+# could type. The SOURCE is recorded so a reader can tell which kind of time
+# base a result rests on.
+#
+# The hierarchy, strongest first:
+#
+#   per_frame_timestamp   embedded at capture, in tags or filenames. Times
+#                         come from the timestamps THEMSELVES, never from
+#                         index x interval - see actual_times below.
+#   declared_interval     a person stated it and accepted responsibility
+#   mtime_estimate        derived from file modification times. PROPOSAL
+#                         ONLY, confirmed by a person, because mtimes survive
+#                         some copy operations and not others.
+#   none                  absolute-time measures stay unsupported
+TIME_BASE_SOURCES = ("per_frame_timestamp", "declared_interval",
+                     "mtime_estimate", "none")
+
+# Beyond this, the frame clock is not regular enough to be described by a
+# single interval, and the deviation is reported as an ACQUISITION FINDING
+# rather than averaged away. Stated here so the number is arguable: 5% of the
+# nominal interval is well inside what a dropped frame produces (100%) and
+# well outside ordinary scheduling jitter on these rigs (measured under 1% on
+# Naga's Basler series, 33.0 ms nominal).
+FRAME_JITTER_TOLERANCE = 0.05
+
+
+def time_base(timestamps=None, declared_interval_s=None,
+              mtime_estimate_s=None):
+    """Which clock a recording has, and how far it can be trusted.
+
+    Returns (source, times_or_interval, note). A caller with
+    `per_frame_timestamp` must use the returned array in any time-dependent
+    fit - decay tau, time to peak - rather than multiplying an index by a
+    nominal interval. Where frames are dropped those two disagree, and the
+    fit is the thing that shows it.
+    """
+    if timestamps is not None and len(timestamps) > 1:
+        times = np.asarray(timestamps, dtype=float)
+        gaps = np.diff(times)
+        nominal = float(np.median(gaps))
+        worst = float(np.max(np.abs(gaps - nominal)) / max(nominal, 1e-12))
+        note = ""
+        if worst > FRAME_JITTER_TOLERANCE:
+            # A FINDING, not a correction. Something interrupted the
+            # acquisition, and the honest response is to say where.
+            index = int(np.argmax(np.abs(gaps - nominal)))
+            note = (f"Frame clock is not regular: the largest interval "
+                    f"differs from the median by {worst * 100:.0f}% at frame "
+                    f"{index} ({gaps[index] * 1000:.1f} ms against "
+                    f"{nominal * 1000:.1f} ms). Times below come from the "
+                    f"timestamps themselves, so fits are unaffected - but a "
+                    f"gap this size usually means dropped frames, and event "
+                    f"COUNTS across it are undercounts.")
+        return "per_frame_timestamp", times, note
+    if declared_interval_s:
+        return "declared_interval", float(declared_interval_s), ""
+    if mtime_estimate_s:
+        return "mtime_estimate", float(mtime_estimate_s), (
+            "Estimated from file modification times and NOT yet accepted. "
+            "mtimes survive some copy operations and not others, so this is "
+            "a proposal for a person to confirm.")
+    return "none", None, (
+        "No time base. Absolute-time measures - time to peak, decay tau, "
+        "FWHM, event frequency - stay unsupported rather than being computed "
+        "against an assumed rate.")

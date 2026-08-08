@@ -103,11 +103,18 @@ PUMP_PRESENT_FPS = 15.0
 # giving 25 px on a 500 px animal - measures the wrong axis and overestimates
 # detectability roughly twofold.
 #
-# Worked on the pezo-1 CRISPR set: at about 0.45 px/um from an 1100 um day 1
-# adult, the terminal bulb is 14-16 px across. That is above the floor and
-# well below comfortable, so those recordings should land in MARGINAL and be
-# routed to human review rather than passing silently. The marginal category
-# is expected to be populated; it is not a rounding error to be tidied away.
+# A recording whose bulb lands between the floor and comfortable belongs in
+# MARGINAL and should be routed to human review rather than passing silently.
+# The marginal category is expected to be populated; it is not a rounding
+# error to be tidied away.
+#
+# THE WORKED EXAMPLE THAT USED TO SIT HERE HAS BEEN DELETED. It read "at
+# about 0.45 px/um from an 1100 um day 1 adult, the terminal bulb is 14-16 px
+# across" - and 0.45 px/um was RETRACTED on 6 Aug 2026, having come from a
+# 495 px body length that was itself the median of a frame containing two
+# animals. The constants below never depended on it: they come from anatomy,
+# a 33 um bulb on an 1100 um adult. Only the illustration was stale, and an
+# illustration in retracted units teaches the retracted number.
 GRINDER_MIN_PX = 10
 GRINDER_COMFORTABLE_PX = 25
 # The fraction the pixel floors above are derived FROM. Motion signature spec
@@ -125,8 +132,16 @@ def grinder_px_for(body_length_px,
     """Bulb DIAMETER in pixels implied by a measured body length.
 
     The spec forbids pixel thresholds precisely so this conversion happens per
-    recording. On the development set a 495 px animal gives about 15 px, which
-    is marginal - above GRINDER_MIN_PX and below GRINDER_COMFORTABLE_PX.
+    recording, from a body length MEASURED in that recording - which is also
+    why this takes body length in pixels rather than a micrometre scale.
+    Magnification metadata across this archive is unreliable, and spec 6.1
+    chose body-length fractions to avoid depending on it.
+
+    (An instruction to make these constants micrometre-based and gate them on
+    a calibrated scale was raised and WITHDRAWN on 7 Aug 2026: with um_per_px
+    still unset for most of the archive it would have reported "unavailable"
+    for nearly every recording. The example that used to sit here quoted a
+    495 px animal, a retracted figure; it is gone rather than restated.)
     """
     if not body_length_px:
         return None

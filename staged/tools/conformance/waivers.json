@@ -54,5 +54,33 @@
     "waived_by": "Andres Vidal-Gadea",
     "waived_utc": "2026-08-07",
     "expires_when": "the waived line changes - the code_hash above is checked on every scan"
+  },
+  {
+    "fingerprint": "96cd86ea7c1a5ef8",
+    "rule": "underived-constant",
+    "file": "tools/population_swimming/population_swimming.py",
+    "line": 926,
+    "evidence": "def analyze(source, fps, um_per_px, output_dir=None, min_area=40, max_area=2500,",
+    "code_hash": "c1e3796ecdfe",
+    "reason": "inherited defect, fix blocked on the repro corpus",
+    "note": "min_area=40, max_area=2500, max_link_px=60 are the SAME three values basal slowing was fixed for, and the same failure applies: they admit an adult worm only between about 10 and 20 um/px, so at 2.5 um/px every animal is rejected and only debris inside the band is tracked. The tool does not fail; it tracks the wrong objects.\n\nNOT PORTED. The propagation protocol requires reproducing the failure on THIS module before applying a fix derived from another, and the repro corpus does not exist yet. Porting blind is what the protocol forbids.\n\nMITIGATED, NOT HIDDEN: the tool is reachable from the Hub with status 'ready', so it now shows a provisional-results notice on launch naming the defect. No logic changed.",
+    "review_trigger": "repro corpus exists -> run replay protocol case 1",
+    "waived_by": "Andres Vidal-Gadea",
+    "waived_utc": "2026-08-07",
+    "expires_when": "the waived line changes - code_hash is checked\u6bcf scan"
+  },
+  {
+    "fingerprint": "499e558b572d4971",
+    "rule": "underived-constant",
+    "file": "tools/population_swimming/population_swimming.py",
+    "line": 926,
+    "evidence": "def analyze(source, fps, um_per_px, output_dir=None, min_area=40, max_area=2500,",
+    "code_hash": "c1e3796ecdfe",
+    "reason": "inherited defect, fix blocked on the repro corpus",
+    "note": "min_area=40, max_area=2500, max_link_px=60 are the SAME three values basal slowing was fixed for, and the same failure applies: they admit an adult worm only between about 10 and 20 um/px, so at 2.5 um/px every animal is rejected and only debris inside the band is tracked. The tool does not fail; it tracks the wrong objects.\n\nNOT PORTED. The propagation protocol requires reproducing the failure on THIS module before applying a fix derived from another, and the repro corpus does not exist yet. Porting blind is what the protocol forbids.\n\nMITIGATED, NOT HIDDEN: the tool is reachable from the Hub with status 'ready', so it now shows a provisional-results notice on launch naming the defect. No logic changed.",
+    "review_trigger": "repro corpus exists -> run replay protocol case 1",
+    "waived_by": "Andres Vidal-Gadea",
+    "waived_utc": "2026-08-07",
+    "expires_when": "the waived line changes - code_hash is checked\u6bcf scan"
   }
 ]
