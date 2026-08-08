@@ -152,6 +152,28 @@ Dials: **top, bottom, band thickness, curvature extent, axis.**
 
 ---
 
+## 6.3 Design note: measured plane latency (8 Aug 2026)
+
+**A confocal plane costs ~46 ms to read** from Zarr at zstd-3 — measured on a
+real acquisition, 4096×4096 uint8, 16 MB per plane
+(`tools/storage/zarr_prototype.py`). Behavioural frames, at 768×1024, cost
+**~5 ms**.
+
+**Why it belongs in this spec.** §6.2 requires the QC statistics to update
+live as the dials move, and tier 0 to re-render on release. At 46 ms a
+plane, a naive redraw that re-reads the band — say 20 planes — costs **~1
+second per dial movement**, which is the difference between a control that
+feels like an instrument and one that feels broken.
+
+**The implication is a design constraint, not a warning:** the band's planes
+must be **held in memory across dial movements**, and only re-read when the
+dial moves the band outside what is held. The tier-0 rule stands — re-render
+on release — but re-render must not mean re-read.
+
+**And it does not change any value**, which is the §6.2 tier invariant: this
+is interaction smoothing, so it is allowed to differ between tiers precisely
+because it cannot reach the numbers.
+
 ## 7. Open
 
 - Threshold value for §4, to be stated before first run.

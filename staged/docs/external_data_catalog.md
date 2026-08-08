@@ -311,6 +311,110 @@ floor for automation tolerances.
 **When found, Akash's material seals with the anchor**, under the same
 circularity logic as Adina's (§7.4 of the registry spec).
 
+### JNB extraction — attempted, bounded, and reported before committing
+
+**Verdict: raw per-myocyte decode is NOT FEASIBLE. Summary statistics ARE
+recovered.**
+
+**Stream map** (105 streams, OLE2): seven worksheet streams
+`Data 1–7JNB/JNBContents` (2.9–16.6 KB), five `Graph Page N` streams, and
+eleven statistical report streams.
+
+**Decode attempt.** Scanned every worksheet stream for contiguous numeric
+runs under float64-LE, float64-BE, float32-LE and float32-BE. **Longest
+plausible run: 1 value.** The only long runs found were 22 doubles of zero —
+padding. The numeric data is held in a proprietary or compressed layout, so
+there are no offsets or strides to document.
+
+**Acceptance was never reached, so nothing enters the analysis.** No row
+count, no `.lif` join, no recomputed statistic could be checked, because
+there were no candidate numbers to check.
+
+**What DID come out, and why it is a different kind of evidence.** The report
+streams are RTF — **SigmaPlot's own printed output, read as a document rather
+than reverse-engineered from binary**, so the structural-acceptance gate does
+not apply to them in the way it would to a decode.
+
+Archived: `L:\10_AGVG LAB\Lab Tools\anchors\Akash_Graphs_JNB_reports.txt`
+
+**Akash's own data sources, named by his notebook:** Muscle Area, Sarcomere
+Number, Sarcomere Width, A-Band Width, I-Band Width. **He measured Muscle
+Area — the same quantity as Adina**, which is what makes the inter-rater
+comparison possible at all.
+
+Sample of what is recovered — A-Band Width, Mann-Whitney:
+
+| group | N | median | 25% | 75% |
+|---|---|---|---|---|
+| N2D1C | 37 | 0.800 | 0.733 | 0.864 |
+| N2D5C | 92 | 0.998 | 0.899 | 1.095 |
+
+**This is group-level, not per-myocyte.** It supports comparing distributions
+between raters; it cannot support the per-cell paired comparison. **The
+SigmaPlot export remains the gold standard and the only route to per-cell
+data** — the lab likely holds a licence from when it was in use, and the
+30-day trial suffices otherwise.
+
+### Intra-rater stability: NOT COMPUTABLE from the two Adina generations
+
+Attempted, and the attempt is the finding. `tools/anchors/rater_compare.py`
+joined `Muscle Area.xlsx` (Jul 2024) to `Muscle_Area_with_averages_2.xlsx`
+(Aug 2025) on `.lif` + series:
+
+| | |
+|---|---|
+| series in both generations | **81** |
+| **same myocyte count in both** | **3** |
+| differing counts | **78** |
+
+The 2025 generation almost always holds **more** cells, and very often
+**exactly four** per series. **These are not two measurements of the same
+myocytes — they are two different samplings of the same acquisitions.**
+
+**So the −17.7% mean difference the tool computed from the 3 matching series
+is NOT a stability number and must not be recorded as one.** It compares
+different cells. Recording it would have produced exactly the artefact this
+catalog keeps warning about: a plausible figure with the wrong thing behind
+it.
+
+**Registry consequence: the intra-rater entry stays OPEN**, awaiting either a
+myocyte identifier that lets cells be paired, or a genuine repeat pass.
+
+### Three-rater comparison plan, named per measure
+
+Comparisons are named as **rater × sheet × acquisitions**, because the three
+raters did not measure the same things:
+
+| comparison | measure | sheets | status |
+|---|---|---|---|
+| **Adina ↔ Akash** | **muscle area** | `Muscle Area.xlsx` (Fazyl) ↔ `Muscle Area in Akash Graphs` (JNB) | **blocked on SigmaPlot export** |
+| Adina ↔ Akash | sarcomere number | `Sarcomere Number.xlsx` (Fazyl) ↔ `Sarcomere Number in Akash Graphs` | blocked on export |
+| **Adina ↔ Danny** | branching | `Sorted Branching Number.xlsx` (Fazyl) ↔ `Branching Number.xlsx` (Marchiafava) | **both in hand — runnable now** |
+| Adina ↔ Danny | sarcomere number | `Sarcomere Number.xlsx` ↔ `Sorted Sarcomere Number.xlsx` | both in hand |
+| Danny ↔ Akash | I-band / A-band | `I-Band Measurement.xlsx` ↔ JNB I-Band, A-Band Width | blocked on export |
+| **Adina 2024 ↔ 2025** | muscle area | intra-rater | **not computable, see above** |
+
+**Inter-rater and intra-rater are separate registry entries** and are never
+pooled: intra-rater is the tighter quantity, and mixing them yields a
+tolerance too tight to use and too loose to catch a drifting rater.
+
+### Branching worksheets — SEALED with the anchor, held as prior art
+
+`Branching Number.xlsx`, `Sorted Branching Number.xlsx` and
+`NEW Branching Number_AGVG.xlsx` sit in the anchor's own working folder and
+were produced from the anchor's acquisitions. **They seal with the anchor
+material** under §7.4's circularity logic, exactly as Adina's and Akash's do.
+
+**Held as prior art, not as a target.** The published paper reports no
+branching result, so there is nothing to reproduce — but branching *was*
+measured, and by at least two people, which makes it the best-supported of
+the new-measurement candidates.
+
+**Posture is not set yet.** It depends on Andrés's answer to a question only
+he can answer: **why did the branching work go unpublished?** A measure
+dropped for lack of an effect, a measure dropped for measurement difficulty,
+and a measure dropped for space are three different starting positions.
+
 ### Second deposit — NOT YET READ
 
 The data-availability statement reads: *"All raw measurements and statistical
