@@ -891,7 +891,11 @@ class App(CockpitApp):
     colors=[]
     facecolors=[]
     for i,a in enumerate(ctx["accepted"]):
-     state=ctx.get("review_state",["proposed"]*len(ctx["accepted"]))[i]
+     # LOWERCASED, TO MATCH THE EXPORT. The overlay writer lowercases the
+     # state and this view did not, so the same egg could read cyan
+     # (unreviewed) on screen and green (accepted) in the saved overlay -
+     # two colours for one fact, and the screen is where the person decides.
+     state=str(ctx.get("review_state",["proposed"]*len(ctx["accepted"]))[i]).lower()
      if state=="accepted":colors.append("lime");facecolors.append("lime")
      elif state=="rejected":colors.append("red");facecolors.append("none")
      elif state=="manual":colors.append("orange");facecolors.append("orange")

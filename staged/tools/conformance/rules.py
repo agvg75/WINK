@@ -30,6 +30,30 @@ DOC_CONTEXT = (r"RETRACT", r"retracted", r"do not resurrect", r"WITHDRAWN",
 # fingerprints, waivers and exemptions.
 
 
+def _enclosing(tree):
+    """{line number: enclosing function name} for a parsed module.
+
+    STRUCTURAL FINDINGS NEED SOMETHING TO TELL THEM APART. A fingerprint is
+    rule + file + matched text, and a regex rule's matched text is real
+    source, which differs per site. A structural rule's is a summary like
+    `if state == ... (else)`, so two chains in one file collided on a single
+    fingerprint - one waiver would have covered both, and the code_hash it
+    carried could only ever match one of them.
+    """
+    import ast
+    out = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = getattr(node, "end_lineno", node.lineno)
+            for line in range(node.lineno, end + 1):
+                # Innermost wins: a nested def is written after its parent in
+                # the walk order only by luck, so prefer the smaller span.
+                previous = out.get(line)
+                if previous is None or (end - node.lineno) < previous[1]:
+                    out[line] = (node.name, end - node.lineno)
+    return {line: name for line, (name, _span) in out.items()}
+
+
 def except_name_imported_in_try(path, text):
     """`except X` where X is imported INSIDE the try it guards.
 
@@ -44,6 +68,7 @@ def except_name_imported_in_try(path, text):
         tree = ast.parse(text)
     except SyntaxError:
         return []
+    enclosing = _enclosing(tree)
     found = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Try):
@@ -59,16 +84,18 @@ def except_name_imported_in_try(path, text):
         for handler in node.handlers:
             if handler.type is None:
                 continue
+            where = enclosing.get(handler.lineno, "<module>")
             for name in ast.walk(handler.type):
                 if isinstance(name, ast.Name) and name.id in bound:
-                    found.append((handler.lineno - 1, f"except {name.id}"))
+                    found.append((handler.lineno - 1,
+                                  f"{where}: except {name.id}"))
                 elif isinstance(name, ast.Attribute):
                     root = name
                     while isinstance(root, ast.Attribute):
                         root = root.value
                     if isinstance(root, ast.Name) and root.id in bound:
-                        found.append(
-                            (handler.lineno - 1, f"except {root.id}.*"))
+                        found.append((handler.lineno - 1,
+                                      f"{where}: except {root.id}.*"))
     return found
 
 
@@ -83,6 +110,19 @@ def enum_dispatch_without_raise(path, text):
 
     Deliberately narrow: three or more string comparisons on the same name.
     Two-way chains are usually genuine binary choices with a real default.
+
+    KNOWN FALSE-POSITIVE SHAPES, waived rather than coded around, because
+    narrowing the rule to recognise them would also let the real thing
+    through:
+
+      an else that is ALREADY LOUD by other means - showerror() then return
+      is every bit as visible as a raise (myocyte_boundary_proposer:558)
+
+      a chain whose branches only choose a COLOUR or a label, where the else
+      is a real default rather than a swallowed case (egg_counting_tool)
+
+    The distinction that matters is not raise-versus-not. It is whether the
+    else can produce a WRONG ANSWER that looks like a right one.
     """
     import ast
     try:
@@ -105,6 +145,7 @@ def enum_dispatch_without_raise(path, text):
     # the parent's orelse, so walking naively reported one chain once per
     # branch - confocal_loader came back twice for a single dispatch. A
     # scanner that double-reports teaches people to skim it.
+    enclosing = _enclosing(tree)
     continuations = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.If) and len(node.orelse) == 1 \
@@ -129,11 +170,14 @@ def enum_dispatch_without_raise(path, text):
             break
         if len(names) < 3 or len(set(names)) != 1 or tail is None:
             continue
+        where = enclosing.get(node.lineno, "<module>")
         if not tail:                       # no else at all - falls through
-            found.append((node.lineno - 1, f"if {names[0]} == ... (no else)"))
+            found.append((node.lineno - 1,
+                          f"{where}: if {names[0]} == ... (no else)"))
             continue
         if not any(isinstance(s, ast.Raise) for s in tail):
-            found.append((node.lineno - 1, f"if {names[0]} == ... (else)"))
+            found.append((node.lineno - 1,
+                          f"{where}: if {names[0]} == ... (else)"))
     return found
 
 

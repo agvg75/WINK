@@ -207,6 +207,45 @@ if REAL_LIF.exists():
 else:
     print(f"\n  (real .lif not reachable at {REAL_LIF} - real-file checks skipped)")
 
+# ------------------------------------------- format detection is content-based
+# A DIRECTORY IS NOT A FORMAT BY ITSELF. detect_format used to return
+# "tiff_folder" for any directory, and load_stack's dispatch ended in
+# `else: _read_tiff_folder(path)` - so "TIFF folder" was the shape of
+# everything unrecognised rather than something detected.
+#
+# Nothing was mis-read: `fmt is None` raises earlier, and the only value that
+# could reach the fallback was tiff_folder. The census confirms it from the
+# data side - 1,078 Zeiss .lsm files were refused for want of a reader, never
+# opened as TIFF folders. But one entry added to SUFFIX_FORMATS would have
+# been enough for an Olympus .oib to be read as a folder of TIFFs.
+import tempfile                                              # noqa: E402
+
+scratch = Path(tempfile.mkdtemp(prefix="wink_confocal_fmt_"))
+(scratch / "empty").mkdir()
+(scratch / "with_tiffs").mkdir()
+(scratch / "with_tiffs" / "plane.tif").write_bytes(b"not really a tiff")
+(scratch / "zeiss.lsm").write_bytes(b"x")
+
+check("a directory CONTAINING tiffs is detected as a tiff folder",
+      cl.detect_format(scratch / "with_tiffs") == "tiff_folder")
+check("a directory containing none is NOT a tiff folder - detection is on "
+      "content, not on the path being a directory",
+      cl.detect_format(scratch / "empty") is None)
+check("an unknown microscope suffix is not a format",
+      cl.detect_format(scratch / "zeiss.lsm") is None)
+
+for target, expected in ((scratch / "empty", "of which 0 are .tif"),
+                         (scratch / "zeiss.lsm", ".lsm"),
+                         (scratch / "gone.xyz", "does not exist")):
+    try:
+        cl.load_stack(target)
+        check(f"{target.name} is refused", False, "no exception raised")
+    except cl.ConfocalLoadError as exc:
+        check(f"refusing {target.name} names the path AND what was measured, "
+              f"so the reader is not left guessing",
+              str(target) in str(exc) and expected in str(exc),
+              str(exc).splitlines()[-1].strip()[:70])
+
 print()
 failed = [n for n, ok, _ in results if not ok]
 print(f"{len(results) - len(failed)} of {len(results)} checks passed")

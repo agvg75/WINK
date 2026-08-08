@@ -164,14 +164,48 @@ class ConfocalStack:
 # format detection
 # ---------------------------------------------------------------------------
 def detect_format(path):
+    """The format, or None. A DIRECTORY IS NOT A FORMAT BY ITSELF.
+
+    This used to return "tiff_folder" for any directory, which made
+    "tiff_folder" the shape of "everything else" rather than a thing that was
+    detected. Now it is content-based: a directory is a TIFF folder when it
+    CONTAINS TIFFs, and otherwise nothing is claimed about it.
+    """
     path = Path(path)
     if path.is_dir():
-        return "tiff_folder"
+        try:
+            return "tiff_folder" if _sequence_files(path) else None
+        except OSError:
+            return None
     name = path.name.lower()
     for suffix in (".ome.tif", ".ome.tiff"):
         if name.endswith(suffix):
             return "tiff"
     return SUFFIX_FORMATS.get(path.suffix.lower())
+
+
+def describe_unreadable(path):
+    """What was actually measured about a path we cannot read.
+
+    A refusal that only says "unsupported" sends the reader to guess. This
+    reports the evidence the decision was made on.
+    """
+    path = Path(path)
+    if not path.exists():
+        return "the path does not exist"
+    if path.is_dir():
+        try:
+            tiffs = len(_sequence_files(path))
+        except OSError as exc:
+            return f"directory could not be listed ({exc})"
+        try:
+            entries = sum(1 for _ in path.iterdir())
+        except OSError:
+            entries = -1
+        return (f"directory holding {entries:,} entries, of which {tiffs} "
+                f"are .tif/.tiff")
+    return (f"file with suffix {path.suffix.lower()!r}; known suffixes are "
+            f"{', '.join(sorted(SUFFIX_FORMATS))}")
 
 
 def _validated_voxel(dz, dy, dx, source):
@@ -386,7 +420,9 @@ def load_stack(path, series=None, voxel_size_um=None, require_calibration=True,
     path = Path(path)
     fmt = detect_format(path)
     if fmt is None:
-        raise ConfocalLoadError(f"Unsupported confocal format: {path}")
+        raise ConfocalLoadError(
+            f"Unsupported confocal format: {path}\n"
+            f"  {describe_unreadable(path)}")
 
     available = list_series(path)
     if series is None:
@@ -411,8 +447,20 @@ def load_stack(path, series=None, voxel_size_um=None, require_calibration=True,
         array, raw = _read_nd2(path, series)
     elif fmt == "tiff":
         array, raw = _read_tiff(path, series)
-    else:
+    elif fmt == "tiff_folder":
         array, raw = _read_tiff_folder(path)
+    else:
+        # THE TERMINAL RAISE. This branch was `else: _read_tiff_folder(path)`,
+        # so "tiff folder" was the shape of everything unrecognised rather
+        # than a format that had been detected. Nothing has been mis-read:
+        # `fmt is None` already raises above, and the only value that could
+        # reach here was tiff_folder. But adding one entry to SUFFIX_FORMATS
+        # would have been enough - an Olympus .oib would have been opened as
+        # a folder of TIFFs, and the failure would have named TIFFs rather
+        # than the format nobody wired up.
+        raise ConfocalLoadError(
+            f"Confocal format {fmt!r} is detected but has no reader: "
+            f"{path}\n  {describe_unreadable(path)}")
 
     vox = _validated_voxel(*voxel_size_um, "manual entry") if voxel_size_um \
         else info.voxel_size_um

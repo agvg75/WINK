@@ -199,6 +199,15 @@ class ROIEditor:
             self.selector = PolygonSelector(
                 self.ax, self._polygon_done, useblit=True,
                 props=dict(color="#990000", linewidth=2, alpha=.8))
+        else:
+            # NO SILENT CARRY-OVER. This chain had no else, so an unrecognised
+            # label left self.selector holding the PREVIOUS shape's selector -
+            # pick a new tool, get the old one, with nothing on screen saying
+            # so. Loud in practice, but only if you notice you are drawing
+            # ovals after asking for something else.
+            raise ValueError(
+                f"ROI shape {label!r} has no selector. The shape list and "
+                f"this dispatch have drifted apart.")
         self.fig.canvas.draw_idle()
 
     def _ellipse_done(self, click, release):

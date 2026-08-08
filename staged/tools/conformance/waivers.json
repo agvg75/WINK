@@ -96,5 +96,47 @@
     "waived_by": "Andres Vidal-Gadea",
     "waived_utc": "2026-08-08",
     "expires_when": "the waived line changes - code_hash is checked on every scan - or the derivation lands, whichever comes first"
+  },
+  {
+    "fingerprint": "f7cf380d3734e2fd",
+    "rule": "enum-dispatch-no-raise",
+    "file": "tools/egg_counting/egg_counting_tool.py",
+    "line": 947,
+    "evidence": "if state==\"accepted\":color=(0,255,0)",
+    "code_hash": "2bca8cea2cf2",
+    "reason": "colour only; the else is a real default, not a swallowed case",
+    "note": "Same shape as redraw, in the overlay writer. Branches choose an outline colour; the else is proposed/unreviewed. No measured value passes through it.",
+    "review_trigger": "the waived line changes",
+    "waived_by": "Andres Vidal-Gadea",
+    "waived_utc": "2026-08-08",
+    "expires_when": "the waived line changes - the code_hash above is checked on every scan"
+  },
+  {
+    "fingerprint": "848997d7c951d4f9",
+    "rule": "enum-dispatch-no-raise",
+    "file": "tools/egg_counting/egg_counting_tool.py",
+    "line": 899,
+    "evidence": "if state==\"accepted\":colors.append(\"lime\");facecolors.append(\"lime\")",
+    "code_hash": "9e8f0307cf8c",
+    "reason": "colour only; the else is a real default, not a swallowed case",
+    "note": "The branches choose a scatter COLOUR. The else means proposed/unreviewed, which is a genuine default rather than an unhandled value. No egg count flows through this chain - counts come from the accepted list and the table. The case-sensitivity defect that DID matter here (this view read the state raw while the export lowercased it, so one egg could read cyan on screen and green in the saved overlay) is fixed rather than waived.",
+    "review_trigger": "the waived line changes",
+    "waived_by": "Andres Vidal-Gadea",
+    "waived_utc": "2026-08-08",
+    "expires_when": "the waived line changes - the code_hash above is checked on every scan"
+  },
+  {
+    "fingerprint": "1c2f0c39ad041496",
+    "rule": "enum-dispatch-no-raise",
+    "file": "tools/morphology/myocyte_boundary_proposer.py",
+    "line": 558,
+    "evidence": "if kind == \"progress\":",
+    "code_hash": "dfd1b6c9a56c",
+    "reason": "the else is ALREADY LOUD - showerror then return",
+    "note": "An unrecognised queue message raises a Failed dialog and stops the run, which is every bit as visible as a raise. The rule tests for a terminal raise because that is what is statically checkable; loudness by other means is waived case by case rather than pattern-matched, since teaching the rule to accept showerror would also teach it to accept anything that looks like it.",
+    "review_trigger": "the waived line changes",
+    "waived_by": "Andres Vidal-Gadea",
+    "waived_utc": "2026-08-08",
+    "expires_when": "the waived line changes - the code_hash above is checked on every scan"
   }
 ]
