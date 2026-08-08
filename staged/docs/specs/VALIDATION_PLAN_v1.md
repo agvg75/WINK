@@ -103,6 +103,56 @@ this question costs one conversation.
 
 Standalone. Any time.
 
+## V7. Per-module test-data availability
+
+The question this answers is not "does the tool run" but **"is there anything
+in the world we could test it against"** — asked per module, before anyone
+schedules validation work that has no data to stand on.
+
+**(a) Each testable module declares its data requirements.** Assay, fps floor,
+duration, substrate, single/population. Declared by the module, not inferred
+by the query — a module that cannot state what it needs is itself a finding.
+
+**(b) Query the census against those declarations.** Output is a table,
+module × one of three columns:
+
+| column | meaning |
+|---|---|
+| lab data found | paths and n |
+| human-scored data found | paths and n; scored data is the scarcer resource |
+| nothing found | the gap list |
+
+**Named untested targets: population habituation, paralysis, swim endurance.**
+These are named because they are believed untested, not because the query has
+run — the query is what settles it.
+
+**(c) For gaps, catalog external candidates.** Record **license and metadata
+completeness per candidate**; a dataset whose license or acquisition metadata
+is incomplete is not a validation anchor no matter how good the data look.
+
+| candidate | what it offers |
+|---|---|
+| OpenWorm Movement Database (Zenodo) | WCON + Tierpsy features as **reference answers** |
+| BBBC010 | live/dead **ground truth** → the paralysis tool |
+| CC-BY micropublication video datasets | e.g. Wormtrails raw videos, DOI-addressed |
+
+**(d) The sorting rule, stated in the spec so it is applied before the data
+are seen, not after the result is known:**
+
+- **no ground truth → robustness and refusal testing only.** Does it decline
+  what it should decline, and survive what it should survive. No claim about
+  measurement accuracy may be drawn from such a dataset.
+- **ground truth or published values → measurement validation**, under the
+  published-anchor rules of V4.
+
+**YouTube is excluded from validation.** It may serve as refusal-path fixtures
+if ever needed, and **degraded repository data is preferred even for that** —
+a fixture with provenance beats a fixture without it, including when the
+fixture's whole job is to be refused.
+
+**Slots after the navigator.** (b) is runnable the moment V1's census tagging
+lands, and need not wait for the rest of V7.
+
 ---
 
 ## Sequencing
@@ -114,3 +164,4 @@ Standalone. Any time.
 | V5(i) | ships with any release |
 | V5(ii) | after V3 baseline |
 | V6 | any time |
+| V7 | after the archive navigator; **(b) unblocks as soon as V1 lands** |
