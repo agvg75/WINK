@@ -305,3 +305,27 @@ counted on. That is a bench record question, not a metadata one.
    `source` kept as a column, not merged.
 4. **The geometry supports volumetric work.** 0.355 µm z steps at 3.3×
    anisotropy is not a limitation to design around.
+
+---
+
+## 7. Queued query (recorded 8 Aug 2026): nuclear channel in Anjelica's stacks
+
+**Question.** Which of Anjelica's confocal stacks carry a **nuclear channel**?
+She resolves as a person in `tools/drive_audit/filename_labels_2026-08-07.csv`,
+so the subset is addressable.
+
+**Method, and the constraint is the point: check channel count and metadata,
+then VERIFY BY LOOKING — not by header alone.** Channel count in a Leica
+header records what the acquisition was configured to collect, which is not
+the same as what a channel contains. A configured-but-dark channel and a real
+DAPI channel are indistinguishable in the header and obvious on screen.
+
+**Why it is worth finding.** Any DAPI subset is **reserved as the
+seeded-watershed validation bridge**: nuclei-seeded segmentation on those
+stacks is an **independent, near-ground-truth answer** for validating the
+**stain-free composite** proposer. Independent, because the seed comes from a
+channel the stain-free method never sees.
+
+**Disposition: TAG IN THE CATALOG, DO NOT SPEND ON DEVELOPMENT.** The value
+here is as a held-back validation set. A subset that gets used to build the
+method cannot afterwards be used to check it.

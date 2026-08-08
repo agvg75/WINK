@@ -109,7 +109,50 @@ be argued with.
 
 ---
 
-## 6. Open
+## 6. The establishment UI — myocyte 3D scanner (working name)
+
+**The auto-fit PROPOSES; the person ESTABLISHES.** Both selection criteria of
+§3 (oriented energy and area dominance) run first and produce proposed rod and
+shell parameters. A live adjustment view is where those become established
+values. This is the propose/establish split WINK already uses elsewhere, and
+it is what makes the automatic fit safe to have: a proposal that is wrong
+costs a dial movement, not a silently wrong dataset.
+
+### 6.1 Layout
+
+| pane | content |
+|---|---|
+| XZ and YZ projections | the band drawn as curves over each |
+| XY top view | |
+| in-band projection preview | what the band actually yields |
+
+Dials: **top, bottom, band thickness, curvature extent, axis.**
+
+### 6.2 Requirements
+
+1. **Render the excluded content above and below the band as SEPARATE
+   PANES.** The task is boundary-drawing, and **the eye needs both sides** —
+   a boundary can only be judged against what it is excluding. Showing the
+   band alone shows only the answer, never the evidence for it.
+2. **QC numbers update live with the dials** — the fibre ⊥ surface score (§4)
+   and the area-dominance fraction (§3). Moving a dial and watching the
+   statistic move is what makes the setting an act of measurement rather than
+   of taste.
+3. **Tier 0 is three orthogonal projections plus sliders, re-rendering on
+   release.** Higher tiers **may smooth the interaction and must never change
+   the values.** Interaction quality is an affordance; a value that depends on
+   which tier the student was running is a defect.
+4. **The correction log records (auto-proposed params, established params) per
+   stack.** Two uses, both of which need the pair rather than the final value:
+   **the deltas feed fitter recalibration**, and **the established surfaces
+   become golden ground truth.**
+5. **Established params and the module version go in the sidecar**, and
+   **downstream projections consume ONLY established surfaces** — never a
+   proposal that nobody looked at.
+
+---
+
+## 7. Open
 
 - Threshold value for §4, to be stated before first run.
 - Whether the second shell, when present, is measured or only recorded.
