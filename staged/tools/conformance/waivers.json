@@ -1,0 +1,58 @@
+[
+  {
+    "fingerprint": "90033de400eb0d5f",
+    "rule": "underived-constant",
+    "file": "app/cell_calcium_lif.py",
+    "line": 243,
+    "evidence": "def cell_traces(frames, *, min_px=12, max_px=4000, percentile=80,",
+    "code_hash": "4f927363e1d3",
+    "reason": "guess, predates working viewer",
+    "note": "DERIVE from the correction log's established cell areas once >=3 scored acquisitions exist. Until then these bounds are a guess made before anyone had a working viewer to look at cells with.",
+    "review_trigger": ">=3 scored acquisitions in the correction log",
+    "waived_by": "Andres Vidal-Gadea",
+    "waived_utc": "2026-08-07",
+    "expires_when": "the waived line changes - the code_hash above is checked on every scan"
+  },
+  {
+    "fingerprint": "6acbdda895b6c9e6",
+    "rule": "underived-constant",
+    "file": "app/cell_calcium_lif.py",
+    "line": 243,
+    "evidence": "def cell_traces(frames, *, min_px=12, max_px=4000, percentile=80,",
+    "code_hash": "4f927363e1d3",
+    "reason": "guess, predates working viewer",
+    "note": "DERIVE from the correction log's established cell areas once >=3 scored acquisitions exist. Until then these bounds are a guess made before anyone had a working viewer to look at cells with.",
+    "review_trigger": ">=3 scored acquisitions in the correction log",
+    "waived_by": "Andres Vidal-Gadea",
+    "waived_utc": "2026-08-07",
+    "expires_when": "the waived line changes - the code_hash above is checked on every scan"
+  },
+  {
+    "fingerprint": "d31b3db5bbba8793",
+    "rule": "underived-constant",
+    "file": "tools/defecation/defecation_feasibility.py",
+    "line": 168,
+    "evidence": ".60 * seeded_area, 1.60 * seeded_area)",
+    "code_hash": "9c1934c6faca",
+    "reason": "arbitrary, code-authored, matches the tracker-band literal",
+    "note": "THIRD PROPAGATION INSTANCE, AND THE VECTOR IS GENERATION. 1.60 here is the same literal as the tracker's acceptance band and the basal slowing gates - not copied by hand but re-emitted by the model that wrote all three. A constant can spread without anyone typing it twice. DIAGNOSTIC QUEUED: how often does this bound actually bind on real defecation recordings?",
+    "review_trigger": "diagnostic: how often the bound binds on real recordings",
+    "waived_by": "Andres Vidal-Gadea",
+    "waived_utc": "2026-08-07",
+    "expires_when": "the waived line changes - the code_hash above is checked on every scan"
+  },
+  {
+    "fingerprint": "1cafe145b2010fc8",
+    "rule": "underived-constant",
+    "file": "tools/population_orientation/population_orientation.py",
+    "line": 73,
+    "evidence": "output_dir=None,arrival_count=1,min_area=2,max_area=150,persistence_cutoff=.8,",
+    "code_hash": "7712a9eb117a",
+    "reason": "provenance unknown",
+    "note": "Nobody knows where 2 and 150 came from. DIAGNOSTIC QUEUED: count real detections in the 2-20 px range on orientation data and report whether the floor admits noise. A 2 px floor on a plate recording is the size of a dust speck.",
+    "review_trigger": "diagnostic: detections in 2-20 px on real orientation data",
+    "waived_by": "Andres Vidal-Gadea",
+    "waived_utc": "2026-08-07",
+    "expires_when": "the waived line changes - the code_hash above is checked on every scan"
+  }
+]

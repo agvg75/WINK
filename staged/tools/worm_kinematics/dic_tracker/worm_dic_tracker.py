@@ -57,6 +57,33 @@ def _signed_angle(v1, v2):
     return np.degrees(a)
 
 
+# ONE NAME, TWO SITES, AND THE ANNOTATION LIVES HERE.
+#
+# UNDERIVED. 0.55 and 1.60 have no derivation anywhere in this repository.
+# They are the sole reason a 234-frame AVG6 test returned ZERO detections on
+# a recording where the animal is plainly visible: the fine-texture rule
+# found the worm on every single frame, and the band admitted 3 of 234
+# because the masks sat at a median 0.300 of a hand-drawn reference.
+#
+# The cause is structural, not numerical. The reference is a HAND-DRAWN
+# OUTLINE, which traces the whole animal; the masks come from a TEXTURE
+# RULE, which captures only where fine structure resolves. Two different
+# quantities, so no choice of band reconciles them. Moving the numbers would
+# tune a threshold to hide that.
+#
+# The remedy, when it is done, is in the cultured cell spec's appendix:
+# area_ref should be the MEDIAN OF THE RULE'S OWN MASKS over an
+# initialisation window, and the band width derived from the mask-area
+# DISTRIBUTION on validated footage - not from ratios to an outline, which
+# measure a constant offset rather than a tolerance.
+#
+# THE LITERAL 1.60 HAS SPREAD. It also appears in the basal slowing gates and
+# in defecation_feasibility, and the vector was not copy-paste: the same
+# model re-emitted it in three places. A constant can propagate without
+# anyone typing it twice, which is why it is named once here.
+IDENTITY_AREA_BAND = (0.55, 1.60)
+
+
 class DICWormTracker:
     def __init__(self, frames_gray, fps, um_per_px, fps_source, um_per_px_source, worm_id="worm",
                  n_segments=24, contrast_pct=95.0, thickness_iter=2,
@@ -359,7 +386,8 @@ class DICWormTracker:
                 # whichever mask feeds it, and the band needs a derivation of
                 # its own - how much a correct mask may legitimately vary
                 # frame to frame - before anyone touches the numbers.
-                if area < 0.55*self.area_ref or area > 1.60*self.area_ref:
+                if not (IDENTITY_AREA_BAND[0] * self.area_ref
+                        <= area <= IDENTITY_AREA_BAND[1] * self.area_ref):
                     continue
             if self.strict_target_identity and self.area_ref:
                 ratio = area / max(float(self.area_ref), 1.0)
@@ -712,8 +740,10 @@ class DICWormTracker:
                 or (A == A and self.area_ref and A < 0.4*self.area_ref) \
                 or (shift == shift and self.len_ref and shift > 0.15*self.len_ref)
             if self.manual_identity_reference and self.area_ref:
-                bad = bad or not (np.isfinite(A)
-                                  and 0.55*self.area_ref <= A <= 1.60*self.area_ref)
+                bad = bad or not (
+                    np.isfinite(A)
+                    and IDENTITY_AREA_BAND[0] * self.area_ref
+                    <= A <= IDENTITY_AREA_BAND[1] * self.area_ref)
             if self.strict_target_identity and self.identity_length_bounds is not None:
                 low, high = self.identity_length_bounds
                 bad = bad or not (np.isfinite(L) and low <= L <= high)

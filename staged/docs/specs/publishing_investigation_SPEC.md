@@ -117,6 +117,43 @@ Only then: v11.138, and only then automatic updates.
 
 ---
 
+## 4.1 Exhibit 1: RESOLVED, 7 Aug 2026
+
+`BUILD_APP_UPDATE.ps1` was found modified and uncommitted, blocking the first
+publish. Forensics, one command each:
+
+| | |
+|---|---|
+| file last modified | **6 Aug 2026, 15:19:46** |
+| v11.137 commit `f74c93c` | **6 Aug 2026, 15:20:20** |
+| gap | **34 seconds** |
+
+Same keystroke session: the changelog was written, the code commit went out
+34 seconds later, and the changelog edit was never staged.
+
+And no release commit had touched the file for three consecutive releases:
+
+| commit | release | touched it? |
+|---|---|---|
+| `ce81381` | v11.135 | no |
+| `2944c9f` | v11.136 | no |
+| `f74c93c` | v11.137 | no |
+| `abda827` | v11.134 | yes — the last one |
+
+Which is why the recovered edit is *cumulative*: three entries written at
+once at 11.137 time, catching up three releases of stranded documentation.
+
+**The finding is worse than the one this investigation opened with.** The
+original question was whether the publish mechanism could silently truncate.
+The answer is that it had **no relationship to the commit at all** — it was a
+separate script, run separately, whose output drifted from what shipped and
+whose drift nothing could detect. Release notes for three releases existed
+only in one person's working tree.
+
+**Class closed.** `publish_release.py` refuses a dirty tree, so a release
+whose documentation is uncommitted cannot be published. The failure that
+stranded three changelogs is now impossible rather than merely unlikely.
+
 ## 5. What is already known
 
 - 40 commits since v11.137; 13 touch code students run.

@@ -50,6 +50,10 @@ from pathlib import Path
 STAGED = Path(__file__).resolve().parents[2]
 PUBLISH_ROOT = Path(r"L:\10_AGVG LAB\Lab Tools")
 FOLDER_TEMPLATE = "WINK_Lab_Tools_v{version}_Current_Files"
+# Gates machines whose environment lacks a library a release needs. The
+# updater swaps app files only and never runs pip, so a machine below
+# this is sent to Setup_Lab_Tools.bat rather than half-updated.
+MIN_RUNTIME_VERSION = "1.1.0"
 
 SKIP_DIRS = {"__pycache__", ".git", ".venv", ".githooks", "node_modules",
              "NIKE_Review_Sessions", ".claude", ".pytest_cache"}
@@ -137,6 +141,28 @@ def check_suite():
     return {"ran": len(tests) - len(skipped), "skipped": [s[0] for s in skipped]}
 
 
+def check_conformance():
+    """The standing scanner. Measured-values findings BLOCK, others report.
+
+    A rule here exists because the failure it names already happened once.
+    Publishing over a new measured-values finding ships a number somebody
+    would report, which is the one category worth stopping a release for.
+    """
+    scanner = STAGED / "tools" / "conformance" / "scan.py"
+    if not scanner.is_file():
+        print("  conformance scanner not present; skipped")
+        return
+    result = subprocess.run([sys.executable, str(scanner), "--publish"],
+                            cwd=str(STAGED), capture_output=True, text=True)
+    print(result.stdout.rstrip())
+    if result.returncode != 0:
+        refuse("the conformance scanner found new measured-values "
+               "issue(s).\n\n  Each one changes a number a person would "
+               "report. Fix them, or record\n  a waiver with a reason in "
+               "tools/conformance/waivers.json - a waiver\n  resurfaces "
+               "automatically if the code it excused changes.")
+
+
 # -------------------------------------------------------------- publish --
 def next_version():
     """The highest published version, plus one minor step."""
@@ -195,6 +221,28 @@ def verify_published(target, version):
     return True, f"published tree self-reports v{found['version']}"
 
 
+def verify_manifest(manifest_path, target, version):
+    """The manifest must name the same version AND the same tree.
+
+    The Hub reads the manifest to decide what is available and the tree
+    stamp to decide what it got. If those disagree the update button
+    points somewhere other than what was published, and neither file is
+    obviously wrong on its own - which is the MISMATCH tripwire again,
+    one level up.
+    """
+    try:
+        found = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return False, f"the manifest could not be read: {exc}"
+    if str(found.get("app_version")) != str(version):
+        return False, (f"manifest says {found.get('app_version')!r}, "
+                       f"published {version!r}")
+    if Path(found.get("published_tree", "")) != target:
+        return False, (f"manifest points at {found.get('published_tree')}, "
+                       f"not {target}")
+    return True, f"manifest v{found['app_version']} -> {target.name}"
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -236,6 +284,7 @@ def main():
     checks = {"ran": 0, "skipped": []}
     if not args.skip_checks:
         checks = check_suite()
+        check_conformance()
 
     files = list(wanted_files())
     total = sum(f.stat().st_size for f in files)
@@ -265,6 +314,33 @@ def main():
     (target / "app" / "release_info.json").write_text(
         json.dumps(stamp, indent=2), encoding="utf-8")
     (target / "app" / "BUILD_COMMIT.txt").write_text(commit, encoding="utf-8")
+
+    # ONE WRITER. The Hub updater reads update_manifest.json; the tree
+    # carries release_info.json. Two scripts writing those separately is
+    # how they come to describe different things - BUILD_APP_UPDATE.ps1
+    # was a hand-run script with no relationship to the commit at all,
+    # and its changelog drifted three releases behind before anyone
+    # noticed. Both files are now generated here, from the same data, in
+    # the same second.
+    manifest = {
+        "app_version": version,
+        "commit": commit,
+        "min_runtime_version": MIN_RUNTIME_VERSION,
+        "published_utc": stamp["published_utc"],
+        "published_tree": str(target),
+        "changelog": args.note or f"v{version}",
+    }
+    manifest_path = PUBLISH_ROOT / "update_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2),
+                             encoding="utf-8")
+
+    ok, message = verify_manifest(manifest_path, target, version)
+    print(f"verifying the manifest agrees with the tree: {message}")
+    if not ok:
+        refuse("the manifest and the published tree disagree.\n\n  "
+               + message
+               + "\n\n  The update button would send students to something "
+                 "other than\n  what was just published.")
 
     ok, message = verify_published(target, version)
     print(f"\nverifying the published tree: {message}")
