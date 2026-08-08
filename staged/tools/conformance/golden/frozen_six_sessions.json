@@ -1,0 +1,19 @@
+{
+  "entry": "frozen_six_sessions",
+  "baselined_utc": "2026-08-08T08:41:16+00:00",
+  "reason": "first baseline: the six frozen recordings, closing the tracker regression gate",
+  "outputs": {
+    "n_folders_present": 6,
+    "n_sessions": 49,
+    "n_frames": 397818,
+    "n_bracketed": 26,
+    "per_folder": {
+      "41921_cop1367": 12,
+      "41921_cop1553": 2,
+      "42821_AG406": 1,
+      "5121_AG405": 8,
+      "CRISPR mutants food density": 18,
+      "pezo CRISPR mutants": 8
+    }
+  }
+}

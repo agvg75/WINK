@@ -82,5 +82,19 @@
     "waived_by": "Andres Vidal-Gadea",
     "waived_utc": "2026-08-07",
     "expires_when": "the waived line changes - code_hash is checked\u6bcf scan"
+  },
+  {
+    "fingerprint": "491f6cad4bbf49ec",
+    "rule": "underived-constant",
+    "file": "tools/head_tail.py",
+    "line": 143,
+    "evidence": "def taper_cue(widths, thresh=0.85):",
+    "code_hash": "de47b4e0ddbc",
+    "reason": "believed derived from measurement (Andres); derivation not on record; verification scheduled as reference-registry entry #1; waiver retires when the taper distribution lands",
+    "note": "BELIEVED measured, not measured. The distinction is the whole point of this waiver: Andres recalls 0.85 coming from data, and no record of that derivation exists in the repository. Those are different claims and the file should not imply the stronger one.\n\nThe derivation is specified and keeps its slot at the HEAD of the registry work regardless of this waiver: run taper_cue over curated RGBCaMP and animal-tracker ground truth, take the distribution of the cue at TRUE HEADS versus TRUE TAILS, and state the criterion BEFORE looking. Then either document 0.85 against it or replace it with the derived value - and if it moves, that is a finding.\n\nA waiver is not a resolution. This one buys a release, not an answer.",
+    "review_trigger": "reference registry entry #1 - the taper distribution over head/tail ground truth",
+    "waived_by": "Andres Vidal-Gadea",
+    "waived_utc": "2026-08-08",
+    "expires_when": "the waived line changes - code_hash is checked on every scan - or the derivation lands, whichever comes first"
   }
 ]
