@@ -23,6 +23,55 @@ DOC_CONTEXT = (r"RETRACT", r"retracted", r"do not resurrect", r"WITHDRAWN",
                r"this used to", r"used to read", r"the bug this",
                r"incident", r"NOT the", r"never ", r"no longer")
 
+# --------------------------------------------------------- structural --
+# Some rules are about SHAPE, not text, and a regex cannot see shape. A rule
+# may carry a `check(path, text) -> [(line_index, matched_text)]` instead of
+# `patterns`; the scanner treats the results identically, including
+# fingerprints, waivers and exemptions.
+
+
+def except_name_imported_in_try(path, text):
+    """`except X` where X is imported INSIDE the try it guards.
+
+    If the import is what fails, the name is unbound when the handler runs,
+    so the except clause raises NameError while handling the very error it
+    was written to report. The handler is dead code that looks live, and it
+    is only entered on the failure path - which is exactly where nobody
+    looks until a student hits it.
+    """
+    import ast
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        bound = set()
+        for statement in node.body:
+            for inner in ast.walk(statement):
+                if isinstance(inner, (ast.Import, ast.ImportFrom)):
+                    for alias in inner.names:
+                        bound.add((alias.asname or alias.name).split(".")[0])
+        if not bound:
+            continue
+        for handler in node.handlers:
+            if handler.type is None:
+                continue
+            for name in ast.walk(handler.type):
+                if isinstance(name, ast.Name) and name.id in bound:
+                    found.append((handler.lineno - 1, f"except {name.id}"))
+                elif isinstance(name, ast.Attribute):
+                    root = name
+                    while isinstance(root, ast.Attribute):
+                        root = root.value
+                    if isinstance(root, ast.Name) and root.id in bound:
+                        found.append(
+                            (handler.lineno - 1, f"except {root.id}.*"))
+    return found
+
+
 RULES = [
     {
         "id": "withdrawn-numbers",
@@ -180,6 +229,32 @@ RULES = [
         "patterns": [r"imshow\([^)]*cmap\s*=\s*[\"']gray[\"']\s*\)"],
         "exempt_context": (r"vmin", r"clim", r"attach_sliders", r"display_range",
                            r"overlay", r"thumbnail", r"contact sheet"),
+        "files": ["app/*.py", "tools/**/*.py"],
+    },
+    {
+        "id": "handler-name-bound-in-try",
+        "rank": "gating",
+        "summary": "An except clause naming something imported inside its own try",
+        "family": "error machinery must be fired to be trusted",
+        "incident": (
+            "segmentation_review_tool.py imported ContextError inside the "
+            "try whose handler caught it. Had the import been the thing that "
+            "failed, `except ContextError` would have raised NameError while "
+            "handling the error it existed to report - and the original "
+            "message would have been replaced by a traceback about a missing "
+            "name. Written 8 Aug 2026 during fix A and caught by reading, "
+            "not by running: the handler is only entered on the failure "
+            "path, which is where nobody looks until a student gets there. "
+            "Same family as the crash handler that filed a clean exit and "
+            "the publish refusal that printed the word PASS - error "
+            "machinery is not trustworthy until it has been fired."),
+        "check": except_name_imported_in_try,
+        "patterns": [],
+        # DOC_CONTEXT only. An exemption on "fixture" or "deliberately" would
+        # let any violation excuse itself by sitting near the word - the same
+        # self-excusing trap that let `underived_gate` satisfy the
+        # underived-constant rule by naming itself.
+        "exempt_context": DOC_CONTEXT,
         "files": ["app/*.py", "tools/**/*.py"],
     },
 ]

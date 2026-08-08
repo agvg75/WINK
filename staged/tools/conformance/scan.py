@@ -130,6 +130,43 @@ def scan(root=STAGED):
             for line in lines:
                 starts.append(offset)
                 offset += len(line) + 1
+            # A STRUCTURAL RULE SEES SHAPE, WHICH A REGEX CANNOT. Its hits
+            # are funnelled through the same exemption, fingerprint and
+            # waiver path as pattern hits - a second reporting route would
+            # be a second place for a waiver to be forgotten.
+            structural = []
+            checker = rule.get("check")
+            if checker is not None:
+                try:
+                    structural = checker(path, text)
+                except Exception:                            # noqa: BLE001
+                    structural = []
+            for index, matched in structural:
+                line = lines[index] if index < len(lines) else ""
+                lo = max(0, index - CONTEXT_LINES)
+                context = "\n".join(lines[lo:index + CONTEXT_LINES])
+                if exempt(context, rule.get("exempt_context", ())):
+                    continue
+                rel = str(path.relative_to(root)).replace("\\", "/")
+                mark = fingerprint(rule["id"], rel, matched)
+                waiver = waivers.get(mark)
+                current = code_hash(line)
+                if waiver and waiver.get("code_hash") == current:
+                    continue
+                findings.append({
+                    "fingerprint": mark,
+                    "rule": rule["id"],
+                    "rank": rule["rank"],
+                    "file": rel,
+                    "line": index + 1,
+                    "matched": matched[:120],
+                    "evidence": line.strip()[:160],
+                    "code_hash": current,
+                    "incident": rule["incident"],
+                    "summary": rule["summary"],
+                    "waiver_expired": bool(
+                        waiver and waiver.get("code_hash") != current),
+                })
             for pattern in compiled:
                 # SEARCHED OVER THE WHOLE FILE, not line by line. The first
                 # version iterated lines, so a MULTILINE pattern - the

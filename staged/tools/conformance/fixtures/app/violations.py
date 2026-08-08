@@ -47,3 +47,14 @@ def runtime_fallback():
 
 def unreachable_display(ax, frame):
     ax.imshow(frame, cmap="gray")
+
+
+def handler_name_bound_in_try(path):
+    # PLANTED: ContextError is imported inside the try its own handler
+    # catches. If the import is what fails, the except clause raises
+    # NameError while handling the error it exists to report.
+    try:
+        from analysis_context import ContextError
+        return ContextError(path)
+    except ContextError:
+        return None
