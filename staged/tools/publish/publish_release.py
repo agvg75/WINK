@@ -55,6 +55,11 @@ FOLDER_TEMPLATE = "WINK_Lab_Tools_v{version}_Current_Files"
 # this is sent to Setup_Lab_Tools.bat rather than half-updated.
 MIN_RUNTIME_VERSION = "1.1.0"
 
+# Long enough for the slowest honest suite - the drive-audit and
+# census checks read from L over SMB - and short enough that a
+# blocked GUI test is caught in minutes rather than never.
+TEST_TIMEOUT_S = 180
+
 SKIP_DIRS = {"__pycache__", ".git", ".venv", ".githooks", "node_modules",
              "NIKE_Review_Sessions", ".claude", ".pytest_cache"}
 SKIP_SUFFIX = {".pyc", ".pyo"}
@@ -112,8 +117,24 @@ def check_suite():
     print(f"running {len(tests)} check suites")
     failures, skipped = [], []
     for path in tests:
-        result = subprocess.run([sys.executable, str(path)], cwd=str(STAGED),
-                                capture_output=True, text=True)
+        # A PER-TEST TIMEOUT, because one suite that never returns hangs the
+        # whole release. test_cockpit_scrolling opens a Tk window and blocks
+        # on its mainloop; run unattended it sat for nine minutes with the
+        # publish waiting behind it and no indication of what was stuck.
+        #
+        # A timeout is a FAILURE, not a skip. A check that cannot complete
+        # unattended cannot gate a release, and calling it green because it
+        # never finished is how a suite stops meaning anything.
+        try:
+            result = subprocess.run([sys.executable, str(path)],
+                                    cwd=str(STAGED), capture_output=True,
+                                    text=True, timeout=TEST_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            failures.append((path.name,
+                             f"did not finish within {TEST_TIMEOUT_S}s - "
+                             f"probably waiting for a window or input"))
+            print(f"  HUNG  {path.name:<34} killed after {TEST_TIMEOUT_S}s")
+            continue
         tail = (result.stdout or result.stderr).strip().splitlines()
         last = tail[-1] if tail else "(no output)"
         if result.returncode == 0:
