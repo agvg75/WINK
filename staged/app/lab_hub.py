@@ -806,6 +806,15 @@ class Hub(_BASE):
         self.launch_button = ttk.Button(
             detail, text="Launch", command=self._launch_selected)
         self.launch_button.pack(anchor="w", padx=(14, 4), pady=4)
+        # The effective version of THIS tool, which is usually not the release
+        # number: a student on v11.138 whose egg counter last changed in
+        # v11.130 is better served by "v11.130" than by the number on the
+        # folder. Clicking opens the releases that could have changed it.
+        self.detail_version = tk.Label(
+            detail, text="", bg=PANEL, fg="#3A5FCD", cursor="hand2",
+            font=("Segoe UI", 9, "underline"))
+        self.detail_version.pack(anchor="w", padx=(14, 4), pady=(2, 8))
+        self.detail_version.bind("<Button-1>", lambda _e: self._open_versions())
         self.launch_button.state(["disabled"])
         # These three carried a FIXED wraplength, which is correct only at the
         # width someone measured once. This pane is user-resizable: narrow it
@@ -1130,6 +1139,7 @@ class Hub(_BASE):
                 "\n\nNot configured. Set TIERPSY_PATH to the installed "
                 "Tierpsy executable.")
         self.detail_requires.config(text=needs)
+        self._show_version(tool)
         self.launch_button.config(text=f"Launch {tool.name}")
         if available:
             self.launch_button.state(["!disabled"])
@@ -1140,6 +1150,39 @@ class Hub(_BASE):
     def _select_and_launch(self, tool):
         self._select_tool(tool)
         self._launch_selected()
+
+    def _show_version(self, tool):
+        """The tool's effective version, and its pin if it has one."""
+        if tool.kind != "python" or not tool.filename:
+            self.detail_version.config(text="")
+            return
+        try:
+            import launch_history
+            pinned = launch_history.LaunchHistory().pinned(tool.name)
+        except Exception:                                    # noqa: BLE001
+            pinned = None
+        version = effective_version_for(tool)
+        if pinned:
+            text = f"PINNED to v{pinned} - version history"
+        elif version:
+            text = f"Last changed in v{version} - version history"
+        else:
+            # Not "unknown version": the index simply has not been built on
+            # this machine yet, and saying so is better than a bare blank.
+            text = "Version history"
+        self.detail_version.config(text=text)
+
+    def _open_versions(self):
+        tool = self.selected_tool
+        if not tool or tool.kind != "python" or not tool.filename:
+            return
+        try:
+            import version_picker
+            version_picker.open_picker(self, tool.name, tool.filename)
+        except Exception as exc:                             # noqa: BLE001
+            messagebox.showerror(
+                "Version history",
+                f"Could not read the version history:\n{exc}")
 
     def _launch_selected(self):
         if not self.selected_tool:
@@ -1231,6 +1274,27 @@ class Hub(_BASE):
                 messagebox.showerror(tool.name, "Could not find this tool's file on this machine.")
                 return
             movie = self.movie if tool.takes_movie else None
+            # A PIN THAT DOES NOT CHANGE WHAT LAUNCHES IS DECORATION. If this
+            # user pinned this tool, start it from the pinned release's whole
+            # tree. Failure to do so falls through to the normal launch and
+            # says why, rather than silently running the newest code under a
+            # label claiming otherwise - which is the original defect of this
+            # whole investigation, in miniature.
+            try:
+                import launch_history
+                import version_picker
+                pinned = launch_history.LaunchHistory().pinned(tool.name)
+            except Exception:                                # noqa: BLE001
+                pinned = None
+            if pinned:
+                if version_picker.launch_version(tool.name, pinned,
+                                                 tool.filename):
+                    return
+                messagebox.showwarning(
+                    tool.name,
+                    f"You have this tool pinned to v{pinned}, but that "
+                    f"release is not available on the share.\n\nStarting the "
+                    f"current version instead.")
             try:
                 launch_python(path, movie, module=tool.name,
                               version=effective_version_for(tool))
