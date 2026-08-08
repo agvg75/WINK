@@ -542,11 +542,18 @@ class Hub(_BASE):
         self.feedback_store = RunFeedbackStore()
         self.updater = ApplicationUpdater(ROOT, github_repo="agvg75/WINK")
         self.versions = self.updater.local_versions()
-        self.app_version = self.versions.get("installed_app_version",
-                                             "unknown")
+        # FROM THE TREE, NOT FROM A FILE THAT CAN DISAGREE WITH IT. The
+        # installed-version JSON is written at install time, so a Hub
+        # started from `staged` displayed the last version INSTALLED
+        # while running entirely different code. The one indicator
+        # anyone would check could not detect the problem.
+        import running_version
+        self.running = running_version.describe()
+        self.app_version = self.running["version"]
         self.runtime_version = self.versions.get("installed_runtime_version",
                                                  "unknown")
-        self.title(f"WINK v{self.app_version} - Worm Imaging and Kinematics")
+        self.title(f"WINK {running_version.title_suffix()}"
+                   f" - Worm Imaging and Kinematics")
         self.filter_text = tk.StringVar()
         self.status_filter = tk.StringVar(value="All")
         self.all_tools_value = tk.StringVar(value="All tools")
@@ -868,15 +875,27 @@ class Hub(_BASE):
                 f"The existing version was preserved.\n\n{exc}")
             return
         if redirect is not None:
+            # NEVER RELAUNCH FROM ANOTHER TREE MID-SESSION. This used to
+            # Popen the new folder's lab_hub.py and destroy this one, so a
+            # session that began in one tree continued in a different one -
+            # and because the version string came from an install-time file
+            # rather than the tree, nothing on screen changed to say so.
+            # Anyone testing a fix could be moved onto other code after
+            # accepting a single dialog, and every observation afterwards was
+            # about the wrong build.
+            #
+            # The update is prepared and the person closes and reopens. One
+            # extra click, and the tree they are running is always the tree
+            # they started.
             messagebox.showinfo(
-                "Opening published WINK update",
-                "This Hub is running from the read-only shared distribution. "
-                "WINK will open the published updated folder without changing "
-                "or renaming anything on the L drive.")
-            subprocess.Popen(
-                [sys.executable, str(redirect / "app" / "lab_hub.py")],
-                cwd=str(redirect / "app"))
-            self.after(200, self.destroy)
+                "WINK update ready",
+                f"Version {manifest['app_version']} is published and "
+                f"ready.\n\n"
+                f"CLOSE this Hub and open WINK again to use it.\n\n"
+                f"It has been prepared at:\n{redirect}\n\n"
+                f"Nothing was changed in the copy you are running now, and "
+                f"this window is still the version you started with "
+                f"({self.app_version}).")
         else:
             messagebox.showinfo(
                 "WINK update installed",
