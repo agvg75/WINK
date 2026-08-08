@@ -127,10 +127,27 @@ check("and pins it to 5.x, so a fresh install cannot pick up v4 or v6",
       pin is not None and ">=5" in pin.group(0) and "<6" in pin.group(0),
       pin.group(0) if pin else "no pin found")
 
-release = (ROOT / "app" / "release_info.json").read_text(encoding="utf-8")
+# THE FACT MOVED, THE ASSERTION DID NOT. This used to read
+# staged/app/release_info.json. That file was a STALE RELEASE STAMP: it
+# asserted a version staged did not have, which is what made a Hub running
+# from staged display "WINK v11.137" while executing entirely different code.
+# It is deleted, and publish_release.py now REFUSES to publish if one
+# reappears in staged.
+#
+# The gate itself did not go away - it moved to where publishing actually
+# reads it. MIN_RUNTIME_VERSION is what sends a machine whose environment
+# lacks magpylib to Setup_Lab_Tools.bat instead of half-updating it, since
+# the updater swaps program files and never runs pip.
+publish = (ROOT / "tools" / "publish" / "publish_release.py").read_text(
+    encoding="utf-8")
+pinned = re.search(r'MIN_RUNTIME_VERSION\s*=\s*"([\d.]+)"', publish)
+check("the published runtime floor is declared where publishing reads it",
+      pinned is not None,
+      pinned.group(1) if pinned else "MIN_RUNTIME_VERSION not found")
 check("the runtime version was bumped, so machines missing the library are "
       "gated out of the update instead of half-updated",
-      '"runtime_version": "1.0.0"' not in release, release.strip())
+      pinned is not None and pinned.group(1) != "1.0.0",
+      pinned.group(1) if pinned else "not found")
 
 print()
 failed = [n for n, ok, _ in results if not ok]

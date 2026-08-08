@@ -111,6 +111,36 @@ def check_no_stale_stamp():
                f"and re-run. Publishing writes it into the output tree.")
 
 
+def why_failed(result, last):
+    """Say why a suite failed, which is rarely the last thing it printed.
+
+    THIS EXISTS BECAUSE THE REPORT LIED. A suite died on an uncaught
+    FileNotFoundError, and the refusal read:
+
+        FAIL  test_magnet_dependency_guard.py    PASS  and pins it to 5.x
+
+    The last STDOUT line was the final passing check; the traceback was on
+    STDERR, which `stdout or stderr` never looks at once stdout is non-empty.
+    A failure notice whose text reads "PASS" costs more than no notice: it
+    invites the reader to dismiss the failure as a reporting quirk.
+
+    Order: the exception, then a self-declared failure line, then the tail.
+    """
+    err = (result.stderr or "").strip().splitlines()
+    if err:
+        # The last stderr line of a traceback is the exception itself.
+        # Carry the innermost frame too - "FileNotFoundError: ... x.json"
+        # says what broke, the frame says who asked for it.
+        frames = [ln.strip() for ln in err if ln.strip().startswith("File \"")]
+        where = f"   ({frames[-1]})" if frames else ""
+        return err[-1] + where
+    declared = [ln.strip() for ln in (result.stdout or "").splitlines()
+                if "FAILED:" in ln or ln.strip().startswith("FAIL")]
+    if declared:
+        return declared[-1]
+    return last
+
+
 def check_suite():
     """Run every test_*.py. A release nobody checked is not a release."""
     tests = sorted((STAGED / "tests").glob("test_*.py"))
@@ -148,8 +178,9 @@ def check_suite():
             print(f"  SKIP  {path.name:<34} needs "
                   f"{module.group(1) if module else '?'}")
         else:
-            failures.append((path.name, last))
-            print(f"  FAIL  {path.name:<34} {last[:38]}")
+            why = why_failed(result, last)
+            failures.append((path.name, why))
+            print(f"  FAIL  {path.name:<34} {why[:38]}")
     if failures:
         refuse("check suites failed:\n"
                + "\n".join(f"    {name}: {why}" for name, why in failures))
