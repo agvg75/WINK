@@ -15,12 +15,21 @@ not a fallback.
 | tier | state |
 |---|---|
 | **Tier 0** | starter copy job specified below, not yet built; account and MacBook not started; first experiment specified, not run |
-| **Tier 1** | items and fallbacks **NOT YET ENUMERATED — the freeze date is meaningless until they are** |
+| **Tier 1** | **6 items enumerated, each with a fallback** (8 Aug). None started. |
 | **Tier 2** | not yet enumerated |
 
-**The most urgent gap is not a Tier 0 task.** It is that Tier 1 has no
-written items and no written fallbacks. The 21 August freeze can only fire
-against a list that exists, so that list is the next thing to write here.
+**13 days to freeze.** Every Tier 1 item now has a written fallback, and
+**none of them can stop 1 September** — which is the useful thing the list
+established. What the freeze protects is the *decision*, not the work.
+
+**Cheapest items with the most leverage, if anything is done early:**
+
+- **item 4's partition** — needs a ruling, not work, and it must precede any
+  outlining or it cannot happen at all
+- **the starter copy job** (Tier 0) — on the critical path in *both* branches
+  of item 2, so it is never wasted
+- **item 6 before item 2's purchase** — running it after the purchase wastes
+  it entirely
 
 ---
 
@@ -101,10 +110,70 @@ list once, before it writes anything.
 
 ---
 
-## Tier 1 — should exist, each with a fallback
+## Tier 1 — wanted by Sept 1
 
-> **NOT YET ENUMERATED.** Items and their fallbacks go here. Until they do,
-> the 21 August freeze has nothing to fire against.
+**On 21 August, every unfinished item below executes its fallback WITHOUT
+DEBATE.** The fallbacks are written now, in advance, which is the only time
+they can be chosen on their merits rather than against a deadline and a pile
+of sunk work.
+
+**Read the fallback column first.** Every one of these is survivable. That is
+the point of the exercise: nothing in Tier 1 can stop 1 September, so nothing
+in Tier 1 is worth a panic in the last week.
+
+### 1. Grant-plan 0.1 complete
+Eligibility, counts per strain, durations.
+
+**Fallback:** publish partial counts **labelled PARTIAL**. Starter-set science
+proceeds. The full census becomes a **week-1 credit task**.
+
+### 2. Working-set drive sized, purchased, filled
+
+**Fallback:** the **starter drive** (named datasets, §0.3) on **existing
+hardware** — `I:` or the 16 TB — **is the September data plane**. The full set
+follows **mid-window, via the same copy tool**. The copy tool is therefore on
+the critical path in both branches, which is why it is the first concrete
+task.
+
+### 3. Tierpsy results reader (validation plan V2)
+
+**Fallback: defer whole.** It is **itself grant work**, so deferring it costs
+nothing that was not going to be done in-window anyway — it becomes a
+**week-1/2 Claude Science task on credits**.
+
+### 4. Atlas partition sealed, curation contact sheets confirmed
+
+**Fallback:** **seal the partition on whatever animal list exists at freeze** —
+**the partition needs no new work, only a ruling**. Curation **defaults to the
+17-animal pairing pool**, with hard cases added later.
+
+This one deserves a note: the partition is cheap and the *timing* is
+everything. It must precede any outlining (§4.1 of the atlas spec), so sealing
+a slightly worse list on time is strictly better than sealing a better list
+late — a late partition is not a partition at all.
+
+### 5. chkdsk H verdict + consolidation manifest verified
+
+**Fallback: none needed for 1 September.** H **stays untrusted and uncleared**
+until done. It blocks **drive clearing only, not the start**.
+
+The thing to protect here is the ordering already ruled: if chkdsk is not
+clean, **re-walk H and diff against MANIFEST.csv before H is trusted or
+cleared**. Nothing about a September start depends on that finishing.
+
+### 6. Zarr read-speed prototype
+
+**Informs drive sizing**, so it wants to land before item 2 is purchased.
+
+**Fallback: skip; buy conventional sizing.** Zarr conversion becomes an
+**in-window experiment**.
+
+**Coupling worth stating: 6 gates the useful version of 2.** If 6 slips, 2's
+purchase is made on conventional sizing — which is the fallback, and is fine —
+but buying *before* 6 lands wastes 6 entirely. Either run 6 first or accept
+the conventional purchase; do not do them in the other order.
+
+---
 
 ## Tier 2 — would help
 
