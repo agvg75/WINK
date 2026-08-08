@@ -161,6 +161,13 @@ worst shape a validation can take.
 **Slots after the revert system**, per the sequencing in `ed5bf33`: v11.138 →
 publish stages 4+5 → **fix A (analysis context)** → navigator.
 
+**Both prerequisites are now CLOSED (8 Aug 2026).** Publish stages 4+5 shipped
+in v11.139. Fix A was closed against the day-one footage — `Kiley\12221_GCaMP2
+check\AVG6`, 8,999 frames, range 1–234 — with the handoff carrying the span
+(81 frames, 1 to 234) where it previously sampled 1 to 8,999. **The navigator
+is next**, and it inherits one finding from that closure: the AVG6 name
+collision in §6.1.
+
 **But §4.1 stands and is not a contradiction:** it is buildable against the
 existing census immediately, with **no dependency on the consolidation
 finishing.** Locations refine as manifests land; they do not gate the build.

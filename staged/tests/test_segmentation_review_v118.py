@@ -191,6 +191,43 @@ try:
           "become - proof the fallthrough was producing a wrong answer "
           "rather than an equivalent one",
           not np.array_equal(mask, bright_mask))
+
+    # ------------------------------------- one enum, and a terminal raise
+    import segmentation_review as sr
+    every = []
+    for polarity in sr.POLARITIES:
+        one = SegmentationConfig(mode="global", polarity=polarity,
+                                 threshold=80, threshold_low=80,
+                                 threshold_high=150, **common)
+        one.validate()
+        every.append(int(segment_frame(banded, 0, one).sum()))
+    check("EVERY declared polarity validates and produces a mask - the "
+          "dropdown, the validators and the dispatch all derive from "
+          "POLARITIES, so they cannot drift apart again",
+          len(every) == len(sr.POLARITIES) and all(every), every)
+
+    # The case no validator can catch: a polarity that is LEGAL BY
+    # CONSTRUCTION because someone added it to the enum, but which nothing
+    # implements. Before the terminal raise it would have been segmented as
+    # if bright and returned as an ordinary-looking result.
+    original = sr.POLARITIES
+    try:
+        sr.POLARITIES = original + ("edge",)
+        unwired = SegmentationConfig(mode="global", polarity="edge",
+                                     threshold=80, **common)
+        unwired.validate()
+        raised = False
+        try:
+            segment_frame(banded, 0, unwired)
+        except ValueError:
+            raised = True
+        check("a polarity added to the enum but never wired to a mask rule "
+              "RAISES instead of silently defaulting to bright - the enum "
+              "makes it offerable the moment it is declared, so this raise "
+              "is the only thing between a student and a plausible wrong "
+              "answer", raised)
+    finally:
+        sr.POLARITIES = original
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

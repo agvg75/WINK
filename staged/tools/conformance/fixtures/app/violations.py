@@ -58,3 +58,16 @@ def handler_name_bound_in_try(path):
         return ContextError(path)
     except ContextError:
         return None
+
+
+def enum_dispatch_no_raise(kind, value):
+    # PLANTED: three string comparisons on one name, and the final else
+    # silently absorbs every value not named - including ones added later.
+    if kind == "alpha":
+        return value * 1
+    elif kind == "beta":
+        return value * 2
+    elif kind == "gamma":
+        return value * 3
+    else:
+        return value

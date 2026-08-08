@@ -30,6 +30,17 @@ PHOTOMETRY_EXCLUSIONS = {
 }
 
 
+# ONE LIST, AND EVERYTHING DERIVES FROM IT. The dropdown, both validators and
+# the mask dispatch each held their own copy of the polarity options. "band"
+# was added to two of them and not the third, so the workbench offered a mode
+# it then refused to save; and the dispatch, missing it in a different way,
+# silently segmented a band AS IF BRIGHT.
+#
+# A duplicated enum does not fail when it drifts. It fails later, somewhere
+# else, in whichever copy was not updated - so there is exactly one copy.
+POLARITIES = ("bright", "dark", "band")
+
+
 @dataclass
 class SpaceTimePatch:
     polygon_xy: list[list[float]]
@@ -66,8 +77,9 @@ class FrameRangeRecipe:
             raise ValueError("Unknown segmentation mode in frame range.")
         if self.feature not in {"gray", "local_contrast", "difference"}:
             raise ValueError("Unknown segmentation feature in frame range.")
-        if self.polarity not in {"bright", "dark", "band"}:
-            raise ValueError("Range polarity must be bright, dark, or band.")
+        if self.polarity not in POLARITIES:
+            raise ValueError(
+                f"Range polarity must be one of {', '.join(POLARITIES)}.")
         self.threshold_low = float(np.clip(self.threshold_low, 0, 255))
         self.threshold_high = float(np.clip(self.threshold_high, 0, 255))
         if self.threshold_high < self.threshold_low:
@@ -105,12 +117,13 @@ class SegmentationConfig:
         if self.mode not in {"global", "local_adaptive", "space_time",
                              "fine_texture"}:
             raise ValueError("Unknown segmentation mode.")
-        if self.polarity not in {"bright", "dark", "band"}:
-            # BAND BELONGS HERE TOO. It was added to FrameRangeRecipe and to
-            # the mask function, and this validator was never updated - so the
-            # workbench offered "band" in its dropdown and then refused to
-            # accept the result, which is what a student hit on 8 Aug 2026.
-            raise ValueError("Polarity must be bright, dark, or band.")
+        if self.polarity not in POLARITIES:
+            # This validator once listed only bright and dark while the
+            # dropdown offered band, so the workbench let a student choose a
+            # mode it would then refuse to save. It derives from POLARITIES
+            # now, so the two cannot disagree again.
+            raise ValueError(
+                f"Polarity must be one of {', '.join(POLARITIES)}.")
         if self.feature not in {"gray", "local_contrast", "difference"}:
             raise ValueError("Unknown segmentation feature.")
         self.threshold = float(np.clip(self.threshold, 0, 255))
@@ -306,13 +319,11 @@ def segment_frame(frame, frame_index, config, reference=None):
         # BAND WORKS WITHOUT A PER-RANGE RECIPE. This used to read
         # `recipe and polarity == "band"`, so a band chosen on the config
         # itself fell through to the plain-threshold branch and was segmented
-        # AS IF BRIGHT - a silently wrong mask rather than an error, which is
-        # the more dangerous half of the same defect that made the workbench
-        # refuse to save a band at all.
+        # AS IF BRIGHT.
         source = recipe if recipe else config
         mask = ((feature >= source.threshold_low)
                 & (feature <= source.threshold_high))
-    else:
+    elif polarity in ("bright", "dark"):
         base_threshold = float(recipe.threshold if recipe else config.threshold)
         threshold = (
             effective_threshold_map(
@@ -320,6 +331,22 @@ def segment_frame(frame, frame_index, config, reference=None):
                 base_threshold=base_threshold)
             if mode == "space_time" else base_threshold)
         mask = (feature <= threshold) if invert else (feature >= threshold)
+    else:
+        # THE TERMINAL RAISE. This branch was `else:` holding the bright/dark
+        # rule, which meant every polarity it did not recognise was silently
+        # segmented AS IF BRIGHT - and a wrong mask looks exactly like a
+        # right one. That is precisely how "band" behaved.
+        #
+        # It matters most for a polarity that does not exist yet: add one to
+        # POLARITIES and the dropdown offers it immediately, so the ONLY
+        # thing standing between a student and a plausible wrong answer is
+        # this raise. Validators cannot catch it - the value is legal there
+        # by construction.
+        raise ValueError(
+            f"Segmentation polarity {polarity!r} is declared in POLARITIES "
+            f"but no mask rule implements it. Refusing rather than falling "
+            f"back to bright, which would return a wrong mask that looks "
+            f"like a working one.")
     cleanup = recipe if recipe else config
     if cleanup:
         if cleanup.close_iterations:
@@ -491,7 +518,7 @@ class SegmentationReviewWindow(tk.Toplevel):
         self.high_scale.pack(side="left")
         polarity_box = ttk.Combobox(
             top, textvariable=self.polarity, state="readonly",
-            values=["bright", "dark", "band"], width=8)
+            values=list(POLARITIES), width=8)
         polarity_box.pack(side="left")
         ttk.Label(top, text="Feature").pack(side="left", padx=(8, 0))
         feature_box = ttk.Combobox(

@@ -1,5 +1,15 @@
 """Closing repro for fix A: does the `g` key hand over the right span?
 
+STATUS: FIX A IS CLOSED. Run against the day-one footage on 8 Aug 2026 with
+range 1-234:
+
+    with the range      81 frames sampled, 1 to 234 - inside the span
+    without the range   81 frames sampled, 1 to 8999 - the old behaviour
+
+Both halves confirmed: the machine half here, and the visual half by Andrés
+opening the workbench on that recording. This file stays as the regression a
+person can re-run, not as an open item.
+
 THE DAY-ONE FOOTAGE, recorded here because it was already lost once - it
 lived only in a tracker command line during the provenance diagnostic, and
 nothing in the repository named it:

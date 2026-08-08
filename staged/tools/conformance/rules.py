@@ -72,6 +72,71 @@ def except_name_imported_in_try(path, text):
     return found
 
 
+def enum_dispatch_without_raise(path, text):
+    """An if/elif chain testing one name against string constants, whose
+    final `else` does something other than raise.
+
+    The last branch of such a chain silently absorbs every value the chain
+    does not name - including values that do not exist yet. Adding a member
+    to the enum makes it selectable everywhere at once, and the dispatch
+    keeps returning a confident answer computed by the wrong branch.
+
+    Deliberately narrow: three or more string comparisons on the same name.
+    Two-way chains are usually genuine binary choices with a real default.
+    """
+    import ast
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+
+    def compared_name(test):
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            return None
+        if not isinstance(test.ops[0], ast.Eq):
+            return None
+        left, right = test.left, test.comparators[0]
+        if isinstance(left, ast.Name) and isinstance(right, ast.Constant) \
+                and isinstance(right.value, str):
+            return left.id
+        return None
+
+    # ONLY THE HEAD OF A CHAIN. Every `elif` is itself an ast.If sitting in
+    # the parent's orelse, so walking naively reported one chain once per
+    # branch - confocal_loader came back twice for a single dispatch. A
+    # scanner that double-reports teaches people to skim it.
+    continuations = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and len(node.orelse) == 1 \
+                and isinstance(node.orelse[0], ast.If):
+            continuations.add(id(node.orelse[0]))
+
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or id(node) in continuations:
+            continue
+        names, current, tail = [], node, None
+        while True:
+            name = compared_name(current.test)
+            if name is None:
+                break
+            names.append(name)
+            if len(current.orelse) == 1 and isinstance(current.orelse[0],
+                                                       ast.If):
+                current = current.orelse[0]
+                continue
+            tail = current.orelse
+            break
+        if len(names) < 3 or len(set(names)) != 1 or tail is None:
+            continue
+        if not tail:                       # no else at all - falls through
+            found.append((node.lineno - 1, f"if {names[0]} == ... (no else)"))
+            continue
+        if not any(isinstance(s, ast.Raise) for s in tail):
+            found.append((node.lineno - 1, f"if {names[0]} == ... (else)"))
+    return found
+
+
 RULES = [
     {
         "id": "withdrawn-numbers",
@@ -254,6 +319,28 @@ RULES = [
         # let any violation excuse itself by sitting near the word - the same
         # self-excusing trap that let `underived_gate` satisfy the
         # underived-constant rule by naming itself.
+        "exempt_context": DOC_CONTEXT,
+        "files": ["app/*.py", "tools/**/*.py"],
+    },
+    {
+        "id": "enum-dispatch-no-raise",
+        "rank": "gating",
+        "summary": "An if/elif chain over enum values whose else does not raise",
+        "family": "error machinery must be fired to be trusted",
+        "incident": (
+            "segment_frame dispatched on polarity with a final `else` holding "
+            "the bright/dark rule, so a config polarity of 'band' - offered "
+            "by the dropdown and rejected by one validator - was segmented AS "
+            "IF BRIGHT wherever it got through. A wrong mask looks exactly "
+            "like a right one. Reported from the live workbench on 8 Aug "
+            "2026 as 'tried band rather than bright or dark and broke it'; "
+            "the loud half was the validator, and the silent half was this "
+            "chain. The danger is worst for a value that does not exist yet: "
+            "adding a member to the enum makes it selectable everywhere at "
+            "once, and no validator can object because the value is legal by "
+            "construction."),
+        "check": enum_dispatch_without_raise,
+        "patterns": [],
         "exempt_context": DOC_CONTEXT,
         "files": ["app/*.py", "tools/**/*.py"],
     },

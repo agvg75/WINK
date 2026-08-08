@@ -6,17 +6,41 @@ Prerequisite for: automatic updates to all machines
 
 ---
 
-## 0.0 Post-publish: the two-minute eyeball
+## 0.0 STANDING REQUIREMENT: real GUI use on changed tools, every release
 
-**A human looks at the screen after each release.** Andrés or the first
-student, two minutes.
+**Every release, a human spends N minutes actually USING the tools that
+changed.** Not looking at them — using them. Clicking the controls, choosing
+the options, saving the result.
 
-**Because the visual check is the item tests prove least.** The v11.139 suite
-has 135 passing checks covering what the picker offers, what it would launch,
-and that an old version runs old code — and not one of them shows that the
-line renders, that the dialog is legible, or that a pin visibly binds. Those
-were verified through a non-Tk core precisely because Tk is hard to assert
-about, which means the gap is exactly where the confidence isn't.
+**This is a standing item, not a courtesy check**, and it is measured in
+minutes of use rather than a checklist of screens, because the defects it
+finds are the ones nobody thought to list.
+
+### The evidence, 8 Aug 2026
+
+v11.139 shipped with **168 passing checks**. Within **one minute** of real use,
+Andrés selected a segmentation polarity of `band` and hit a defect none of
+them covered — and behind it a second, worse one:
+
+| | |
+|---|---|
+| **loud** | the dropdown offered `band`; `SegmentationConfig.validate()` rejected it. The tool let a student choose a mode it would then refuse to save. |
+| **silent** | `segment_frame` handled `band` only when a per-range recipe existed. A band on the config itself fell through and was segmented **as if bright** — a wrong mask that looks exactly like a right one. |
+
+**One minute of use beat 168 automated checks**, and the second defect would
+never have surfaced from a crash report, because it did not crash.
+
+**Why tests structurally cannot cover this.** The picker, the launcher and
+the mask rules are all verified through non-Tk cores, precisely *because* Tk
+is hard to assert about. That is a sound testing decision and it means the
+confidence is thinnest exactly where a person's hand goes. The suite proves
+the logic; only use proves the tool.
+
+### Scope
+
+**The tools that CHANGED in this release**, exercised through their real
+controls. Not a full regression pass — the suite does that — but every
+control the release touched, actually operated once.
 
 **For v11.139 specifically:**
 
