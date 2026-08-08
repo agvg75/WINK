@@ -181,9 +181,16 @@ def _require_positive_scale(simpledialog, messagebox):
 
 
 class Reviewer:
-    def __init__(self, tr, G, plt, session_path, source):
+    def __init__(self, tr, G, plt, session_path, source,
+                 frame_start=None, frame_end=None):
         self.tr = tr; self.G = G; self.plt = plt; self.i = 0
         self.session_path = Path(session_path); self.source = source
+        # The span actually being analysed, 1-based inclusive, so anything
+        # this window launches is asked about the SAME frames. Without it the
+        # segmentation workbench sampled the whole recording while the
+        # tracker worked on an interval - how a 234-frame assessment came to
+        # be checked against 8,999 frames.
+        self.frame_start = frame_start; self.frame_end = frame_end
         self.interval_start = None; self.active_interval = None; self.finalized = False
         from matplotlib.widgets import Slider,Button
         self.fig, self.ax = plt.subplots(figsize=(11, 7));self.fig.subplots_adjust(bottom=.17)
@@ -367,15 +374,48 @@ class Reviewer:
         from segmentation_review import SegmentationConfig
         root = self.fig.canvas.manager.window
         save_dir = self.session_path.parent.parent
+        # THE RECORDING AS LOADED, NOT A DIRECTORY DERIVED FROM THE SESSION
+        # FILE. This used to fall back to `session_path.parent.parent` when no
+        # segmentation config was set, which is wherever the session file
+        # happened to sit - two levels up from it is not the image folder, so
+        # the workbench opened on a folder with no images and said so. The
+        # tracker has held the real source since construction; it simply was
+        # not being asked. See app/analysis_context.py.
         source_path = (self.tr.segmentation_config.source
-                       if self.tr.segmentation_config is not None else str(save_dir))
+                       if self.tr.segmentation_config is not None
+                       else str(self.source))
         result_path = save_dir / "nike_segmentation_review.json"
         previous_mtime = (
             result_path.stat().st_mtime_ns if result_path.exists() else None)
         launcher = ROOT / "tools" / "segmentation_review_tool.py"
-        completed = subprocess.run(
-            [sys.executable, str(launcher), str(source_path),
-             "--tool", "track_one_worm"], check=False)
+        command = [sys.executable, str(launcher), str(source_path),
+                   "--tool", "track_one_worm"]
+        # AND THE FRAME RANGE TRAVELS WITH IT. The workbench is being asked to
+        # judge the same span the tracker is working on; without the range it
+        # would sample the whole recording, which is how a 234-frame
+        # assessment came to be validated against 8,999 frames.
+        context_path = None
+        try:
+            from analysis_context import AnalysisContext
+            context = AnalysisContext(
+                source=str(source_path), tool="single_worm_tracker",
+                frame_start=self.frame_start, frame_end=self.frame_end,
+                fps=getattr(self.tr, "fps", None),
+                um_per_px=getattr(self.tr, "um_per_px", None),
+                session=str(self.session_path),
+                note="opened from the tracker's segmentation review (g)")
+            context_path = context.write_temp()
+            command += context.command_arguments(context_path)
+        except Exception:                                    # noqa: BLE001
+            # A context that cannot be written must not stop the workbench
+            # from opening; it only means the receiver falls back to asking.
+            context_path = None
+        completed = subprocess.run(command, check=False)
+        if context_path is not None:
+            try:
+                Path(context_path).unlink()
+            except OSError:
+                pass
         current_mtime = (
             result_path.stat().st_mtime_ns if result_path.exists() else None)
         if completed.returncode != 0:
@@ -1233,7 +1273,8 @@ def main(argv=None):
         "The review window supports interval reanalysis: b marks the beginning and e the end.\n"
         "Use f to correct/add an anchor, w to save progress, q/close to save and exit,\n"
         "or s to finalize the CSV. Saved sessions can be resumed later.")
-    reviewer = Reviewer(tr, G, plt, session_path, source)
+    reviewer = Reviewer(tr, G, plt, session_path, source,
+                        frame_start=a_start + 1, frame_end=a_end + 1)
     reviewer.run()
 
     if not reviewer.finalized:

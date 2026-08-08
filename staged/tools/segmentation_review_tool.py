@@ -14,6 +14,11 @@ sys.path.insert(0, str(ROOT / "tools" / "movie"))
 from movie_reader import open_movie  # noqa: E402
 from segmentation_review import (  # noqa: E402
     GEOMETRY_TOOLS, SegmentationReviewWindow)
+# Imported at module level, not inside the handler that uses it: an `except
+# ContextError` clause whose name is only bound on the success path raises
+# NameError while handling the very error it was written to report.
+from analysis_context import (  # noqa: E402
+    ContextError, add_argument, from_arguments, sample_indices)
 
 
 LABELS = {
@@ -36,6 +41,7 @@ def _arguments(argv=None):
     parser.add_argument(
         "--tool", choices=tuple(LABELS),
         help="Target geometry tool (otherwise chosen interactively).")
+    add_argument(parser)
     return parser.parse_args(argv)
 
 
@@ -48,7 +54,21 @@ def main(argv=None):
     except Exception as _e:   # never break the tool for this
         print('error reporting unavailable:', _e)
     root.withdraw()
+    # A CONTEXT, IF THE CALLER SENT ONE. It carries the recording as the
+    # calling tool loaded it and the frame range it is working on, so this
+    # window judges the same span rather than sampling the whole recording.
+    # A malformed one is reported, not ignored: silently falling back to
+    # "ask the user" would hide exactly the handoff failure this fixes.
+    context = None
+    try:
+        context = from_arguments(args)
+    except ContextError as exc:
+        messagebox.showerror("Segmentation workbench", str(exc))
+        return 2
+
     source = args.source
+    if source is None and context is not None:
+        source = context.source
     if source is None:
         source = filedialog.askopenfilename(
             title="Choose a movie, stack, or one image from a numbered sequence",
@@ -87,9 +107,16 @@ def main(argv=None):
         first=read_frame(0);bytes_per_frame=max(int(np.asarray(first).nbytes),1)
         # Keep the sampled preview/reference below 512 MiB even for 4K color.
         sample_limit=max(3,min(81,(512*1024**2)//bytes_per_frame))
-        indices=sorted(set(int(round(x)) for x in np.linspace(
-            0,count-1,min(count,sample_limit))))
+        # Sample the span the CALLER is working on, not the whole recording,
+        # and refuse a range that does not fit rather than trimming it. The
+        # rule lives in analysis_context because every receiver needs it.
+        indices = sample_indices(count, sample_limit, context)
         frames = [read_frame(i) for i in indices]
+    except ContextError as exc:
+        # A frame range that does not fit is not a broken source, and calling
+        # it one would send the reader to check the wrong thing.
+        messagebox.showerror("Frame range does not fit", str(exc), parent=root)
+        return 2
     except Exception as exc:
         messagebox.showerror("Cannot open source", str(exc), parent=root)
         return

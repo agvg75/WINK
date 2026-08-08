@@ -6,6 +6,30 @@ Prerequisite for: automatic updates to all machines
 
 ---
 
+## 0.0 Post-publish: the two-minute eyeball
+
+**A human looks at the screen after each release.** Andrés or the first
+student, two minutes.
+
+**Because the visual check is the item tests prove least.** The v11.139 suite
+has 135 passing checks covering what the picker offers, what it would launch,
+and that an old version runs old code — and not one of them shows that the
+line renders, that the dialog is legible, or that a pin visibly binds. Those
+were verified through a non-Tk core precisely because Tk is hard to assert
+about, which means the gap is exactly where the confidence isn't.
+
+**For v11.139 specifically:**
+
+- [ ] a tool's detail pane shows **"Last changed in v…"**, and it is not the
+      release number
+- [ ] clicking it **opens the picker**, and the list is short — only releases
+      that changed that tool
+- [ ] **pin a tool, relaunch it, and see the pin bind** — the label reads
+      PINNED and the older version is what opens
+
+The third is the one that matters most: a pin that silently fails to bind is
+the original defect of this whole investigation wearing a new hat.
+
 ## 0. The version number means one thing (Andrés, 8 Aug 2026)
 
 **MAJOR.COUNTER.** `11.139` is the **139th release of the v11 line**, not a

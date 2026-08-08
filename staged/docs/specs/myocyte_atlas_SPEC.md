@@ -87,3 +87,34 @@ At 17 animals this is roughly **12 release / 5 sealed**, wild type first.
 `confocal_census_2026-08-07.md` §7 is held back by construction and is a
 second, differently-sourced bridge — nuclei-seeded segmentation there never
 sees the stain-free features at all.
+
+---
+
+## 5. Curation: choosing which stacks get traced
+
+**Runs after the partition is sealed** (§4.1) and **draws from the release
+pool only**. **Tracing itself waits on the muscle-layer extractor** — outlines
+live in its frame, so they cannot be drawn before that frame exists.
+
+**STRATIFIED-DIVERSE, NOT REPRESENTATIVE.** The set is chosen to span the
+failure modes, not to mirror the archive's composition. A representative
+sample would be mostly ordinary wild-type stacks, and the proposer's problems
+do not live there.
+
+| stratum | |
+|---|---|
+| **wt anchors** | the pairing pool first |
+| **deliberate hard cases** | **dystrophic, bent, dim, boundary-dense** |
+| **spread** | across sessions and years, via **cheap texture-feature clustering** |
+
+Clustering on texture features is a means of *spreading* the selection, not a
+criterion of quality — it exists so the set does not silently collapse onto
+one microscope session or one good year.
+
+**Quality gates:** calibration present, **measured** bit depth (not declared),
+staining and penetration adequate.
+
+**Delivered as contact sheets for Andrés to confirm.** The selection is
+proposed, not decided — same propose/establish split the establishment UI
+uses, and for the same reason: the automatic part is cheap to redo and the
+judgement is not.
