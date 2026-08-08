@@ -183,13 +183,38 @@ is: compress hard, and buy for the compressed size.
 
 **At 3.02×, 1 TB of this material stores in about 0.33 TB.**
 
-**Two caveats that stop this being a purchase decision on its own:**
+### Round two — per modality (8 Aug 2026)
 
-1. **One stack.** Compression is content-dependent — confocal background
-   compresses far better than dense signal — so the range needs several
-   stacks, including a dense confocal one, before a number is trusted.
-2. **The box was busy.** The consolidation was running across the same bus,
-   so the read rates are lower bounds. Re-run when it finishes.
+Caveat 1 is now answered. Three samples across both modalities, zstd-3:
+
+| modality | source | shape, dtype | ratio | read | 1 plane |
+|---|---|---|---|---|---|
+| **dense confocal** | `.lif` Series001 | 50 × 4096² uint8 | **3.12×** | 1630 MB/s | 46 ms |
+| **behavioural, dim/noisy** | day-one AVG6 | 400 × 768×1024 uint16 | **3.48×** | 402 MB/s | 5.6 ms |
+| behavioural | Carlee AVG6 | 1154 × 768×1024 uint16 | 3.02× | 401 MB/s | 5.2 ms |
+
+**THE RATIO IS STABLE ACROSS MODALITIES: 3.0–3.5×.** That was not guaranteed
+— dense confocal signal could easily have compressed far worse than sparse
+behavioural footage, and it does not. **Sizing rule: buy for RAW ÷ 3**, and
+the same divisor serves both working sets.
+
+**Read behaviour differs sharply and harmlessly.** Confocal reads 4× faster in
+aggregate (16 MB planes amortise per-chunk overhead) but has 8× the
+single-plane latency (46 ms vs 5.6 ms) because a plane is 8× larger. Neither
+figure is near the transport limit, so neither changes the purchase.
+
+**Compressed working set by modality** (apply to the measured raw sizes when
+the census lands):
+
+| modality | per raw TB |
+|---|---|
+| dense confocal | **0.32 TB** |
+| behavioural | **0.29–0.33 TB** |
+
+**Remaining caveat: the box was busy.** The consolidation was running across
+the same bus for every run, so read rates are lower bounds. Ratios are not
+affected — compression is arithmetic, not I/O — so **the sizing number stands
+while the speed numbers do not.**
 
 **Fallback if not completed: skip; buy conventional sizing.** Zarr conversion
 becomes an **in-window experiment**.

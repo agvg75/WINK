@@ -258,6 +258,59 @@ and `Muscle sizes` folders hold TIFF exports and Leica metadata only — no
 `.roi`, no `RoiSet.zip`. The outlines behind these numbers have not been
 located.
 
+### The anchor's working folder, and the search for the first rater
+
+**`L:\05_Proprioception\Muscle growth paper`** is the paper's working folder,
+found while sweeping for Akash Anbu. It holds the **`FILE MASTER LIST.xlsx`**
+itself, plus `Sarcomere Number.xlsx`, `I-Band Measurement.xlsx`,
+`Branching Number.xlsx`, `Outlier calculation.xlsx`,
+`Raw Data and Supporting Information.xlsx`, and
+`ANDRES USE THIS\Muscle Area.xlsx`.
+
+**Branching WAS measured**, even though the published paper reports no
+branching result — `Branching Number.xlsx` and `Sorted Branching Number.xlsx`
+exist. That is prior art for the branching new-measurement candidate, not a
+reproduction target.
+
+**Authorship, read from each workbook's own metadata rather than inferred:**
+
+| author | files |
+|---|---|
+| Fazyl, Adina | Muscle Area, Sarcomere Number, New Sarcomere Width, Raw Data, Sorted Branching, Full Comparison |
+| Marchiafava, Danny | **FILE MASTER LIST**, Branching Number, I-Band Measurement, Sorted Sarcomere Number |
+| Vidal-Gadea, Andrés | Outlier calculation, multiple regression, working spreadsheet |
+| **Akash Anbu** | **none** |
+
+**AKASH'S WORKSHEETS ARE NOT IN THIS FOLDER AS SPREADSHEETS.** The only
+artifact bearing his name is **`ANDRES USE THIS\Akash Graphs.JNB`** — a
+SigmaPlot notebook (OLE2, 330 KB) whose embedded text names its own data
+sources (*"Data source: Sarcomere Number in Akash Graphs"*). **His per-myocyte
+numbers are inside that notebook**, in SigmaPlot worksheets that need SigmaPlot
+to export. The lab appears to have it — sibling files are `SP 11.0.JNB`.
+
+**Two caveats on the negative result, because absence of evidence is doing
+work here:**
+
+- **Office metadata records the account that SAVED a file**, not who measured.
+  If Akash worked on a shared login, or his numbers were transcribed into
+  Adina's or Danny's sheets, his name would not appear.
+- **Two Adina generations exist** — `Muscle Area.xlsx` (23 Jul 2024) and
+  `Muscle_Area_with_averages_2.xlsx` (25 Aug 2025), both authored by her. That
+  is an **intra-rater** pair, not the human-vs-human comparison, and the two
+  differ in structure: the earlier carries `Muscle Number` and a `Special`
+  column (*Wavy*, *Slightly Wavy*), the later carries the full 16-measure
+  shape descriptor set.
+
+**To unblock the inter-rater deliverable: export the worksheets from
+`Akash Graphs.JNB` in SigmaPlot.** That is the whole blocker. Once exported,
+the join is per-myocyte on `.lif` + series, both raters against the same
+acquisitions, with the drift direction recorded — and it yields the lab's
+first measured human-vs-human error distribution, which becomes the reference
+floor for automation tolerances.
+
+**When found, Akash's material seals with the anchor**, under the same
+circularity logic as Adina's (§7.4 of the registry spec).
+
 ### Second deposit — NOT YET READ
 
 The data-availability statement reads: *"All raw measurements and statistical

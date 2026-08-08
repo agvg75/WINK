@@ -154,6 +154,38 @@ worst shape a validation can take.
 - **Search results carry the discriminators.** "AVG6" as a query must return
   two rows that a person can tell apart without opening them.
 
+### 6.2 Frame type is part of identity — and the same folder taught it
+
+**A recording folder's FRAME-TYPE CENSUS joins the identity record:** the
+dtype, channel count and pixel dimensions actually present, each with its
+count. `app/frame_census.py`.
+
+**The second lesson from Carlee's AVG6.** That directory gave §6.1 the name
+collision. It also holds **1,262 files that are not one recording**: 1,154
+grayscale `(768,1024)` uint16 planes and **108 RGB `(768,1024,3)`** planes.
+Every tool had treated the folder as a single series; loading it raised
+numpy's `all input arrays must have the same shape`, which names neither how
+many planes differ nor which nor how.
+
+**A directory that has now taught two distinct lessons about identity is a
+type, not an anecdote.** Folder name is not identity; file count is not
+identity; **frame type is part of identity.**
+
+**Two requirements, and the second matters more:**
+
+1. **Loaders VERIFY MEASURED HOMOGENEITY before series treatment.** The frames
+   are read. Extension, naming convention and a tidy appearance say nothing
+   about dtype or channel count.
+2. **Mixed folders SURFACE THE SPLIT AND NEVER COERCE.** Keeping the majority
+   and dropping 108 planes is a measurement decision taken by a loader, and an
+   invisible one — the result looks like an ordinary recording that happens to
+   be 108 frames shorter. The refusal names the split and states that nothing
+   was loaded.
+
+**For the navigator this is a search discriminator too:** two folders with the
+same name, the same person and similar counts may still be different kinds of
+recording, and the census is what says so.
+
 ---
 
 ## 7. Queue position, 7 Aug 2026

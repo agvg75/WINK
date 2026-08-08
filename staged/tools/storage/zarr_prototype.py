@@ -55,7 +55,7 @@ def folder_bytes(path):
     return total
 
 
-def load_stack(source):
+def load_stack(source, max_planes=None, series=None):
     """(array, how) for a .lif series or a folder of TIFFs."""
     import numpy as np
     source = Path(source)
@@ -65,6 +65,12 @@ def load_stack(source):
                        if p.suffix.lower() in (".tif", ".tiff"))
         if not files:
             raise SystemExit(f"no TIFFs in {source}")
+        if max_planes:
+            # BOUNDED ON PURPOSE. A behavioural recording is 9,000 frames and
+            # would not fit in memory; the compression ratio is a property of
+            # the content, not of how many planes are read, so a bounded
+            # sample answers the sizing question at a fraction of the cost.
+            files = files[:max_planes]
         planes = [tifffile.imread(str(p)) for p in files]
         # REAL FOLDERS ARE NOT UNIFORM. A recording can hold planes of more
         # than one shape - a cropped re-acquisition, a stray calibration
@@ -83,9 +89,18 @@ def load_stack(source):
                   f"({len(planes)} of {len(files)} planes)")
         return np.stack(planes), f"{len(planes)} TIFF planes"
     import confocal_loader
-    stack = confocal_loader.load_stack(source, require_calibration=False)
-    array = stack["array"] if isinstance(stack, dict) else stack
-    return np.asarray(array), "one .lif series"
+    stack = confocal_loader.load_stack(source, series=series,
+                                       require_calibration=False)
+    # ConfocalStack(array=..., metadata=...), a (Z, C, Y, X) namedtuple-alike.
+    # np.asarray() on the container itself yields a 0-d object array, which
+    # zarr then refuses with a message about ambiguous dtypes - true, and
+    # nothing to do with the real mistake.
+    array = np.asarray(getattr(stack, "array", stack))
+    while array.ndim > 3:                 # (z, c, y, x) -> first channel
+        array = array[:, 0]
+    if max_planes and array.shape[0] > max_planes:
+        array = array[:max_planes]
+    return array, f".lif series {series if series is not None else 0}"
 
 
 def running_load():
@@ -117,6 +132,12 @@ def main():
                     help="storage locations to write the Zarr copies into")
     ap.add_argument("--chunk-z", type=int, default=1,
                     help="planes per chunk; 1 favours single-plane reads")
+    ap.add_argument("--max-planes", type=int, default=None,
+                    help="bound the sample; ratio is a property of content")
+    ap.add_argument("--series", type=int, default=None,
+                    help="which .lif series to read")
+    ap.add_argument("--label", default="",
+                    help="modality name for the results file")
     args = ap.parse_args()
 
     import numpy as np
@@ -134,7 +155,9 @@ def main():
               "measurements")
     print()
 
-    (array, how), load_seconds = _timed(lambda: load_stack(args.source))
+    (array, how), load_seconds = _timed(
+        lambda: load_stack(args.source, max_planes=args.max_planes,
+                           series=args.series))
     raw_bytes = int(array.nbytes)
     print(f"  loaded        {how}: shape {array.shape}, {array.dtype}, "
           f"{raw_bytes / 1e6:.0f} MB in memory ({load_seconds:.1f}s)")
