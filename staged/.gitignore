@@ -4,3 +4,6 @@
 # is how it was noticed. These are run artifacts - the manifest that matters
 # lives on the drive it describes and is mirrored to L, per the spec.
 tools/drive_audit/consolidation_plan_*.csv
+
+# Machine-local index of published-tree hashes; rebuilt on demand.
+app/.version_index_cache.json

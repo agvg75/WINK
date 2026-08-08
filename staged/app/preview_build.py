@@ -137,10 +137,27 @@ def install(root=None, context=""):
     are separate paths - pythonw discards stderr, so a Tk callback that
     raises otherwise makes a button simply appear to do nothing.
     """
+    # THE PROCESS REPORTS ITS OWN FATE. The Hub started this tool and did not
+    # wait on it, so only this process can say whether it survived. That
+    # outcome is what "revert to the last version that worked FOR YOU" is
+    # computed from - see launch_history. Best-effort: a tool must still run
+    # when the history file is unavailable.
+    try:
+        import launch_history
+        launch_history.arrive()
+    except Exception:                                        # noqa: BLE001
+        pass
+
     def report(exc_type, value, tb):
         if issubclass(exc_type, KeyboardInterrupt):
             sys.__excepthook__(exc_type, value, tb)
             return
+        try:
+            import launch_history
+            launch_history.record_crash(
+                f"{exc_type.__name__}: {value}")
+        except Exception:                                    # noqa: BLE001
+            pass
         where = write_crash(exc_type, value, tb, context=context)
         summary = f"{exc_type.__name__}: {value}"
         try:

@@ -517,13 +517,63 @@ def _venv_python(base: Path = ROOT) -> str:
     return sys.executable
 
 
-def launch_python(script: Path, movie: Optional[str] = None):
+def effective_version_for(tool, warm=False):
+    """The last release that changed this tool, or "" if not yet known.
+
+    READS THE CACHE ONLY. Building the index walks 22 published trees over
+    SMB and takes minutes; doing that on the launch path would freeze the Hub
+    on the click that starts a tool, which is the single worst place to spend
+    it. An unknown effective version is recorded as unknown - a launch is
+    never delayed or blocked to find one out.
+    """
+    try:
+        import module_versions
+        cache = module_versions.CACHE
+        if not warm and not cache.is_file():
+            return ""
+        index = module_versions.load_index()
+        if not index:
+            return ""
+        path = ROOT / tool.filename
+        if not path.is_file():
+            return ""
+        files, _dynamic = module_versions.module_files(path)
+        version, _history = module_versions.effective_version(files, index)
+        return version or ""
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
+def launch_python(script: Path, movie: Optional[str] = None,
+                  module: str = "", version: str = ""):
     """Launch a Python tool in the Lab tools environment (not the hub's own
-    interpreter, which may lack the scientific libraries)."""
+    interpreter, which may lack the scientific libraries).
+
+    Records the launch in this user's history and tells the child its launch
+    id, so the child can report its own fate. The Hub cannot: it does not wait
+    on the tool, and a Hub that did would reintroduce the blocking it exists
+    to avoid.
+
+    ALL OF THE BOOKKEEPING IS BEST-EFFORT. A tool that failed to start because
+    a history file was locked would be a worse defect than the one this
+    records.
+    """
     args = [_venv_python(ROOT), str(script)]
     if movie:
         args.append(movie)
-    subprocess.Popen(args, cwd=str(script.parent))
+    env = None
+    try:
+        import launch_history
+        import running_version
+        store = launch_history.LaunchHistory()
+        launch_id = store.record_launch(
+            module or script.name, version, tree=ROOT,
+            tree_version=running_version.describe().get("version", ""))
+        env = launch_history.launch_environment(
+            module or script.name, version, launch_id)
+    except Exception:                                        # noqa: BLE001
+        env = None
+    subprocess.Popen(args, cwd=str(script.parent), env=env)
 
 
 # --------------------------------------------------------------------------- #
@@ -1182,7 +1232,8 @@ class Hub(_BASE):
                 return
             movie = self.movie if tool.takes_movie else None
             try:
-                launch_python(path, movie)
+                launch_python(path, movie, module=tool.name,
+                              version=effective_version_for(tool))
             except Exception as e:
                 messagebox.showerror(tool.name, f"Could not launch:\n{e}")
         else:  # fiji
