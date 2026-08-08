@@ -74,6 +74,7 @@ def main():
     print(f"handing over     {context.describe_range()}")
 
     # What the workbench will actually read.
+    movie = None
     try:
         from movie_reader import open_movie
         movie = open_movie(args.source)
@@ -86,8 +87,22 @@ def main():
         return 1
     print(f"recording holds  {count:,} frames")
 
+    # THE TOOL'S OWN SAMPLE LIMIT, not a round number of my choosing. The
+    # first version hard-coded 30 and reported "would sample 30 frames" while
+    # the workbench actually loads 81 - so the repro was describing something
+    # the tool does not do. A repro that models the tool loosely can pass
+    # while the tool fails, which makes it worse than no repro.
     try:
-        indices = sample_indices(count, 30, context)
+        read_frame = getattr(movie, "get_frame", None) or movie.read_frame
+        import numpy as np
+        per_frame = max(int(np.asarray(read_frame(0)).nbytes), 1)
+        limit = max(3, min(81, (512 * 1024 ** 2) // per_frame))
+    except Exception:                                        # noqa: BLE001
+        limit = 81
+    print(f"sample limit     {limit} (as the workbench computes it)")
+
+    try:
+        indices = sample_indices(count, limit, context)
     except ContextError as exc:
         print(f"\nREFUSED: {exc}")
         return 1

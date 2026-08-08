@@ -154,6 +154,43 @@ try:
           np.array_equal(segment_frame(frame, 3, legacy), normalized >= 50))
     check("and no recipe is invented for a frame",
           legacy.recipe_for_frame(3) is None)
+
+    # ---------------------------------------------------- band polarity
+    # REPORTED FROM THE LIVE WORKBENCH, 8 Aug 2026: "tried band rather than
+    # bright or dark and broke it". Two defects, and the second is worse.
+    #
+    #   1. The dropdown offered "band" and SegmentationConfig.validate()
+    #      rejected it. Band had been added to FrameRangeRecipe and to the
+    #      mask function; this validator was never updated. Loud failure.
+    #
+    #   2. segment_frame read `recipe and polarity == "band"`, so a band set
+    #      on the CONFIG - with no per-range recipe - fell through to the
+    #      plain-threshold branch and was segmented AS IF BRIGHT. Silent, and
+    #      a wrong mask that looks like a working one.
+    banded = np.zeros((40, 40), np.uint8)
+    banded[10:20, 10:20] = 100          # inside the band
+    banded[25:35, 25:35] = 220          # brighter than the band
+    common = dict(target_tools=["track_one_worm"], accepted=True, locked=True,
+                  blinding_acknowledged=True, source="x")
+    band = SegmentationConfig(mode="global", polarity="band",
+                              threshold_low=80, threshold_high=150, **common)
+    band.validate()
+    check("a config polarity of 'band' validates - the workbench offers it, "
+          "so the config must accept it", band.polarity == "band")
+
+    mask = segment_frame(banded, 0, band)
+    check("band selects what is INSIDE the band", bool(mask[15, 15]))
+    check("and excludes what is brighter than it", not bool(mask[30, 30]))
+    check("and excludes the background below it", not bool(mask[0, 0]))
+
+    bright = SegmentationConfig(mode="global", polarity="bright",
+                                threshold=80, **common)
+    bright.validate()
+    bright_mask = segment_frame(banded, 0, bright)
+    check("a band mask DIFFERS from the bright mask it used to silently "
+          "become - proof the fallthrough was producing a wrong answer "
+          "rather than an equivalent one",
+          not np.array_equal(mask, bright_mask))
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

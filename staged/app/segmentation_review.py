@@ -105,8 +105,12 @@ class SegmentationConfig:
         if self.mode not in {"global", "local_adaptive", "space_time",
                              "fine_texture"}:
             raise ValueError("Unknown segmentation mode.")
-        if self.polarity not in {"bright", "dark"}:
-            raise ValueError("Polarity must be bright or dark.")
+        if self.polarity not in {"bright", "dark", "band"}:
+            # BAND BELONGS HERE TOO. It was added to FrameRangeRecipe and to
+            # the mask function, and this validator was never updated - so the
+            # workbench offered "band" in its dropdown and then refused to
+            # accept the result, which is what a student hit on 8 Aug 2026.
+            raise ValueError("Polarity must be bright, dark, or band.")
         if self.feature not in {"gray", "local_contrast", "difference"}:
             raise ValueError("Unknown segmentation feature.")
         self.threshold = float(np.clip(self.threshold, 0, 255))
@@ -298,9 +302,16 @@ def segment_frame(frame, frame_index, config, reference=None):
         mask = cv2.adaptiveThreshold(
             feature, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, method,
             config.adaptive_block_size, config.adaptive_c) > 0
-    elif recipe and polarity == "band":
-        mask = ((feature >= recipe.threshold_low)
-                & (feature <= recipe.threshold_high))
+    elif polarity == "band":
+        # BAND WORKS WITHOUT A PER-RANGE RECIPE. This used to read
+        # `recipe and polarity == "band"`, so a band chosen on the config
+        # itself fell through to the plain-threshold branch and was segmented
+        # AS IF BRIGHT - a silently wrong mask rather than an error, which is
+        # the more dangerous half of the same defect that made the workbench
+        # refuse to save a band at all.
+        source = recipe if recipe else config
+        mask = ((feature >= source.threshold_low)
+                & (feature <= source.threshold_high))
     else:
         base_threshold = float(recipe.threshold if recipe else config.threshold)
         threshold = (
