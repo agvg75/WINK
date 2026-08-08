@@ -6,10 +6,19 @@ window that cannot scroll. So these tests measure POSITION against the
 visible viewport, which is the only thing that distinguishes "crowded" from
 "unreachable".
 """
+import os
 from pathlib import Path
 import sys
 import tkinter as tk
 from tkinter import ttk
+
+# NOTHING HERE MAY WAIT FOR A CLICK. The Hub's automatic update check runs on
+# a Tk timer and ends in a modal wait_window; every hub.update() below pumps
+# that timer. When a newer release exists on the share, the dialog opens and
+# this test hangs forever - which is exactly what it did, twice, presenting as
+# a flaky scrolling failure. The test was innocent; it was simply the thing
+# still running when the timer went off.
+os.environ["WINK_NO_UPDATE_PROMPT"] = "1"
 
 import matplotlib
 matplotlib.use("TkAgg")

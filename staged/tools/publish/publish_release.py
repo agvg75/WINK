@@ -172,10 +172,16 @@ def check_suite():
         # A timeout is a FAILURE, not a skip. A check that cannot complete
         # unattended cannot gate a release, and calling it green because it
         # never finished is how a suite stops meaning anything.
+        # NOBODY IS WATCHING THIS RUN, so nothing in it may wait for a click.
+        # The Hub's automatic update check ends in a modal wait_window; under
+        # the check suite it hung the whole release twice, once for nine
+        # minutes and once into a refusal, while presenting as a flaky
+        # scrolling test.
+        env = dict(os.environ, WINK_NO_UPDATE_PROMPT="1")
         try:
             result = subprocess.run([sys.executable, str(path)],
                                     cwd=str(STAGED), capture_output=True,
-                                    text=True, timeout=TEST_TIMEOUT_S)
+                                    text=True, timeout=TEST_TIMEOUT_S, env=env)
         except subprocess.TimeoutExpired:
             failures.append((path.name,
                              f"did not finish within {TEST_TIMEOUT_S}s - "

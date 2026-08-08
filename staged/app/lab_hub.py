@@ -897,6 +897,24 @@ class Hub(_BASE):
             self._category_selected()
 
     def _automatic_update_check(self):
+        # A MODAL THAT WAITS FOR A HUMAN MUST NOT FIRE WHERE THERE IS NO
+        # HUMAN. This check runs on a Tk timer and ends in ask_update(), which
+        # calls wait_window and blocks until someone clicks. Under an
+        # unattended run - the release check suite - nobody ever does, and the
+        # process sits there forever.
+        #
+        # It cost a nine-minute stall on the first v11.138 publish and a
+        # refused v11.139, and it presented as a flaky SCROLLING test, because
+        # the timer only fires if the run lasts long enough to reach it and
+        # only offers anything once a newer release exists on the share. The
+        # test was innocent; it was merely the thing still running when the
+        # timer went off.
+        #
+        # The automatic OFFER is suppressed here, not the update machinery:
+        # `_manual_update_check` still works, and a student's Hub is
+        # unaffected.
+        if os.environ.get("WINK_NO_UPDATE_PROMPT"):
+            return
         # Being off-network or lacking L: is normal and intentionally silent.
         manifest = self.updater.check()
         if manifest:
