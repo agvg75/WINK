@@ -161,12 +161,45 @@ The thing to protect here is the ordering already ruled: if chkdsk is not
 clean, **re-walk H and diff against MANIFEST.csv before H is trusted or
 cleared**. Nothing about a September start depends on that finishing.
 
-### 6. Zarr read-speed prototype
+### 6. Zarr read-speed prototype — FIRST RUN DONE (8 Aug 2026)
 
 **Informs drive sizing**, so it wants to land before item 2 is purchased.
 
-**Fallback: skip; buy conventional sizing.** Zarr conversion becomes an
-**in-window experiment**.
+`tools/storage/zarr_prototype.py`. First run, on 1,154 uint16 planes
+(768×1024, 1,815 MB) from a real recording:
+
+| codec | stored | ratio | read | one plane |
+|---|---|---|---|---|
+| blosc-zstd-3 | 600 MB | **3.02×** | 401 MB/s | 5.2 ms |
+| blosc-lz4-5 | 657 MB | 2.76× | 474 MB/s | 4.2 ms |
+| none | 1815 MB | 1.00× | 508 MB/s | 2.4 ms |
+
+**THE DECISION IS DOMINATED BY COMPRESSION, NOT BY READ SPEED.** Compression
+costs ~20% of read throughput (401 vs 508 MB/s) — and *every* figure here is
+an order of magnitude above the transport this data actually crosses: the
+consolidation is sustaining **19 MB/s** over USB, and USB3 tops out around
+200 MB/s. **A 401 MB/s decode is never the bottleneck**, so the honest reading
+is: compress hard, and buy for the compressed size.
+
+**At 3.02×, 1 TB of this material stores in about 0.33 TB.**
+
+**Two caveats that stop this being a purchase decision on its own:**
+
+1. **One stack.** Compression is content-dependent — confocal background
+   compresses far better than dense signal — so the range needs several
+   stacks, including a dense confocal one, before a number is trusted.
+2. **The box was busy.** The consolidation was running across the same bus,
+   so the read rates are lower bounds. Re-run when it finishes.
+
+**Fallback if not completed: skip; buy conventional sizing.** Zarr conversion
+becomes an **in-window experiment**.
+
+**Side finding, recorded because it is a data-quality fact and not a Zarr
+one:** the test folder holds **two kinds of frame** — 1,154 grayscale
+`(768,1024)` planes and **108 RGB `(768,1024,3)`** planes in one recording
+directory. The prototype reports the mix and uses the dominant shape rather
+than failing with numpy's "all input arrays must have the same shape", which
+names neither the count nor the culprit.
 
 **Coupling worth stating: 6 gates the useful version of 2.** If 6 slips, 2's
 purchase is made on conventional sizing — which is the fallback, and is fine —
