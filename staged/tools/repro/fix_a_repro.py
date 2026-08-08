@@ -1,8 +1,21 @@
 """Closing repro for fix A: does the `g` key hand over the right span?
 
-    py tools\\repro\\fix_a_repro.py --source "L:\\...\\AVG6"
-    py tools\\repro\\fix_a_repro.py --source "..." --frame-start 1 --frame-end 234
-    py tools\\repro\\fix_a_repro.py --source "..." --launch
+THE DAY-ONE FOOTAGE, recorded here because it was already lost once - it
+lived only in a tracker command line during the provenance diagnostic, and
+nothing in the repository named it:
+
+    L:\\02_Duchenne Muscular Dystrophy\\Kiley\\12221_GCaMP2 check\\AVG6
+    8,999 frames, dys-1(eg33) I.; Pmyo-3::GCaMP2, failing range 1-234
+
+    py tools\\repro\\fix_a_repro.py ^
+       --source "L:\\02_Duchenne Muscular Dystrophy\\Kiley\\12221_GCaMP2 check\\AVG6" ^
+       --frame-start 1 --frame-end 234
+
+NOT the only AVG6 on the drive. `Undergraduate Students\\Carlees Worms\\AVG6`
+is a different recording of 1,262 frames, and this repro was first run against
+it by mistake - a clean PASS about the wrong footage. AVG6 is a STRAIN, so
+every person who imaged it made a folder of that name. See
+ARCHIVE_NAVIGATOR_SPEC.md §6.1.
 
 THE DEFECT BEING CLOSED. Pressing `g` in the tracker sent
 `session_path.parent.parent` - a directory derived from wherever the session

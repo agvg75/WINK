@@ -121,6 +121,39 @@ its uncertainty recorded per row.** A `identity_basis` column ("sha256" or
 consolidation manifest supplies real SHA-256 for 1.57 M files, which is where
 the hashed subset starts.
 
+### 6.1 Folder names collide too, and a worked example (8 Aug 2026)
+
+§6 is about FILE identity. **Recording identity has the same problem one level
+up, and it is not hypothetical:**
+
+| folder | frames | who |
+|---|---|---|
+| `...\Kiley\12221_GCaMP2 check\AVG6` | **8,999** | Kiley |
+| `...\Undergraduate Students\Carlees Worms\AVG6` | **1,262** | Carlee |
+
+**Two distinct recordings, one name.** `AVG6` is a strain — `dys-1(eg33) I.;
+Pmyo-3::GCaMP2` — not a recording, so every person who imaged that strain
+produced a folder called `AVG6`. There is nothing wrong with either folder;
+the archive simply does not have a name to tell them apart.
+
+**Found the hard way.** The fix A closing repro was run against the wrong one
+because "the AVG6 recording" sounded specific and is not. It gave a clean
+PASS on 1,262 frames — a correct result about the wrong footage, which is the
+worst shape a validation can take.
+
+**Requirements this places on the navigator:**
+
+- **A recording's identity is never its folder name alone.** Minimum
+  discriminators: **owner, frame count, and date**, all three of which the
+  census already holds.
+- **A name shared by two recordings is surfaced, not silently disambiguated.**
+  Picking one and moving on is exactly the failure above.
+- **`AVG6` is a strain, not a recording.** Where a folder name is a strain
+  name, the navigator should say so — the drive-audit strain authority
+  already knows which names are strains.
+- **Search results carry the discriminators.** "AVG6" as a query must return
+  two rows that a person can tell apart without opening them.
+
 ---
 
 ## 7. Queue position, 7 Aug 2026
