@@ -207,6 +207,57 @@ originally went in overconfidently and has been rewritten.
 **These are targets fixed BEFORE our pipeline measures anything**, which is
 what makes them an anchor rather than a comparison chosen afterwards.
 
+### FINALIZED ANCHOR ENTRY (8 Aug 2026)
+
+| field | value |
+|---|---|
+| `source_document` | **Biology Open PDF**, 10.1242/bio.062371 — sole document of record |
+| `location` | per-panel figure legends; see the panel table above |
+| `spread_type` | **s.d., per recomputation.** The legends state s.e.m.; the source data say s.d. **Both are recorded; neither is silently chosen.** |
+| `unit_of_n` | **myocytes** |
+| `lineage` | preprint values **superseded** by the remeasurement; preprint-era files preserved, marked superseded |
+| **regenerating source** | the worksheet below, joined to the FILE MASTER LIST |
+
+**TOLERANCES COME FROM THE PER-MYOCYTE DISTRIBUTION, NOT FROM EITHER PRINTED
+SPREAD.** The data supersede both. A printed ± is one summary choice made
+once; the distribution is the thing that choice was made *from*, and it
+answers the question a tolerance actually asks — *how much does a correct
+measurement of this quantity vary here?*
+
+Per-myocyte myocyte area (µm²), recomputed from the source worksheet:
+
+| region | condition | n | mean | s.d. | p05 | p25 | p75 | p95 |
+|---|---|---|---|---|---|---|---|---|
+| head | crawl | 13 | 748.8 | 148.1 | 570.9 | 606.2 | 884.5 | 932.2 |
+| head | swim | 10 | 862.0 | 87.2 | 739.2 | 820.6 | 887.7 | 994.0 |
+| **mid** | **crawl** | **18** | **1217.2** | **243.0** | 801.6 | 1055.2 | 1350.8 | 1535.7 |
+| **mid** | **swim** | **20** | **1063.0** | **206.6** | 775.0 | 887.1 | 1239.2 | 1338.5 |
+| tail | crawl | 26 | 741.2 | 88.5 | 605.0 | 679.2 | 792.4 | 886.9 |
+| tail | swim | 16 | 739.0 | 238.2 | 453.4 | 557.1 | 876.5 | 1084.4 |
+
+Note what the distribution shows that no ± could: **tail swim is as variable
+as mid-body (s.d. 238 on a mean of 739) while tail crawl is the tightest group
+in the table (88.5).** A tolerance set from the pooled spread would be far too
+loose for one and too tight for the other.
+
+**The regenerating source.** `Muscle_Area_with_averages_2.xlsx` — per-myocyte
+rows carrying region, worm ID, regimen and 16 shape measures, each keyed by
+its `.lif` filename, which is what joins it to the FILE MASTER LIST and hence
+to the 38 acquisitions. It reproduces the published mid-body means to 0.1 µm².
+
+Archived, because it arrived as an upload and uploads do not persist:
+
+```
+L:\10_AGVG LAB\Lab Tools\anchors\fazyl_bio062371_Muscle_Area_with_averages_2.xlsx
+sha256 9200c072e0607a6348768f0408328c72d8c9d999b81a82b29ebec3f85d07462b
+390,955 bytes
+```
+
+**Still missing: tracings / ROIs (tier b).** Adina's `Adina_branching paper`
+and `Muscle sizes` folders hold TIFF exports and Leica metadata only — no
+`.roi`, no `RoiSet.zip`. The outlines behind these numbers have not been
+located.
+
 ### Second deposit — NOT YET READ
 
 The data-availability statement reads: *"All raw measurements and statistical

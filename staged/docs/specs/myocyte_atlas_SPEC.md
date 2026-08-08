@@ -107,6 +107,25 @@ do not live there.
 | **deliberate hard cases** | **dystrophic, bent, dim, boundary-dense** |
 | **spread** | across sessions and years, via **cheap texture-feature clustering** |
 
+**The dystrophic hard-case pool is already identified (8 Aug 2026): Ella's
+BZ33 day-5 material**, eight acquisitions with measurements already made
+through the WINK myocyte tool —
+`L:\05_Proprioception\Ella\Myocyte Measurements\240618–240619_BZ33_day5A_crawl_phall_2…9`.
+
+**It sits on the RELEASE side of the 70/30 split**, and it is important to say
+why that is safe. These acquisitions appear in the same deposit as the anchor,
+which looks like circularity until the strains are checked: the published
+paper states *"Wild-type C. elegans (N2, Bristol strain) were used in all
+experiments"*, and **`BZ33` and `dys-1` appear zero times in it.** Adina's
+anchor is **day-1 N2, swim vs crawl**; Ella's is **day-5, N2 and dystrophic** —
+the same analysis on a different experiment, sharing a dataset but not a
+result. Nothing Ella measured contributed to a published value, so nothing is
+being validated against its own source.
+
+**This is the distinction §4.1's sealing rule turns on**, and it is not
+visible from folder names — only from which strain produced the published
+numbers.
+
 Clustering on texture features is a means of *spreading* the selection, not a
 criterion of quality — it exists so the set does not silently collapse onto
 one microscope session or one good year.
