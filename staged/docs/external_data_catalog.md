@@ -355,6 +355,69 @@ SigmaPlot export remains the gold standard and the only route to per-cell
 data** — the lab likely holds a licence from when it was in use, and the
 30-day trial suffices otherwise.
 
+### Akash sweep round two — a file FOUND, the dataset still inside the JNB
+
+**Found: `C:\Users\avidal\OneDrive - IL State University\Research\Proprioception\akash working spreadsheet.xlsx`**
+(18 Jul 2024). It was never on L — which is why two sweeps of the lab drive
+missed it, and why "not found on L" was the wrong conclusion to draw about
+whether it exists.
+
+It is genuinely his working file: three sheets, per-myocyte rows of **cell
+size, sarcomere, a-band, I-band**, plus a correlation matrix over exactly the
+four measures his notebook names. A sibling file in the same folder carries
+the condition tokens `N2D1C / N2D1S / N2D5C / BZD5C`.
+
+**But the fingerprint test FAILED here too, and that is informative rather
+than disappointing.** The sheet holds **8 distinct myocytes** (mean cell size
+1367.9); the notebook's reports were computed over **17, 92, 95 and 103
+rows**. **This is a working fragment, not the dataset behind the published
+figures.**
+
+| test | result |
+|---|---|
+| any column reproducing a printed statistic, 90 workbooks across L and OneDrive | **0 matches** |
+| his sheet's distinct cell sizes vs his own reported n=17 | 8 vs 17 — **no** |
+| Adina's day-5 areas (raw, per-series, per-animal) vs his n=17 mean 1421.997 | 130 / 57 / 16 rows, means 1063 / 1145 / 1091 — **no** |
+
+**Two things follow, and they pull in opposite directions:**
+
+1. **His reported area statistic is not a copy of Adina's** under any
+   aggregation tested — her day-5 areas do not produce n=17, mean 1422.
+2. **Yet the 8 cell sizes in his working sheet ARE Adina's values exactly**
+   (910.21, 1078.947 appear verbatim in her 2024 sheet), so on those cells he
+   took her area and added the band measures.
+
+**So the relationship between his area numbers and hers is UNRESOLVED**, and
+resolving it by inference would be exactly the mistake this catalog keeps
+recording. **The SigmaPlot export settles it and nothing else does.**
+
+**What the fragment is good for right now:** it contains **band and sarcomere
+measures that are his alone** on 8 myocytes whose areas are shared with
+Adina — which makes **A-band / I-band / sarcomere width, not muscle area, the
+first runnable inter-rater axis** if the export stays blocked.
+
+**A second, larger working file exists on L** —
+`Muscle growth paper\ANDRES USE THIS\working spreadsheet.xlsx`. It is **not
+the same file** (different hash, one sheet vs three, 4,553 numerics vs 1,514)
+and it is the richer of the two: it carries the condition tokens
+`N2D1C / N2D1S / N2D5C / BZD5C` and **no value above 100**, so it is entirely
+band, width and sarcomere measures with no areas.
+
+Its layout explains every failed match: **columns are per-animal runs**, 597
+and 607 and 327 values long, in a wide sheet. **The notebook's n = 17, 92, 95
+and 103 are aggregations ACROSS these columns**, so no single stored column
+can reproduce a printed statistic, and the fingerprint test — correctly —
+reports nothing.
+
+**Where that leaves it.** The raw material is on disk and scattered across
+wide working sheets; the groupings that produced the published statistics
+exist only inside the notebook. **Reconstructing them without SigmaPlot is a
+research task rather than a lookup**, and it would have to be validated
+against the same printed statistics it is trying to recover — so the export
+remains the reliable route, and the timebox is spent.
+
+**Sealed with the anchor** under §7.4, as ruled — both working files.
+
 ### Intra-rater stability: NOT COMPUTABLE from the two Adina generations
 
 Attempted, and the attempt is the finding. `tools/anchors/rater_compare.py`
