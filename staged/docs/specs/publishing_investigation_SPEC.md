@@ -169,3 +169,61 @@ stranded three changelogs is now impossible rather than merely unlikely.
   ```
 
   Requiring a WMI query to answer "what am I running" is itself the finding.
+
+---
+
+## 6. Roadmap after v11.138 — SEQUENCING DECISION, 7 Aug 2026
+
+**Publish stages 4 and 5 are the FIRST items after v11.138 ships**, ahead of
+the validation plan and the reference registry.
+
+**Rationale, and it is the right one: revert is the safety net that makes
+continuous release cheap.** The whole publishing philosophy is to push to
+everyone and find out what broke, because unreproducible bug reports are
+worse than one bad release. That trade only holds if a student can get off a
+bad version in thirty seconds. **The net must exist before the cadence
+speeds up**, not after the first bad release proves it was needed.
+
+**Target: shipped by 11.139 or 11.140**, so the picker has real launch
+history to offer by the third release. A version picker with no history is a
+list of numbers.
+
+### 6.1 Stage 4 — per-module effective versions
+
+**Effective version = the last published version whose tree changed that
+module's files.** Module-to-file mapping is declared; shared and core files
+count as touching every module.
+
+Each tool displays its effective version in-app. Clicking it lists **only the
+versions where that module actually differed**, with date and a one-line
+change note — a list of every release would be noise, and the point is to
+show the versions that could possibly have changed this tool's behaviour.
+
+Selecting one relaunches from **that version's WHOLE TREE**. Never mix module
+files across trees: a module from one release running against core files from
+another is a configuration nobody has ever tested and nobody could reproduce.
+
+Old code must **fail loudly** on newer sidecar and schema versions — schema
+version checked on load, never assumed. The existing
+`load_tracker_session` frame-count check is the pattern.
+
+### 6.2 Stage 5 — per-user history and revert
+
+Every tool launch appends **(user, module, effective version, machine,
+timestamp, outcome)** to that user's settings. Outcome is `clean-exit` or
+`crash`, taken from the crash handler already shipping in published trees.
+
+The picker annotates each version from **that user's own history**: current /
+last used by you and when / last clean session / never used by you.
+
+**"Revert" defaults to the most recent version with a CLEAN session for this
+user** — not merely the previous number. The previous number may be one they
+never ran, or one that crashed on their machine. The last version that
+actually worked *for them* is the useful default.
+
+**Pins are per user, per tool.** One student pinning a tool affects nobody
+else, which is what makes reverting cheap enough to do without asking.
+
+**Effective version and pin state go into the version string, every crash log
+entry, and every exported CSV and sidecar** — so a result can always name the
+code that produced it, per the invariant in section 1.
