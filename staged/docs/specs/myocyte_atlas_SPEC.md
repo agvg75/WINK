@@ -50,20 +50,40 @@ precisely the difference the experiment exists to detect.
   2.0 evidence on how much human-in-the-loop correction a fine-tune needs.
 - **(b) Golden ground truth for proposer validation.**
 
-### Flag, raised once and not blocking
+### 4.1 RULING (Andrés, 8 Aug 2026): partition before outlining
 
-**(a) and (b) are the same outlines, and that is the "spent as evidence"
-problem** stated in `VALIDATION_PLAN_v1.md` V5(ii): data used to fit a model
-cannot also serve as an independent check on it. A proposer fine-tuned on
-these outlines will score well against them for reasons that have nothing to
-do with being right.
+Using the same outlines for (a) and (b) would be the **"spent as evidence"**
+problem of `VALIDATION_PLAN_v1.md` V5(ii) — a proposer fine-tuned on these
+outlines scores well against them for reasons unrelated to being right. The
+ruling:
 
-The cheap fix, if wanted: **split the pool before either use** — outline all
-17 animals, reserve a named subset that the fine-tune never sees, and validate
-only there. It costs nothing at this stage and cannot be added afterwards,
-because once a set has been trained on there is no way to un-see it.
+**PARTITION BEFORE ANY OUTLINING.**
 
-**Recorded as instructed either way; this is a note, not a refusal.** Related:
-the DAPI subset queued in `confocal_census_2026-08-07.md` §7 is an
-*independent* validation bridge and does not have this problem — it is held
-back by construction.
+| | |
+|---|---|
+| **when** | before the first outline is drawn — **not** after |
+| **grain** | **animal level** |
+| **split** | **~70 / 30**, release pool / sealed set |
+| **record** | the **sealed set is NAMED IN THE CATALOG** |
+| **use** | **training and the atlas come from the RELEASE POOL ONLY** |
+
+**Before, because a partition cannot be made afterwards.** Once outlines exist
+and someone has looked at them, no subsequent split is blind — the choice of
+which animals to seal is made by a person who already knows what is in them.
+
+**Animal level, because outlines within one animal are not independent.** The
+same fixation, the same mounting, the same imaging session, the same
+staining. Splitting at the ROI level would put cells from one animal on both
+sides of the line, and the sealed set would be scoring a proposer on animals
+it had already been trained on — leakage that looks like accuracy.
+
+**Named in the catalog, because a sealed set that is not written down is not
+sealed.** It becomes whatever is left over at the end, chosen by whoever is
+assembling the figure.
+
+At 17 animals this is roughly **12 release / 5 sealed**, wild type first.
+
+**Related and independent:** the DAPI subset queued in
+`confocal_census_2026-08-07.md` §7 is held back by construction and is a
+second, differently-sourced bridge — nuclei-seeded segmentation there never
+sees the stain-free features at all.

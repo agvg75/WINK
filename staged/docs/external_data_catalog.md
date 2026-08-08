@@ -72,6 +72,20 @@ independent bridge is the substitute for the public dataset that isn't there.
 
 **Flag for the methods-paper outline: ours would be the first.**
 
+### The sealed set (ruling, 8 Aug 2026)
+
+The 17-animal pairing pool is **partitioned BEFORE any outlining**, at
+**animal level**, roughly **70 / 30 release / sealed** — about 12 and 5.
+**Training and the atlas use the release pool only.**
+
+**The sealed animals are named here, in this catalog, and this section is
+where they go.** A sealed set that is not written down is not sealed; it
+becomes whatever happens to be left over, chosen by whoever assembles the
+figure. See `docs/specs/myocyte_atlas_SPEC.md` §4.1.
+
+> **Sealed animals: not yet chosen.** To be listed here by ID at partition
+> time, before the first outline is drawn.
+
 **Deliverable: a Figshare or Zenodo deposit — wild type + dystrophic.** Worth
 planning as a deliverable rather than a by-product, because the deposit's
 value depends on decisions made while the data are being produced (what is

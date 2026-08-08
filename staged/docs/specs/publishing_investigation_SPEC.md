@@ -6,6 +6,36 @@ Prerequisite for: automatic updates to all machines
 
 ---
 
+## 0. The version number means one thing (Andrés, 8 Aug 2026)
+
+**MAJOR.COUNTER.** `11.139` is the **139th release of the v11 line**, not a
+decimal — the counter is **unbounded and semantically meaningless beyond
+ordering**. 11.9 precedes 11.10 precedes 11.139, and nothing else should be
+read into the digits.
+
+**The major increments ONLY on a compatibility break:**
+
+- **sidecar or schema changes old tools cannot read even with migration**, or
+- **changes that invalidate cross-version measurement comparability, or
+  invalidate pins.**
+
+**Feature size never justifies a major bump.** A release can add an entire new
+tool family and stay on v11; that is the normal case, not an exception.
+
+**We stay on v11 indefinitely. v12 is a deliberate, rare, announced event.**
+
+**Why it is written down rather than inherited:** an unstated convention gets
+re-derived by the next person from the digits in front of them, and the
+obvious reading of "11.139" is a decimal that ought to roll over into 12
+eventually. It does not. Under the revert system a major bump is also the one
+version change that can break a student's pin, which is precisely why it
+belongs to compatibility and not to how much work went in.
+
+Stated again in `tools/publish/publish_release.py`, beside the command that
+applies it.
+
+---
+
 ## Why this is its own investigation and not a release step
 
 Andrés's stated publishing philosophy is to push updates to everyone

@@ -1,7 +1,24 @@
 """Publish staged as a new versioned tree on L. One command.
 
-    py tools\\publish\\publish_release.py --version 11.138
-    py tools\\publish\\publish_release.py --version 11.138 --dry-run
+    py tools\\publish\\publish_release.py --version 11.139
+    py tools\\publish\\publish_release.py --version 11.139 --dry-run
+
+WHAT THE NUMBER MEANS: MAJOR.COUNTER. 11.139 is the 139th release of the v11
+line, NOT a decimal - the counter is unbounded and means nothing beyond
+ordering. 11.9 precedes 11.10 precedes 11.139.
+
+The MAJOR increments only on a COMPATIBILITY BREAK: sidecar or schema changes
+old tools cannot read even with migration, or changes that invalidate
+cross-version measurement comparability or invalidate pins. FEATURE SIZE
+NEVER JUSTIFIES A MAJOR BUMP - a release may add a whole tool family and stay
+on v11. We stay on v11 indefinitely; v12 is a deliberate, rare, announced
+event.
+
+Stated here rather than left to be inferred, because the obvious reading of
+"11.139" is a decimal that ought to roll over eventually, and because under
+the revert system a major bump is the one version change that can break a
+student's pin - which is why it belongs to compatibility rather than to how
+much work went in.
 
 THE INVARIANT THIS SYSTEM IS BUILT ON, stated here because it is the thing
 most likely to be optimised away later by someone who finds the extra click
