@@ -116,13 +116,41 @@ across versions is a weaker anchor than one that did not.
 read from the published PDF, not from a summary.** See the correction note
 after the table; it matters.
 
-**Spread is mean ± s.e.m. throughout** (stated in the paper). **`n` counts
-MYOCYTES, not animals** — the study analysed **97 animals (52 crawl, 45 swim)
-yielding 215 myocytes before outlier removal** (112 crawl, 103 swim), and
-reports **N = 96–103 animals** per panel.
+**`n` counts MYOCYTES, not animals** — the study analysed **97 animals (52
+crawl, 45 swim) yielding 215 myocytes before outlier removal** (112 crawl, 103
+swim), and reports **N = 96–103 animals**.
 
-**Myocyte counts per region:** head **C=12, S=10**; mid **C=16, S=20**; tail
-**C=25, S=15**.
+**EVERY PANEL HAS ITS OWN n.** There is no single per-region sample size, and
+taking one legend's numbers for another measure is the error that produced the
+correction note below.
+
+| panel | head C/S | mid C/S | tail C/S |
+|---|---|---|---|
+| **2B area** | 13 / 9 | **18 / 20** | 26 / 15 |
+| 2C Feret | 13 / 10 | 18 / 18 | 25 / 15 |
+| 2D MinFeret | 13 / 8 | 18 / 20 | 26 / 16 |
+| 2E anisotropy | 13 / 9 | 18 / 20 | 22 / 14 |
+| 2F circularity | 12 / 10 | 16 / 20 | 25 / 15 |
+| 3B sarcomere length | 13 / 10 | 18 / 20 | 26 / 16 |
+| 3C sarcomere number | 12 / 10 | **15 / 20** | 25 / 14 |
+| 3D sarcomere density | 13 / 10 | 18 / 20 | 22 / 16 |
+
+**SPREAD TYPE IS UNRESOLVED, and this matters more than it looks.** The figure
+legends state *"Data are shown as mean±s.e.m."* But recomputing from the
+anchor's own source worksheet gives, for mid-body area:
+
+| | crawl | swim |
+|---|---|---|
+| mean | 1217.2 | 1063.0 |
+| **s.d.** | **243.0** | **206.6** |
+| s.e.m. | 57.3 | 46.2 |
+
+**The published ±243 and ±207 are the STANDARD DEVIATIONS**, not the s.e.m. the
+legend claims. Since s.e.m. = s.d./√n, a comparison made under the wrong
+assumption is wrong by ~4.3× here. **Recorded as `spread_type: s.d. (legend
+says s.e.m.; recomputation says s.d.)`** — the registry's `spread_type` field
+exists for exactly this, and the honest entry names the disagreement rather
+than choosing a side.
 
 | measure | region | crawl | swim | P |
 |---|---|---|---|---|
@@ -154,19 +182,27 @@ branching measurement** — the only occurrence of the word is a citation to
 Højfeldt et al. on human myofibre branch fusion. Anything we measure about
 branching is therefore new, not a reproduction.
 
-### Correction note — why these were re-read
+### Correction note — two errors, and the second was mine
 
-A first pass took these numbers from a web summary of the journal page. Read
-against the PDF, that summary had **misattributed the area result to the head
-when it is mid-body** (head and tail were explicitly unaffected), and had
-supplied **sample sizes that do not appear anywhere in the paper** — `n=18/20`
-for mid (actually 16/20), `n=26/15` for tail (25/15), `n=15/20` for mid
-sarcomere number (16/20), `n=13/8` for width (absent entirely).
+**First:** a web summary of the journal page **misattributed the area result
+to the head when it is mid-body**. Head and tail were explicitly unaffected. A
+region error in an anchor is silent and total.
 
-Recorded because it is the same failure this project keeps meeting from the
-other side: **a plausible number with no derivation behind it.** A
-reproduction target carrying a fabricated `n` would have made our own result
-look like a mismatch, and the search would have started in our pipeline.
+**Second:** I then declared four of that summary's sample sizes fabricated,
+because they were absent from the one figure legend my text search happened to
+surface. **They were not fabricated** — they came from the correct per-panel
+legends, and what I "corrected" them to (16/20) belongs to *circularity*,
+a different panel. My correction was the less accurate of the two.
+
+**Settled by recomputation, not by argument.** With the anchor's own source
+worksheet in hand, mid-body area recomputes to crawl n=18 mean 1217.2 and swim
+n=20 mean 1063.0 — matching the paper to 0.1 µm² and confirming 18/20.
+
+**What this actually teaches**, and it is not what I first wrote down: **a
+published value is identified by its PANEL, not by its measure name.** An `n`
+copied from the nearest legend is as wrong as an invented one and looks better
+sourced. Recorded in `REFERENCE_REGISTRY_SPEC.md` §7.2, where the incident
+originally went in overconfidently and has been rewritten.
 
 **These are targets fixed BEFORE our pipeline measures anything**, which is
 what makes them an anchor rather than a comparison chosen afterwards.

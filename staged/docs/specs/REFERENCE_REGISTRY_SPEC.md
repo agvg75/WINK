@@ -166,6 +166,106 @@ from a PDF without a person reading it and saying so, because a mis-typed
 published value is indistinguishable from a measured one once it is in the
 table.
 
+### 7.1 Anchor entry schema (added 8 Aug 2026)
+
+Every anchor entry carries **six fields, none optional**:
+
+| field | why it is not optional |
+|---|---|
+| `value` | |
+| `spread` | |
+| **`spread_type`** | **s.e.m. and s.d. differ by √n.** An entry recording "±12.1" without saying which is not a tolerance, it is a number that will be compared against the wrong thing. |
+| `n` | |
+| **`unit_of_n`** | **myocytes are not animals.** Fazyl et al. report n as myocytes — 97 animals yielded 215 myocytes — so an `n` read as animals is wrong by a factor of two and in the direction that makes agreement look better. |
+| **`source_document` + `location`** | the exact document and where in it: section, table, or figure legend. Not the DOI alone — a DOI names a paper, not a claim. |
+
+### 7.2 DOCUMENTS OF RECORD ONLY. NEVER SUMMARIES.
+
+**A target is extracted from the document of record — the published PDF, the
+supplement, the figure legend — and never from a summary, abstract, landing
+page, database record, or any machine-generated précis of one.**
+
+**The incident, 8 Aug 2026 — and it has two halves, the second of which is
+mine.**
+
+**Half one.** Reproduction targets for Fazyl et al. were first taken from a
+web summary of the journal's article page. That summary **misattributed the
+cell-area result to the head when it is mid-body** — head and tail are
+explicitly stated as unaffected. A region error in an anchor is silent and
+total: every comparison afterwards is against the wrong tissue.
+
+**Half two, the correction of my own correction.** I then declared four of
+that summary's sample sizes fabricated, because they did not appear in the one
+figure legend my text search surfaced. **They were not fabricated. Every
+figure PANEL carries its own n**, and the numbers came from the right panels:
+
+| measure | published n (mid) | what I wrongly "corrected" it to |
+|---|---|---|
+| area (Fig 2B) | **C=18, S=20** | 16/20 — which is *circularity*, Fig 2F |
+| sarcomere number (Fig 3C) | **C=15, S=20** | 16/20 — same wrong panel |
+
+**The lesson is not the one I first wrote down.** It is not "summaries invent
+numbers". It is: **a value is identified by its PANEL, not by its measure
+name**, and an `n` copied from the nearest legend is as wrong as an invented
+one while looking better sourced. The rule stands — *extract from the document
+of record* — but the reason is precision of location, which is exactly why
+§7.1 requires `location` and not merely `source_document`.
+
+**Why the rule earns its place.** A misplaced `n` does not announce itself. It
+produces an anchor that looks complete, and when our measurement disagrees
+**the search starts in our pipeline** — the one place the error is not. I
+proved that from the inside: my "correction" was itself a plausible number
+with no derivation behind it, which is the defect §2 exists to prevent, and I
+committed it to this spec before checking.
+
+**Settled by recomputation, not by argument.** The anchor's own source
+worksheet was later obtained and the statistic recomputed: mid-body crawl
+n=18, mean 1217.2; swim n=20, mean 1063.0 — matching the paper to 0.1 µm² and
+confirming 18/20.
+
+**Practically:** the extraction is done from a file we hold. If the document
+of record cannot be obtained, **the entry is not created** — a target we could
+not read is not a target we may compare against.
+
+### 7.3 `lineage` — when a measurement generation is superseded
+
+An anchor may have been measured more than once. The entry carries a
+**`lineage`** field naming which generation is live and which is superseded.
+
+**For the Fazyl et al. anchor (ruling, 8 Aug 2026):**
+
+> **Preprint values are SUPERSEDED by the remeasurement. The Biology Open PDF
+> is the SOLE document of record.**
+
+**Superseded does not mean deleted.** If both measurement generations survive
+on disk, **the preprint-era files are PRESERVED as lineage and marked
+superseded** — never removed. Two reasons: a superseded generation is the only
+way to answer "did this number move, and by how much", which is precisely the
+question left open when bioRxiv would not serve v1 and v2; and a deletion
+makes the current value look like it was always the value.
+
+### 7.4 SEALED-WHOLE artifacts
+
+An anchor's own measurement artifacts — the worksheets, tracings and ROIs the
+published numbers were produced from — are **SEALED WHOLE with that anchor and
+excluded from atlas building and model training ENTIRELY.**
+
+**This is stricter than the 70/30 partition** of
+`myocyte_atlas_SPEC.md` §4.1, and deliberately so. That partition splits a
+pool so a held-back part can check a model built on the rest. **Here the whole
+pool IS the check**: a proposer trained on the tracings that produced the
+published numbers would be validated against its own training data, and would
+agree with the anchor for reasons having nothing to do with being right.
+
+**Ruling, 8 Aug 2026: Adina's remeasurement artifacts are sealed whole.**
+Ella's pairing pool remains a 70/30 split, because it is not an anchor's
+source material.
+
+**The practical trap:** these artifacts are the most attractive training data
+in the lab — careful, complete, and already matched to acquisitions. Being
+attractive is exactly why the rule has to be written down before anyone is
+looking for training data.
+
 ## 8. Extension: joint distributions, not marginals
 
 Per stratum the registry holds the **joint** distribution, not a set of
